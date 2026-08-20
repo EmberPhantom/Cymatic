@@ -1,0 +1,13 @@
+# LLM Router Dependencies
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.4
+pydantic-settings==2.3.3
+httpx==0.27.0
+python-dotenv==1.0.1
+structlog==24.1.0
+litellm==1.35.0
+redis==5.0.1
+prometheus-client==0.19.0
+pytest==7.4.0
+pytest-asyncio==0.21.0

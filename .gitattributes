@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sln text eol=crlf
+*.cs text working-tree-encoding=UTF-8
+*.kt text working-tree-encoding=UTF-8
+*.kts text working-tree-encoding=UTF-8
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.glb binary
+*.fbx binary
+*.unity binary
+*.prefab binary

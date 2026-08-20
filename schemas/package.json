@@ -1,0 +1,14 @@
+{
+  "name": "@cymatic/schemas",
+  "version": "0.1.0",
+  "description": "Shared TypeScript/Python schemas for CYMATIC",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "validate": "python -m py_compile schemas/*.py"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

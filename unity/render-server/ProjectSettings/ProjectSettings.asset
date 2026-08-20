@@ -1,0 +1,219 @@
+# Unity Project Settings for CYMATIC Render Server
+
+# Player Settings
+productName: CYMATIC Render Server
+companyName: CYMATIC
+defaultScreenWidth: 1920
+defaultScreenHeight: 1080
+defaultScreenWidthWeb: 960
+defaultScreenHeightWeb: 540
+fullscreenMode: FullscreenWindow
+resizableWindow: 1
+usePlayerLog: 1
+runInBackground: 1
+captureSingleScreen: 0
+displayResolutionDialog: Disabled
+useMacAppStoreValidation: 0
+macAppStoreCategory: public.app-category.games
+targetFrameRate: 60
+
+# Android Settings (if building for Android)
+androidTargetSdkVersion: 33
+androidMinSdkVersion: 24
+androidTargetArchitectures: ARM64
+androidBundleVersionCode: 1
+androidVersion: 0.1.0
+androidEnableProGuard: 0
+androidEnableR8: 1
+androidUseCustomKeystore: 0
+androidKeystoreName: 
+androidKeystorePass: 
+androidKeyaliasName: 
+androidKeyaliasPass: 
+androidTVCompatibility: 0
+androidSupportsLargeScreens: 1
+androidSupportsNormalScreens: 1
+androidSupportsSmallScreens: 1
+androidSupportsXLargeScreens: 1
+androidRequiredPermissions: []
+
+# Graphics Settings
+graphicsJobs: 1
+graphicsJobMode: Auto
+scriptingBackend: IL2CPP
+apiCompatibilityLevel: NET_Standard_2_1
+cppCodeGeneration: FastButLarge
+useIncrementalGc: 1
+allowUnsafeCode: 0
+stripEngineCode: 1
+vertexChannelCompression: 1
+optimizeMeshData: 1
+
+# XR Settings
+xrManagement: 1
+xrDisplaySubsystem: 0
+xrInputSubsystem: 0
+
+# Quality Settings
+qualitySettings:
+  - name: Ultra
+    pixelLightCount: 4
+    shadows: HardShadows
+    shadowResolution: VeryHigh
+    shadowProjection: StableFit
+    shadowCascades: FourCascades
+    shadowDistance: 150
+    shadowNearPlaneOffset: 3
+    shadowmaskMode: DistanceShadowmask
+    skinWeights: Unlimited
+    vsyncCount: 0
+    lodBias: 1.5
+    maximumLODLevel: 0
+    particleRaycastBudget: 4096
+    asyncUploadTimeSlice: 2
+    asyncUploadBufferSize: 16
+    asyncUploadPersistentBuffer: 1
+    rayTracingSupported: 0
+    shaderPrecisionModel: High
+    globalTextureMipLimit: 0
+    renderPipeline: ""
+    streamingMipmapsActive: 1
+    streamingMipmapsAddAllCameras: 1
+    streamingMipmapsMemoryBudget: 512
+    streamingMipmapsRenderersPerFrame: 512
+    streamingMipmapsMaxLevelReduction: 2
+    streamingMipmapsMaxFileIORequests: 1024
+  
+  - name: High
+    pixelLightCount: 3
+    shadows: HardShadows
+    shadowResolution: High
+    shadowProjection: StableFit
+    shadowCascades: TwoCascades
+    shadowDistance: 100
+    shadowNearPlaneOffset: 3
+    shadowmaskMode: DistanceShadowmask
+    skinWeights: 4
+    vsyncCount: 0
+    lodBias: 1.25
+    maximumLODLevel: 0
+    particleRaycastBudget: 2048
+    asyncUploadTimeSlice: 2
+    asyncUploadBufferSize: 16
+    asyncUploadPersistentBuffer: 1
+    rayTracingSupported: 0
+    shaderPrecisionModel: High
+    globalTextureMipLimit: 0
+    renderPipeline: ""
+    streamingMipmapsActive: 1
+    streamingMipmapsAddAllCameras: 1
+    streamingMipmapsMemoryBudget: 256
+    streamingMipmapsRenderersPerFrame: 256
+    streamingMipmapsMaxLevelReduction: 2
+    streamingMipmapsMaxFileIORequests: 512
+  
+  - name: Medium
+    pixelLightCount: 2
+    shadows: HardShadows
+    shadowResolution: Medium
+    shadowProjection: CloseFit
+    shadowCascades: TwoCascades
+    shadowDistance: 75
+    shadowNearPlaneOffset: 3
+    shadowmaskMode: DistanceShadowmask
+    skinWeights: 4
+    vsyncCount: 0
+    lodBias: 1.0
+    maximumLODLevel: 0
+    particleRaycastBudget: 1024
+    asyncUploadTimeSlice: 2
+    asyncUploadBufferSize: 8
+    asyncUploadPersistentBuffer: 1
+    rayTracingSupported: 0
+    shaderPrecisionModel: High
+    globalTextureMipLimit: 1
+    renderPipeline: ""
+    streamingMipmapsActive: 1
+    streamingMipmapsAddAllCameras: 1
+    streamingMipmapsMemoryBudget: 128
+    streamingMipmapsRenderersPerFrame: 128
+    streamingMipmapsMaxLevelReduction: 2
+    streamingMipmapsMaxFileIORequests: 256
+  
+  - name: Low
+    pixelLightCount: 1
+    shadows: HardShadows
+    shadowResolution: Low
+    shadowProjection: CloseFit
+    shadowCascades: OneCascade
+    shadowDistance: 50
+    shadowNearPlaneOffset: 3
+    shadowmaskMode: DistanceShadowmask
+    skinWeights: 2
+    vsyncCount: 0
+    lodBias: 0.75
+    maximumLODLevel: 1
+    particleRaycastBudget: 512
+    asyncUploadTimeSlice: 2
+    asyncUploadBufferSize: 8
+    asyncUploadPersistentBuffer: 1
+    rayTracingSupported: 0
+    shaderPrecisionModel: Low
+    globalTextureMipLimit: 2
+    renderPipeline: ""
+    streamingMipmapsActive: 1
+    streamingMipmapsAddAllCameras: 1
+    streamingMipmapsMemoryBudget: 64
+    streamingMipmapsRenderersPerFrame: 64
+    streamingMipmapsMaxLevelReduction: 2
+    streamingMipmapsMaxFileIORequests: 128
+
+# Physics Settings
+defaultSolverIterations: 6
+defaultSolverVelocityIterations: 4
+defaultSleepThreshold: 0.005
+autoSimulation: 1
+autoSyncTransforms: 0
+reuseCollisionCallbacks: 1
+enableEnhancedDeterminism: 0
+
+# Time Settings
+fixedTimestep: 0.01666667
+maximumDeltaTime: 0.3333333
+timeScale: 1
+
+# Network Settings
+networkAddress: ""
+networkPort: 7777
+
+# Build Settings
+scenesInBuild:
+  - Assets/Scenes/RenderServer.unity
+
+# Scripting Define Symbols
+scriptingDefineSymbols:
+  - CYMATIC_RENDER_SERVER
+  - UNITY_WEBRTC
+  - CYMATIC_STEREO_RENDERING
+
+# Icons
+iconSizes:
+  - 16
+  - 32
+  - 48
+  - 64
+  - 128
+  - 256
+  - 512
+  - 1024
+
+# Splash Screen
+showUnitySplashScreen: 0
+splashScreenBackground: 0x000000FF
+splashScreenLogo: 
+splashScreenOverlayOpacity: 1
+splashScreenAnimation: 0
+
+# Other
+accelerometerFrequency: 60
+gyroscopeFrequency: 60

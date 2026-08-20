@@ -1,0 +1,175 @@
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    tools:context=".ui.vr.VRActivity">
+
+    <!-- SurfaceViewRenderer for WebRTC video rendering (stereo) -->
+    <org.webrtc.SurfaceViewRenderer
+        android:id="@+id/surface_view_renderer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- GLSurfaceView for local OpenGL rendering (if needed) -->
+    <android.opengl.GLSurfaceView
+        android:id="@+id/gl_surface_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- Connection Status Overlay -->
+    <LinearLayout
+        android:id="@+id/overlay_connection"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:background="@color/black_80"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:gravity="center_vertical"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <ProgressBar
+            android:id="@+id/pb_loading"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="12dp"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tv_connection_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Connecting..."
+            android:textColor="@color/white"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btn_end_session"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="12dp"
+            android:backgroundTint="@color/error"
+            android:text="End Session"
+            android:textColor="@color/white"
+            android:textSize="12sp" />
+
+    </LinearLayout>
+
+    <!-- Stats Overlay -->
+    <LinearLayout
+        android:id="@+id/overlay_stats"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:background="@color/black_80"
+        android:orientation="vertical"
+        android:padding="12dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/tv_fps"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="FPS: --"
+            android:textColor="@color/white"
+            android:textSize="12sp"
+            android:fontFamily="@font/roboto_mono" />
+
+        <TextView
+            android:id="@+id/tv_latency"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Latency: --ms"
+            android:textColor="@color/white"
+            android:textSize="12sp"
+            android:fontFamily="@font/roboto_mono" />
+
+        <TextView
+            android:id="@+id/tv_thermal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Thermal: --%"
+            android:textColor="@color/white"
+            android:textSize="12sp"
+            android:fontFamily="@font/roboto_mono" />
+
+    </LinearLayout>
+
+    <!-- Gaze Reticle -->
+    <ImageView
+        android:id="@+id/iv_gaze_reticle"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@drawable/reticle"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- PTT Button (Bottom Center) -->
+    <ImageView
+        android:id="@+id/iv_ptt"
+        android:layout_width="80dp"
+        android:layout_height="80dp"
+        android:layout_marginBottom="48dp"
+        android:background="@drawable/btn_ptt_bg"
+        android:padding="16dp"
+        android:src="@drawable/ic_mic"
+        android:contentDescription="Push to Talk"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- Navigation Buttons (Bottom Left/Right) -->
+    <ImageView
+        android:id="@+id/iv_nav_prev"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/btn_nav_bg"
+        android:padding="12dp"
+        android:src="@drawable/ic_nav_prev"
+        android:contentDescription="Previous"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <ImageView
+        android:id="@+id/iv_nav_next"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/btn_nav_bg"
+        android:padding="12dp"
+        android:src="@drawable/ic_nav_next"
+        android:contentDescription="Next"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Copilot Button (Bottom Right) -->
+    <ImageView
+        android:id="@+id/iv_copilot"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="100dp"
+        android:background="@drawable/btn_copilot_bg"
+        android:padding="12dp"
+        android:src="@drawable/ic_copilot"
+        android:contentDescription="AI Copilot"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

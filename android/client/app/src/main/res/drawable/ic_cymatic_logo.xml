@@ -1,0 +1,41 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Background circle -->
+    <path
+        android:pathData="M60,60 A60,60 0 1,1 59.99,60 Z"
+        android:fillColor="#0EA5E9" />
+    <!-- Sparkles icon -->
+    <path
+        android:pathData="M60,20 A40,40 0 1,1 59.99,20 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:fillColor="#00000000" />
+    <!-- Inner circle -->
+    <path
+        android:pathData="M60,40 A20,20 0 1,1 59.99,40 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:fillColor="#00000000" />
+    <!-- Center dot -->
+    <path
+        android:pathData="M60,56 A4,4 0 1,1 59.99,56 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- Sparkle lines -->
+    <path
+        android:pathData="M60,0 V15 M60,105 V120 M0,60 H15 M105,60 H120"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3" />
+    <!-- Diagonal sparkles -->
+    <path
+        android:pathData="M15,15 L30,30 M90,90 L105,105 M15,105 L30,90 M90,30 L105,15"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2" />
+    <!-- Text CYMATIC -->
+    <path
+        android:pathData="M25,85 L95,85 M35,85 L35,70 L45,70 L45,85 M50,85 L50,70 L60,70 L60,85 M65,85 L65,70 L75,70 L75,85 M80,85 L80,70 L90,70 L90,85"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3" />
+</vector>
