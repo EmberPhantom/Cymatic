@@ -1,8 +1,10 @@
 """Pytest configuration"""
 import pytest
+import pytest_asyncio
 import asyncio
 import sys
 import os
+import subprocess
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -21,17 +23,24 @@ os.environ.setdefault("S3_REGION", "us-east-1")
 # Add the services directory to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from services.api.app.main import app
-from services.api.app.db.session import Base, get_db
-from services.api.app.core.config import get_settings
+try:
+    from services.api.app.main import app
+    from services.api.app.db.session import Base, get_db
+    from services.api.app.core.config import get_settings
+except ModuleNotFoundError:
+    from app.main import app
+    from app.db.session import Base, get_db
+    from app.core.config import get_settings
 
 # Override settings for testing
 settings = get_settings()
 
-# Test database
-TEST_DATABASE_URL = "postgresql+asyncpg://cymatic:cymatic@localhost:5432/cymatic_test"
+# Test database — convert sync URLs to async, use Docker service names
+_raw_db_url = os.environ.get("DATABASE_URL", "postgresql://cymatic:cymatic@localhost:5432/cymatic")
+TEST_DATABASE_URL = _raw_db_url.replace("postgresql://", "postgresql+asyncpg://").replace("postgres://", "postgresql+asyncpg://")
+# Use same database name — setup_db creates/drops tables per test session
 
-engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+engine = create_async_engine(TEST_DATABASE_URL, echo=False, pool_pre_ping=True)
 TestingSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -46,33 +55,78 @@ async def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session")
 async def setup_db():
-    # NOTE: Using Base.metadata.create_all for test isolation.
-    # Production uses Alembic via the `migrate` service.
-    # If models drift from migrations, tests will still pass but production may fail.
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Try Alembic migrations first, fall back to create_all
+    alembic_dir = os.path.join(os.path.dirname(__file__), '..')
+    result = subprocess.run(
+        ["alembic", "-c", "alembic.ini", "upgrade", "head"],
+        cwd=alembic_dir,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DATABASE_URL": TEST_DATABASE_URL.replace("+asyncpg", "")},
+    )
+    if result.returncode != 0:
+        # Fall back to create_all
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client(setup_db) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_session(setup_db) -> AsyncGenerator[AsyncSession, None]:
     async with TestingSessionLocal() as session:
         yield session
+
+
+try:
+    from app.models.user import User, UserRole
+    from app.models.project import Project, ProjectStatus
+    from app.core.security import get_password_hash, create_access_token
+
+    @pytest_asyncio.fixture
+    async def test_user(db_session):
+        user = User(
+            email="test@example.com",
+            name="Test User",
+            hashed_password=get_password_hash("testpass123"),
+            role=UserRole.CREATOR,
+            organization_id=1,
+            is_active=True,
+        )
+        db_session.add(user)
+        await db_session.commit()
+        await db_session.refresh(user)
+        return user
+
+    @pytest_asyncio.fixture
+    async def auth_headers(test_user):
+        access_token = create_access_token(
+            data={"sub": str(test_user.id), "email": test_user.email, "org_id": test_user.organization_id}
+        )
+        return {"Authorization": f"Bearer {access_token}"}
+
+    @pytest_asyncio.fixture
+    async def test_project(db_session, test_user):
+        project = Project(
+            name="Test Project",
+            domain="real_estate",
+            category="apartment",
+            organization_id=test_user.organization_id,
+            created_by=test_user.id,
+            status=ProjectStatus.DRAFT,
+        )
+        db_session.add(project)
+        await db_session.commit()
+        await db_session.refresh(project)
+        return project
+except ImportError:
+    pass

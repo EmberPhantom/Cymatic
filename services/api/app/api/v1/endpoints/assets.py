@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -16,6 +16,8 @@ router = APIRouter()
 
 
 class AssetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     organization_id: int
     project_id: Optional[int]
@@ -24,9 +26,6 @@ class AssetResponse(BaseModel):
     status: str
     metadata_json: dict
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class AssetUploadInit(BaseModel):

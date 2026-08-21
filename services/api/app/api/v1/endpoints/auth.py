@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import Optional
 from datetime import timedelta
 from jose import JWTError
@@ -38,6 +38,8 @@ class UserCreate(BaseModel):
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     email: str
     name: str
@@ -45,21 +47,17 @@ class UserResponse(BaseModel):
     organization_id: int
     is_active: bool
 
-    class Config:
-        from_attributes = True
-
 
 class OrganizationCreate(BaseModel):
     name: str
 
 
 class OrganizationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     plan: str
-
-    class Config:
-        from_attributes = True
 
 
 @router.post("/login", response_model=Token)

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -18,6 +18,8 @@ class CreditBalance(BaseModel):
 
 
 class CreditLedgerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     organization_id: int
     event_type: str
@@ -25,9 +27,6 @@ class CreditLedgerResponse(BaseModel):
     reference_id: Optional[int]
     reference_type: Optional[str]
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class CreditAdjustment(BaseModel):

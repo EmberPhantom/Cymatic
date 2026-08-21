@@ -48,6 +48,7 @@ services:
     build:
       context: ../..
       dockerfile: services/api/Dockerfile
+      target: runtime
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -77,6 +78,7 @@ services:
     build:
       context: ../..
       dockerfile: services/worker/Dockerfile
+      target: runtime
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +107,7 @@ services:
     build:
       context: ../..
       dockerfile: services/llm-router/Dockerfile
+      target: runtime
     ports:
       - "${LLM_ROUTER_PORT:-8001}:8001"
     env_file: ../../.env
@@ -137,6 +140,7 @@ services:
     build:
       context: ../..
       dockerfile: services/api/Dockerfile
+      target: runtime
     command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
     depends_on:
       postgres:

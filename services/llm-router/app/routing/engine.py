@@ -33,6 +33,11 @@ class RoutingEngine:
         self._initialize_default_policies()
         self._initialize_status()
     
+    def _initialize_status(self):
+        """Initialize provider status for all configured providers."""
+        for provider_name in ProviderName:
+            self.status[provider_name] = ProviderStatus(name=provider_name)
+
     def _initialize_default_policies(self):
         """Initialize default routing policies."""
         # Task-based routing with sensitivity

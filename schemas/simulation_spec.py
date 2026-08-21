@@ -1,6 +1,6 @@
 """Shared Simulation Specification Schemas (Python/Pydantic)"""
 from typing import Literal, Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 
@@ -108,51 +108,50 @@ class SimulationSpec(BaseModel):
     copilot_policy: CopilotPolicy
     performance_budget: PerformanceBudget
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "domain": "real_estate",
-                "metadata": {
-                    "title": "Modern 3BR Apartment",
-                    "description": "Furnished walkthrough with warm lighting",
-                    "version": "1.0.0"
-                },
-                "entities": [
-                    {
-                        "id": "living_room",
-                        "type": "room",
-                        "name": "Living Room",
-                        "position": [0, 0, 0],
-                        "properties": {"size": [5, 4, 2.5]}
-                    }
-                ],
-                "navigation": {
-                    "points": [
-                        {"id": "start", "name": "Entry", "position": [2.5, 2, 1.6], "connections": ["living"]},
-                        {"id": "living", "name": "Living Room", "position": [2.5, 2, 1.6], "connections": ["start"]}
-                    ],
-                    "paths": [{"from": "start", "to": "living"}],
-                    "default_start_point": "start"
-                },
-                "lighting": {
-                    "preset": "warm",
-                    "time_of_day": "evening",
-                    "ambient_intensity": 0.8
-                },
-                "copilot_policy": {
-                    "enabled": True,
-                    "languages": ["en", "te"],
-                    "default_language": "en",
-                    "personality": "helpful_guide"
-                },
-                "performance_budget": {
-                    "target_fps": 60,
-                    "max_triangles": 100000,
-                    "max_draw_calls": 50,
-                    "texture_budget_mb": 100
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "domain": "real_estate",
+            "metadata": {
+                "title": "Modern 3BR Apartment",
+                "description": "Furnished walkthrough with warm lighting",
+                "version": "1.0.0"
+            },
+            "entities": [
+                {
+                    "id": "living_room",
+                    "type": "room",
+                    "name": "Living Room",
+                    "position": [0, 0, 0],
+                    "properties": {"size": [5, 4, 2.5]}
                 }
+            ],
+            "navigation": {
+                "points": [
+                    {"id": "start", "name": "Entry", "position": [2.5, 2, 1.6], "connections": ["living"]},
+                    {"id": "living", "name": "Living Room", "position": [2.5, 2, 1.6], "connections": ["start"]}
+                ],
+                "paths": [{"from": "start", "to": "living"}],
+                "default_start_point": "start"
+            },
+            "lighting": {
+                "preset": "warm",
+                "time_of_day": "evening",
+                "ambient_intensity": 0.8
+            },
+            "copilot_policy": {
+                "enabled": True,
+                "languages": ["en", "te"],
+                "default_language": "en",
+                "personality": "helpful_guide"
+            },
+            "performance_budget": {
+                "target_fps": 60,
+                "max_triangles": 100000,
+                "max_draw_calls": 50,
+                "texture_budget_mb": 100
             }
         }
+    })
 
 
 # Generation Pipeline Types

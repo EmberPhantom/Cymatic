@@ -1,5 +1,6 @@
 """Tests for LLM Router"""
 import pytest
+import pytest_asyncio
 from datetime import datetime, timedelta
 from httpx import AsyncClient, ASGITransport
 
@@ -12,7 +13,7 @@ from app.routing.circuit_breaker import get_circuit_breaker
 settings = get_settings()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
@@ -51,7 +52,7 @@ async def test_list_policies(client):
 
 @pytest.mark.asyncio
 async def test_circuit_breaker():
-    cb = get_circuit_breaker("test_provider")
+    cb = get_circuit_breaker(ProviderName.GROQ)
     assert cb.can_execute() is True
 
     for _ in range(5):
@@ -66,7 +67,7 @@ async def test_circuit_breaker():
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_half_open():
-    cb = get_circuit_breaker("test_provider_2")
+    cb = get_circuit_breaker(ProviderName.OPENAI)
     cb.state = "open"
     cb.last_failure_time = datetime.utcnow() - timedelta(seconds=40)
 

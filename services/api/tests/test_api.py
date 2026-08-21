@@ -1,96 +1,14 @@
 """Tests for API endpoints"""
+import os
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
 
 from app.main import app
-from cymatic_shared.db import Base
-from app.db.session import get_db
 from app.core.config import get_settings
+from app.core.security import get_password_hash, create_access_token
 from app.models.user import User, UserRole
 from app.models.project import Project, ProjectStatus
-from app.models.simulation_spec import SimulationSpec, SpecStatus
-from app.core.security import get_password_hash, create_access_token
-
-settings = get_settings()
-
-TEST_DATABASE_URL = "postgresql+asyncpg://cymatic:cymatic@localhost:5432/cymatic_test"
-
-engine = create_async_engine(TEST_DATABASE_URL, echo=True)
-TestingSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-
-async def override_get_db():
-    async with TestingSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture(scope="session")
-async def setup_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-
-@pytest.fixture
-async def client(setup_db):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        yield ac
-
-
-@pytest.fixture
-async def db_session(setup_db):
-    async with TestingSessionLocal() as session:
-        yield session
-
-
-@pytest.fixture
-async def test_user(db_session):
-    user = User(
-        email="test@example.com",
-        name="Test User",
-        hashed_password=get_password_hash("testpass123"),
-        role=UserRole.CREATOR,
-        organization_id=1,
-        is_active=True,
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
-
-
-@pytest.fixture
-async def auth_headers(test_user):
-    access_token = create_access_token(
-        data={"sub": str(test_user.id), "email": test_user.email, "org_id": test_user.organization_id}
-    )
-    return {"Authorization": f"Bearer {access_token}"}
-
-
-@pytest.fixture
-async def test_project(db_session, test_user):
-    project = Project(
-        name="Test Project",
-        domain="real_estate",
-        category="apartment",
-        organization_id=test_user.organization_id,
-        created_by=test_user.id,
-        status=ProjectStatus.DRAFT,
-    )
-    db_session.add(project)
-    await db_session.commit()
-    await db_session.refresh(project)
-    return project
 
 
 @pytest.mark.asyncio

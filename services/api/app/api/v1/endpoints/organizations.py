@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -12,14 +12,13 @@ router = APIRouter()
 
 
 class OrganizationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     plan: str
     settings_json: dict
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class OrganizationUpdate(BaseModel):

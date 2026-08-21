@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Set, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -27,6 +27,8 @@ class StreamSessionCreate(BaseModel):
 
 
 class StreamSessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     project_id: int
     user_id: int
@@ -34,9 +36,6 @@ class StreamSessionResponse(BaseModel):
     signaling_session_id: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class WebRTCOffer(BaseModel):

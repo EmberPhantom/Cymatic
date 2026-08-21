@@ -1,5 +1,5 @@
 from functools import lru_cache
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from typing import List
 
@@ -29,10 +29,11 @@ class Settings(BaseSettings):
     ADMIN_API_KEY: str = ""
     CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
 
 
 @lru_cache

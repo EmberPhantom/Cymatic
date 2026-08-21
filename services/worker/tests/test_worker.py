@@ -33,7 +33,8 @@ async def test_validation_agent():
         domain="real_estate",
         metadata={"title": "Test", "description": "Test", "version": "1.0"},
         entities=[
-            Entity(id="room1", type="room", name="Living Room", position=[0, 0, 0], properties={"size": [5, 4, 3]})
+            Entity(id="room1", type="room", name="Living Room", position=[0, 0, 0], properties={"size": [5, 4, 3]}),
+            Entity(id="navpoint1", type="navigation_point", name="Nav Point 1", position=[2.5, 1.6, 1.6]),
         ],
         navigation=NavigationSpec(
             points=[

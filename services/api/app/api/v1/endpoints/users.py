@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -13,6 +13,8 @@ router = APIRouter()
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     email: str
     name: str
@@ -20,9 +22,6 @@ class UserResponse(BaseModel):
     organization_id: int
     is_active: bool
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class UserCreate(BaseModel):

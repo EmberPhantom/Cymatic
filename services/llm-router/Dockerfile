@@ -9,13 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY packages/cymatic-shared/ ./shared/
-RUN pip install --no-cache-dir ./shared
+RUN pip install --no-cache-dir --prefix=/install ./shared
 
 COPY services/llm-router/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ── Runtime stage ────────────────────────────────────────────
-FROM python:3.11-slim
+FROM python:3.11-slim AS runtime
 
 COPY --from=builder /install /usr/local
 
@@ -31,7 +31,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
 FROM runtime AS test
 
 COPY services/llm-router/tests/ ./tests/
-RUN pip install --no-cache-dir pytest pytest-asyncio pytest-cov
+RUN pip install --no-cache-dir pytest==8.3.5 pytest-asyncio==0.24.0 pytest-cov
 
 ENV PYTHONPATH=/app/packages/cymatic-shared
 

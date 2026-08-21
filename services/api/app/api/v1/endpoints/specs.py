@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -38,6 +38,8 @@ class SpecUpdate(BaseModel):
 
 
 class SpecResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     project_id: int
     version: int
@@ -45,9 +47,6 @@ class SpecResponse(BaseModel):
     status: str
     created_at: str
     updated_at: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class SpecGenerateRequest(BaseModel):

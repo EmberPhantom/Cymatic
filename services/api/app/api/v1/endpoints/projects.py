@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -39,15 +39,14 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectResponse(ProjectBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     organization_id: int
     status: str
     created_by: int
     created_at: str
     updated_at: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 @router.get("", response_model=List[ProjectResponse])

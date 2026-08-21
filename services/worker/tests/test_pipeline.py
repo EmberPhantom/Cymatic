@@ -49,22 +49,24 @@ class TestIntakeAgent:
 
 
 class TestClarificationAgent:
-    def test_real_estate_clarification(self):
+    @pytest.mark.asyncio
+    async def test_real_estate_clarification(self):
         current = {"style": "modern"}
         new = {"bedrooms": "3", "bathrooms": "2"}
         
-        result = process_clarification_answers("real_estate", current, new)
+        result = await process_clarification_answers("real_estate", current, new)
         
         assert result.updated_fields["style"] == "modern"
         assert result.updated_fields["bedrooms"] == 3
         assert result.updated_fields["bathrooms"] == 2
         assert result.completion_percentage > 0
     
-    def test_heritage_clarification(self):
+    @pytest.mark.asyncio
+    async def test_heritage_clarification(self):
         current = {"site_type": "temple"}
         new = {"narration": "yes", "languages": "english,telugu"}
         
-        result = process_clarification_answers("heritage", current, new)
+        result = await process_clarification_answers("heritage", current, new)
         
         assert result.updated_fields["site_type"] == "temple"
         assert result.updated_fields["narration"] is True
@@ -141,11 +143,12 @@ class TestDomainExpertAgent:
 
 
 class TestArchitectAgent:
-    def test_create_real_estate_spec(self):
+    @pytest.mark.asyncio
+    async def test_create_real_estate_spec(self):
         intake_data = {"style": "modern", "bedrooms": 2, "bathrooms": 1, "furnished": True}
         clarification_data = {"square_footage": 1200, "floors": 1}
         
-        result = create_simulation_spec(
+        result = await create_simulation_spec(
             domain="real_estate",
             objective="Create a modern apartment",
             intake_data=intake_data,
@@ -197,6 +200,7 @@ class TestValidationAgent:
             metadata={"title": "Test", "description": "Test", "version": "1.0"},
             entities=[
                 Entity(id="room1", type="room", name="Living Room", position=[0,0,0], properties={"size": [15, 20, 10]}),
+                Entity(id="navpoint1", type="navigation_point", name="Nav Point 1", position=[7.5, 1.6, 5]),
             ],
             navigation=NavigationSpec(
                 points=[

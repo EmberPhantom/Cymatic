@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from app.core.dependencies import get_current_user, require_viewer, require_creator
+from app.core.dependencies import get_current_user, require_viewer, require_creator, require_admin
 from app.db.session import get_db
 from app.models.project import Project
 from app.models.stream_session import StreamSession

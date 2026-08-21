@@ -229,7 +229,9 @@ class AssetAgent:
             uri=f"assets/{uri}",
             fallback_uri=f"assets/{uri.replace('.glb', '_low.glb')}" if profile != "low" else None,
             lod_levels=lod_levels,
-            required=required
+            required=required,
+            estimated_triangles=estimated_triangles,
+            estimated_size_mb=float(estimated_size),
         )
     
     def _find_lod_alternative(self, asset: AssetReference, profile: str) -> Optional[AssetReference]:

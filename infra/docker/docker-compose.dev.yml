@@ -27,13 +27,6 @@ services:
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
 
   web:
-    build:
-      context: ../../apps/web
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
-        NEXT_PUBLIC_WS_URL: ws://localhost:${API_PORT:-8000}
-        NEXT_PUBLIC_MINIO_URL: http://localhost:${MINIO_API_PORT:-9000}
     ports:
       - "${WEB_PORT:-3000}:3000"
     volumes:
