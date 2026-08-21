@@ -47,7 +47,7 @@ class PipelineCheckpointManager:
             with open(path, 'r') as f:
                 data = json.load(f)
             return PipelineCheckpoint(**data)
-        except Exception as e:
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.warning("checkpoint_load_failed", project_id=project_id, error=str(e))
             return None
     

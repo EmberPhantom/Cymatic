@@ -91,7 +91,7 @@ async def intake_prompt(
         raise HTTPException(status_code=404, detail="Project not found")
     
     # Use Intake Agent
-    intake_result = process_intake(request.prompt, request.context)
+    intake_result = await process_intake(request.prompt, request.context)
     
     return {
         "detected_domain": intake_result.detected_domain,

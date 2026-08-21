@@ -150,7 +150,7 @@ async def process_clarification_llm(
             completion_percentage=result.get("completion_percentage", 0.0),
         )
 
-    except Exception as e:
+    except (ValueError, KeyError, OSError) as e:
         logger.error("clarification_llm_failed", error=str(e))
         return process_clarification_fallback(domain, current_answers, new_answers)
 

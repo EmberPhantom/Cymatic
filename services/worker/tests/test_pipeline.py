@@ -15,27 +15,30 @@ from cymatic_shared.schemas.simulation_spec import SimulationSpec, Entity, Navig
 
 
 class TestIntakeAgent:
-    def test_real_estate_intake(self):
+    @pytest.mark.asyncio
+    async def test_real_estate_intake(self):
         prompt = "Create a modern 3-bedroom apartment walkthrough with warm lighting"
-        result = process_intake(prompt)
+        result = await process_intake(prompt)
         
         assert result.detected_domain == "real_estate"
         assert "style" in result.missing_fields
         assert "bedrooms" in result.missing_fields
         assert result.confidence > 0.3
     
-    def test_heritage_intake(self):
+    @pytest.mark.asyncio
+    async def test_heritage_intake(self):
         prompt = "Generate a heritage temple courtyard walkthrough with narration"
-        result = process_intake(prompt)
+        result = await process_intake(prompt)
         
         assert result.detected_domain == "heritage"
         assert "site_type" in result.missing_fields
         assert "narration" in result.missing_fields
     
-    def test_merge_answers(self):
+    @pytest.mark.asyncio
+    async def test_merge_answers(self):
         from app.agents.intake_agent import merge_intake_answers
         prompt = "Create a modern apartment"
-        result = process_intake(prompt)
+        result = await process_intake(prompt)
         
         merged = merge_intake_answers(result, {"style": "modern", "bedrooms": "3"})
         

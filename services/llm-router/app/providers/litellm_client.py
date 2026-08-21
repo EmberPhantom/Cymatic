@@ -245,7 +245,7 @@ class LiteLLMClient:
                         latency_ms=latency_ms,
                     )
                     
-            except Exception as e:
+            except (ValueError, OSError) as e:
                 last_error = e
                 latency_ms = int((time.time() - start_time) * 1000)
                 
@@ -302,8 +302,8 @@ class LiteLLMClient:
                     total_usage["prompt_tokens"] = chunk.usage.prompt_tokens or 0
                     total_usage["completion_tokens"] = chunk.usage.completion_tokens or 0
                     total_usage["total_tokens"] = total_usage["prompt_tokens"] + total_usage["completion_tokens"]
-        except Exception:
-            pass
+        except (ValueError, KeyError, asyncio.TimeoutError) as e:
+            logger.warning("stream_completion_chunk_error", error=str(e))
         
         latency_ms = int((time.time() - start_time) * 1000)
         
@@ -368,7 +368,7 @@ class LiteLLMClient:
                 latency_ms=latency_ms,
             )
             
-        except Exception as e:
+        except (ValueError, OSError) as e:
             latency_ms = int((time.time() - start_time) * 1000)
             await log_llm_usage(
                 task_type=TaskType.EMBEDDING.value,
@@ -433,7 +433,7 @@ class LiteLLMClient:
                 latency_ms=latency_ms,
             )
             
-        except Exception as e:
+        except (ValueError, OSError) as e:
             latency_ms = int((time.time() - start_time) * 1000)
             await log_llm_usage(
                 task_type=TaskType.STT.value,
@@ -498,7 +498,7 @@ class LiteLLMClient:
                 latency_ms=latency_ms,
             )
             
-        except Exception as e:
+        except (ValueError, OSError) as e:
             latency_ms = int((time.time() - start_time) * 1000)
             await log_llm_usage(
                 task_type=TaskType.TTS.value,

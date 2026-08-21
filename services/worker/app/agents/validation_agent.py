@@ -74,7 +74,7 @@ class ValidationAgent:
             if 30 <= spec.performance_budget.target_fps <= 90:
                 score += 0.05
             
-        except Exception:
+        except (ValueError, KeyError):
             pass
         
         return max(0.0, min(1.0, score))

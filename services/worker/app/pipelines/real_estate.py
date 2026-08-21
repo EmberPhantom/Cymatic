@@ -221,7 +221,7 @@ class RealEstatePipeline:
                 status="completed"
             )
             
-        except Exception as e:
+        except (ValueError, KeyError) as e:
             logger.error("pipeline_stage_failed", stage=stage, project_id=input_data.project_id, error=str(e))
             raise
     
@@ -318,7 +318,7 @@ class RealEstatePipeline:
             # Clear checkpoint on success
             self.checkpoint_manager.clear_checkpoint(input_data.project_id)
             
-        except Exception as e:
+        except (ValueError, KeyError, OSError) as e:
             logger.error("pipeline_failed", project_id=input_data.project_id, error=str(e))
             result.status = "failed"
             result.error = str(e)

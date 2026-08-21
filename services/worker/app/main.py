@@ -47,7 +47,7 @@ async def worker_loop():
                     try:
                         result = await process_job(job)
                         await job_queue.complete_job(job, result)
-                    except Exception as e:
+                    except (ValueError, asyncio.CancelledError) as e:
                         logger.error("job_failed", worker_id=worker_id, job_id=job.id, error=str(e))
                         await job_queue.fail_job(job, str(e))
 
@@ -59,7 +59,7 @@ async def worker_loop():
 
         except asyncio.CancelledError:
             break
-        except Exception as e:
+        except OSError as e:
             logger.error("worker_error", worker_id=worker_id, error=str(e))
             await asyncio.sleep(5)
 

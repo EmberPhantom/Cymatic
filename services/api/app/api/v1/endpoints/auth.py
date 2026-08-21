@@ -5,7 +5,7 @@ from typing import Optional
 from datetime import timedelta
 from jose import JWTError
 from app.core.config import get_settings
-from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash, decode_token
+from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash, decode_token, revoke_token, is_token_revoked
 from app.core.dependencies import get_current_user
 from app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,10 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
+
+
+class RefreshRequest(BaseModel):
+    token: str
 
 
 class UserCreate(BaseModel):
@@ -132,15 +136,23 @@ async def get_current_user_info(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
-    token: str,
+    request: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    token = request.token
     try:
         payload = decode_token(token)
     except (JWTError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if await is_token_revoked(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has been revoked",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -183,5 +195,7 @@ async def refresh_token(
         data={"sub": str(user.id)},
         expires_delta=timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
     )
+
+    await revoke_token(token)
 
     return Token(access_token=new_access_token, refresh_token=new_refresh_token)

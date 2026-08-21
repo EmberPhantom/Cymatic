@@ -73,7 +73,7 @@ class LLMCache:
                 self._promote_to_local(key, entry)
                 logger.debug("cache_hit_redis", key=key)
                 return entry.value
-        except Exception as e:
+        except (redis.RedisError, OSError) as e:
             logger.warning("cache_get_failed", key=key, error=str(e))
         
         return None
@@ -107,7 +107,7 @@ class LLMCache:
                 int(ttl.total_seconds()),
                 entry.model_dump_json()
             )
-        except Exception as e:
+        except (redis.RedisError, OSError) as e:
             logger.warning("cache_set_failed", key=key, error=str(e))
         
         # Promote to local cache
@@ -140,7 +140,7 @@ class LLMCache:
                     self._local_cache.pop(key, None)
                 logger.info("cache_invalidated", pattern=pattern, count=deleted)
                 return deleted
-        except Exception as e:
+        except (redis.RedisError, OSError) as e:
             logger.warning("cache_invalidate_failed", pattern=pattern, error=str(e))
         
         return 0
@@ -155,7 +155,7 @@ class LLMCache:
         try:
             # Sample Redis keys
             redis_keys = await self._client.dbsize()
-        except:
+        except (redis.RedisError, OSError):
             redis_keys = 0
         
         return {

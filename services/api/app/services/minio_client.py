@@ -278,8 +278,15 @@ class MinIOClient:
             raise
 
 
-# Global MinIO client instance
-minio_client = MinIOClient()
+# Global MinIO client instance (lazy-loaded)
+_minio_client_instance: Optional["MinIOClient"] = None
+
+
+def get_minio_client() -> MinIOClient:
+    global _minio_client_instance
+    if _minio_client_instance is None:
+        _minio_client_instance = MinIOClient()
+    return _minio_client_instance
 
 
 # Helper functions for common operations
@@ -298,10 +305,10 @@ def get_scene_package_key(organization_id: int, project_id: int, spec_id: int, v
 def get_asset_presigned_upload_url(organization_id: int, project_id: int | None, filename: str, expires_hours: int = 1) -> tuple[str, str]:
     """Get presigned upload URL and storage key for an asset."""
     storage_key = get_asset_storage_key(organization_id, project_id, filename)
-    url = minio_client.get_presigned_put_url(storage_key, expires=timedelta(hours=expires_hours))
+    url = get_minio_client().get_presigned_put_url(storage_key, expires=timedelta(hours=expires_hours))
     return url, storage_key
 
 
 def get_asset_presigned_download_url(storage_key: str, expires_hours: int = 1) -> str:
     """Get presigned download URL for an asset."""
-    return minio_client.get_presigned_url(storage_key, expires=timedelta(hours=expires_hours))
+    return get_minio_client().get_presigned_url(storage_key, expires=timedelta(hours=expires_hours))

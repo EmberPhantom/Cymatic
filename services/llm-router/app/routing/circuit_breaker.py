@@ -2,7 +2,7 @@
 from typing import Optional, Dict
 from datetime import datetime, timedelta
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, PrivateAttr
 from threading import Lock
 import structlog
 
@@ -32,7 +32,7 @@ class CircuitBreaker(BaseModel):
     timeout: float = 30.0  # seconds before trying half-open
     
     # Thread safety
-    _lock: Lock = Field(default_factory=Lock, exclude=True)
+    _lock: Lock = PrivateAttr(default_factory=Lock)
     
     def record_success(self):
         """Record successful request."""

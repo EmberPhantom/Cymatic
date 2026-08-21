@@ -2,11 +2,30 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import jwt, JWTError
 from passlib.context import CryptContext
+import redis.asyncio as aioredis
 from app.core.config import get_settings
 
 settings = get_settings()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+_revoked_tokens_key = "cymatic:revoked_tokens"
+
+
+async def _get_redis() -> aioredis.Redis:
+    return aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+
+
+async def revoke_token(token: str) -> None:
+    """Mark a token as revoked in Redis (persists across restarts)."""
+    r = await _get_redis()
+    await r.sadd(_revoked_tokens_key, token)
+
+
+async def is_token_revoked(token: str) -> bool:
+    """Check if a token has been revoked in Redis."""
+    r = await _get_redis()
+    return await r.sismember(_revoked_tokens_key, token)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

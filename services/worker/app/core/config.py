@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     S3_REGION: str = "us-east-1"
 
     LLM_ROUTER_URL: str = "http://localhost:8001"
+    LLM_TIMEOUT: float = 5.0
 
     WORKER_CONCURRENCY: int = 4
     WORKER_QUEUES: str = "generation,spec,asset,analytics"

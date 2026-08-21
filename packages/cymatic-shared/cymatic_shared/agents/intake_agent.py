@@ -64,7 +64,7 @@ async def process_intake_llm(prompt: str, context: Dict[str, Any] = None) -> Int
         logger.info("intake_llm_completed", domain=intake_result.detected_domain, confidence=intake_result.confidence)
         return intake_result
 
-    except Exception as e:
+    except (ValueError, KeyError, OSError) as e:
         logger.error("intake_llm_failed", error=str(e))
         return await process_intake_fallback(prompt, context)
 

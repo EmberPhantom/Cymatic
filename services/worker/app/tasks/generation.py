@@ -2,16 +2,17 @@
 from datetime import datetime
 from app.core.queue import register_job_handler, Job, JobPriority, JobStatus
 from app.db.session import AsyncSessionLocal
-from app.models.project import Project, ProjectStatus
-from app.models.simulation_spec import SimulationSpec, SpecStatus
-from app.models.asset import Asset, AssetStatus
-from app.models.scene_package import ScenePackage as ScenePackageModel
+from cymatic_shared.models import Project, ProjectStatus
+from cymatic_shared.models import SimulationSpec, SpecStatus
+from cymatic_shared.models import Asset, AssetStatus
+from cymatic_shared.models import ScenePackage as ScenePackageModel
 from app.agents.scene_package import generate_scene_package, ScenePackage, scene_package_to_json
-from app.services.minio_client import minio_client
+from app.services.minio_client import get_minio_client
 from sqlalchemy import select, func
 import structlog
 import asyncio
 import json
+from minio.error import S3Error
 
 logger = structlog.get_logger()
 
@@ -193,7 +194,7 @@ async def generate_scene_task(payload: dict) -> dict:
         storage_key = f"orgs/{project.organization_id}/projects/{project_id}/scenes/spec_{spec_id}_v{spec.version}.cymatic"
         
         try:
-            minio_client.upload_data(
+            get_minio_client().upload_data(
                 object_name=storage_key,
                 data=scene_json.encode('utf-8'),
                 content_type="application/json",
@@ -205,7 +206,7 @@ async def generate_scene_task(payload: dict) -> dict:
                 }
             )
             logger.info("scene_package_uploaded", storage_key=storage_key)
-        except Exception as e:
+        except S3Error as e:
             logger.error("minio_upload_failed", error=str(e))
             raise
         
@@ -285,7 +286,7 @@ async def publish_scene_task(payload: dict) -> dict:
 
 @register_job_handler("process_asset")
 async def process_asset_task(payload: dict) -> dict:
-    """Process uploaded asset based on type: extract metadata, validate, mark ready."""
+    """Process uploaded asset based on type: extract metadata from MinIO, validate, mark ready."""
     asset_id = payload.get("asset_id")
 
     logger.info("process_asset_started", asset_id=asset_id)
@@ -302,33 +303,36 @@ async def process_asset_task(payload: dict) -> dict:
         await db.commit()
 
         asset_type = asset.type.value if hasattr(asset.type, "value") else str(asset.type)
+        file_ext = asset.filename.rsplit(".", 1)[-1].lower() if asset.filename and "." in asset.filename else "unknown"
 
         try:
+            info = get_minio_client().get_object_info(asset.storage_key)
+
+            asset.metadata_json["processed"] = True
+            asset.metadata_json["size"] = info.get("size")
+            asset.metadata_json["etag"] = info.get("etag")
+            asset.metadata_json["content_type"] = info.get("content_type")
+            asset.metadata_json["format"] = file_ext
+
             if asset_type == "image":
-                asset.metadata_json["processed"] = True
-                asset.metadata_json["thumbnail_generated"] = False  # requires Pillow
-                asset.metadata_json["note"] = "Thumbnail generation requires Pillow; marked ready without thumbnail"
+                asset.metadata_json["note"] = "Image metadata extracted; thumbnail generation requires Pillow (not yet available)"
 
             elif asset_type == "model_3d":
-                asset.metadata_json["processed"] = True
-                asset.metadata_json["lod_generated"] = False
-                asset.metadata_json["note"] = "LOD generation requires mesh processing; marked ready without LOD"
+                asset.metadata_json["note"] = "3D model metadata extracted; LOD generation requires mesh processing (not yet available)"
 
             elif asset_type == "audio":
-                asset.metadata_json["processed"] = True
                 asset.metadata_json["note"] = "Audio stored as-is for MVP"
 
             else:
-                asset.metadata_json["processed"] = True
                 asset.metadata_json["note"] = f"No specific processing for type '{asset_type}'"
 
             asset.status = AssetStatus.READY
             await db.commit()
 
-            logger.info("process_asset_completed", asset_id=asset_id, asset_type=asset_type)
-            return {"asset_id": asset_id, "status": "ready", "type": asset_type}
+            logger.info("process_asset_completed", asset_id=asset_id, asset_type=asset_type, size=info.get("size"))
+            return {"asset_id": asset_id, "status": "ready", "type": asset_type, "size": info.get("size")}
 
-        except Exception as e:
+        except (S3Error, OSError) as e:
             asset.status = AssetStatus.FAILED
             asset.metadata_json["error"] = str(e)
             await db.commit()
@@ -343,8 +347,8 @@ async def analytics_aggregation_task(payload: dict) -> dict:
 
     logger.info("analytics_aggregation_started", project_id=project_id)
 
-    from app.models.stream_session import StreamSession, StreamSessionStatus
-    from app.models.runtime_event import RuntimeEvent
+    from cymatic_shared.models import StreamSession, StreamSessionStatus
+    from cymatic_shared.models import RuntimeEvent
 
     async with AsyncSessionLocal() as db:
         sessions_result = await db.execute(
@@ -361,16 +365,19 @@ async def analytics_aggregation_task(payload: dict) -> dict:
             if s.started_at and s.ended_at:
                 total_duration_seconds += (s.ended_at - s.started_at).total_seconds()
 
-        event_counts = {}
-        total_events = 0
-        for s in sessions:
+        session_ids = [s.id for s in sessions]
+        if session_ids:
             events_result = await db.execute(
-                select(RuntimeEvent).where(RuntimeEvent.session_id == s.id)
+                select(RuntimeEvent).where(RuntimeEvent.session_id.in_(session_ids))
             )
             events = events_result.scalars().all()
-            for event in events:
-                event_counts[event.event_type] = event_counts.get(event.event_type, 0) + 1
-                total_events += 1
+        else:
+            events = []
+
+        event_counts = {}
+        total_events = len(events)
+        for event in events:
+            event_counts[event.event_type] = event_counts.get(event.event_type, 0) + 1
 
         aggregated = {
             "project_id": project_id,

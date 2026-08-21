@@ -1,6 +1,8 @@
 package com.cymatic.client
 
 import android.app.Application
+import com.cymatic.client.network.ApiClient
+import com.cymatic.client.util.PreferencesManager
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 
@@ -16,6 +18,10 @@ class CymaticApplication : Application() {
         } else {
             Timber.plant(CrashReportingTree())
         }
+        
+        // Configure API client with saved server URL
+        val prefs = PreferencesManager(this)
+        ApiClient.configure(prefs.apiUrl)
     }
     
     private class CrashReportingTree : Timber.Tree() {

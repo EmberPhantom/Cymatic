@@ -3,12 +3,14 @@ from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+import asyncio
+from datetime import timedelta
 from app.core.dependencies import get_current_user, require_creator, require_admin, require_viewer
 from app.db.session import get_db
 from app.models.asset import Asset, AssetType, AssetStatus
 from app.models.project import Project
 from app.models.user import User, UserRole
-from app.services.minio_client import minio_client, get_asset_storage_key, get_asset_presigned_upload_url, get_asset_presigned_download_url
+from app.services.minio_client import get_minio_client, get_asset_storage_key, get_asset_presigned_download_url
 
 router = APIRouter()
 
@@ -76,7 +78,7 @@ async def init_upload(
     )
     
     # Get presigned upload URL
-    upload_url = minio_client.get_presigned_put_url(
+    upload_url = get_minio_client().get_presigned_put_url(
         storage_key,
         expires=timedelta(hours=1)
     )
@@ -122,11 +124,11 @@ async def complete_upload(
         raise HTTPException(status_code=404, detail="Asset not found")
     
     # Verify object exists in MinIO
-    if not minio_client.object_exists(asset.storage_key):
+    if not get_minio_client().object_exists(asset.storage_key):
         raise HTTPException(status_code=400, detail="Object not found in storage")
     
     # Get object info
-    info = minio_client.get_object_info(asset.storage_key)
+    info = get_minio_client().get_object_info(asset.storage_key)
     asset.metadata_json.update({
         "size": info["size"],
         "etag": info["etag"],
@@ -232,11 +234,7 @@ async def delete_asset(
         raise HTTPException(status_code=404, detail="Asset not found")
     
     # Delete from MinIO
-    minio_client.delete_object(asset.storage_key)
+    get_minio_client().delete_object(asset.storage_key)
     
     await db.delete(asset)
     await db.commit()
-
-
-import asyncio
-from datetime import timedelta

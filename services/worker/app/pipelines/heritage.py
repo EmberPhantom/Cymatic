@@ -172,7 +172,7 @@ class HeritagePipeline:
             
             logger.info("pipeline_completed", project_id=input_data.project_id, status=result.status)
             
-        except Exception as e:
+        except (ValueError, KeyError, OSError) as e:
             logger.error("pipeline_failed", project_id=input_data.project_id, error=str(e))
             result.status = "failed"
             result.error = str(e)

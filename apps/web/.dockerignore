@@ -1,0 +1,21 @@
+# dependencies (reinstall in container)
+node_modules
+
+# build artifacts
+.next
+out
+
+# environment files
+.env
+.env.*
+
+# documentation
+*.md
+
+# IDE
+.vscode
+.idea
+
+# OS files
+.DS_Store
+Thumbs.db

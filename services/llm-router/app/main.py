@@ -75,7 +75,7 @@ async def chat_completions(request: ChatCompletionRequest):
     except ValueError as e:
         logger.warning("chat_completion_bad_request", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except (OSError, HTTPException) as e:
         logger.error("chat_completion_failed", error=str(e))
         raise HTTPException(status_code=502, detail="LLM provider request failed")
 
@@ -87,7 +87,7 @@ async def embeddings(request: EmbeddingRequest):
     except ValueError as e:
         logger.warning("embedding_bad_request", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except (OSError, HTTPException) as e:
         logger.error("embedding_failed", error=str(e))
         raise HTTPException(status_code=502, detail="LLM provider request failed")
 
@@ -96,7 +96,7 @@ async def embeddings(request: EmbeddingRequest):
 async def transcribe(request: STTRequest):
     try:
         return await stt(request)
-    except Exception as e:
+    except (ValueError, OSError) as e:
         logger.error("stt_failed", error=str(e))
         raise HTTPException(status_code=502, detail="STT provider request failed")
 
@@ -105,7 +105,7 @@ async def transcribe(request: STTRequest):
 async def speech(request: TTSRequest):
     try:
         return await tts(request)
-    except Exception as e:
+    except (ValueError, OSError) as e:
         logger.error("tts_failed", error=str(e))
         raise HTTPException(status_code=502, detail="TTS provider request failed")
 

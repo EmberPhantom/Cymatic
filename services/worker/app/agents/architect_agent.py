@@ -94,7 +94,7 @@ async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
         logger.info("architect_llm_completed", domain=input_data.domain, entities=len(spec.entities))
         return ArchitectResult(spec=spec, generation_notes=notes)
         
-    except Exception as e:
+    except (ValueError, KeyError, OSError) as e:
         logger.error("architect_llm_failed", error=str(e))
         # Fallback to template-based
         return await create_spec_fallback(input_data)

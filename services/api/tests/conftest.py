@@ -56,6 +56,9 @@ def event_loop():
 
 @pytest.fixture(scope="session")
 async def setup_db():
+    # NOTE: Using Base.metadata.create_all for test isolation.
+    # Production uses Alembic via the `migrate` service.
+    # If models drift from migrations, tests will still pass but production may fail.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield

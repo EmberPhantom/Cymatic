@@ -16,6 +16,7 @@ class AssetType(str, enum.Enum):
 
 
 class AssetStatus(str, enum.Enum):
+    UPLOADING = "uploading"
     UPLOADED = "uploaded"
     PROCESSING = "processing"
     READY = "ready"

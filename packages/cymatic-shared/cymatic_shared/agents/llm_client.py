@@ -30,10 +30,10 @@ def _get_settings():
 class LLMRouterClient:
     """Client for calling LLM Router from any service."""
 
-    def __init__(self, base_url: str = None):
+    def __init__(self, base_url: str = None, timeout: float = 5.0):
         settings = _get_settings()
         self.base_url = base_url or settings.LLM_ROUTER_URL
-        self.client = httpx.AsyncClient(timeout=120.0)
+        self.client = httpx.AsyncClient(timeout=timeout)
 
     async def close(self):
         await self.client.aclose()

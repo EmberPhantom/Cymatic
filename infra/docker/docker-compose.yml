@@ -56,7 +56,7 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
@@ -64,6 +64,7 @@ services:
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      LLM_ROUTER_URL: http://llm-router:8001
       DEBUG: "false"
       API_RELOAD: "false"
     healthcheck:
@@ -77,8 +78,14 @@ services:
       context: ../..
       dockerfile: services/worker/Dockerfile
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       api:
-        condition: service_started
+        condition: service_healthy
+      llm-router:
+        condition: service_healthy
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
@@ -112,17 +119,91 @@ services:
 
   web:
     build:
-      context: ../..
-      dockerfile: apps/web/Dockerfile
+      context: ../../apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
+        NEXT_PUBLIC_WS_URL: ws://localhost:${API_PORT:-8000}
+        NEXT_PUBLIC_MINIO_URL: http://localhost:${MINIO_API_PORT:-9000}
     ports:
       - "${WEB_PORT:-3000}:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://api:8000
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
       interval: 10s
       timeout: 5s
       retries: 3
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: services/api/Dockerfile
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: ../../.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
+    profiles: ["setup"]
+
+  test-api:
+    build:
+      context: ../..
+      dockerfile: services/api/Dockerfile
+      target: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: ../../.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      LLM_ROUTER_URL: http://llm-router:8001
+    profiles: ["test"]
+
+  test-worker:
+    build:
+      context: ../..
+      dockerfile: services/worker/Dockerfile
+      target: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      llm-router:
+        condition: service_healthy
+    env_file: ../../.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      LLM_ROUTER_URL: http://llm-router:8001
+    profiles: ["test"]
+
+  test-llm-router:
+    build:
+      context: ../..
+      dockerfile: services/llm-router/Dockerfile
+      target: test
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: ../../.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    profiles: ["test"]
 
 volumes:
   postgres_data:

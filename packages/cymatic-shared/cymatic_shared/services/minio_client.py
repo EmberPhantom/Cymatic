@@ -31,7 +31,8 @@ class MinIOClient:
                 logger.info("bucket_created", bucket=self.bucket_name)
         except S3Error as e:
             logger.error("bucket_creation_failed", bucket=self.bucket_name, error=str(e))
-            raise
+        except OSError as e:
+            logger.warning("bucket_check_deferred", bucket=self.bucket_name, error=str(e))
 
     def upload_data(
         self,

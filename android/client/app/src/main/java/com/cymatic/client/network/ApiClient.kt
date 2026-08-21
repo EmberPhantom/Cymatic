@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 
 object ApiClient {
     
-    private const val BASE_URL = "http://10.0.2.2:8000/" // 10.0.2.2 is localhost from Android emulator
+    private var baseUrl: String = "http://10.0.2.2:8000/" // Default for emulator; overridable via configure()
     
     private val gson = GsonBuilder()
         .setLenient()
@@ -38,13 +38,23 @@ object ApiClient {
         }
         .build()
     
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
+    private var retrofit: Retrofit = Retrofit.Builder()
+        .baseUrl(baseUrl)
         .client(okHttpClient)
         .addConverterFactory(GsonConverterFactory.create(gson))
         .build()
     
     val apiService: ApiService = retrofit.create(ApiService::class.java)
+    
+    fun configure(serverUrl: String) {
+        val url = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
+        baseUrl = url
+        retrofit = Retrofit.Builder()
+            .baseUrl(url)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .build()
+    }
 }
 
 interface ApiService {

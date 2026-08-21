@@ -1,0 +1,41 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies (reinstall in container)
+apps/web/node_modules
+
+# Environment files (secrets must not enter build context)
+.env
+.env.*
+
+# Build artifacts
+**/*.egg-info
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# IDE / editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation
+docs/
+*.md
+
+# Platform-specific (not needed in containers)
+android/
+unity/
+
+# Docker
+docker-compose*.yml
+scripts/
+
+# OS files
+.DS_Store
+Thumbs.db

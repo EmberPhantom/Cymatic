@@ -130,7 +130,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                 db.add(audit_log)
                 await db.commit()
                 
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.warning("audit_log_failed", error=str(e))
     
     def _determine_action(self, method: str, path: str) -> str | None:

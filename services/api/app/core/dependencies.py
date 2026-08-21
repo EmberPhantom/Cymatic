@@ -33,6 +33,12 @@ async def get_current_user(
     
     try:
         payload = decode_token(credentials.credentials)
+        if payload.get("type") not in ("access", None):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         user_id: str = payload.get("sub")
         if user_id is None:
             raise AuthError("Invalid token payload")
