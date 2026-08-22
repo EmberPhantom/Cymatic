@@ -1,7 +1,7 @@
 """Pipeline Checkpointing for Resume Capability"""
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 import structlog
@@ -16,8 +16,8 @@ class PipelineCheckpoint(BaseModel):
     stage_index: int
     input_data: Dict[str, Any]
     stage_outputs: Dict[str, Any]
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class PipelineCheckpointManager:
@@ -33,7 +33,7 @@ class PipelineCheckpointManager:
     def save_checkpoint(self, checkpoint: 'PipelineCheckpoint'):
         """Save checkpoint to disk."""
         path = self._get_checkpoint_path(checkpoint.project_id)
-        checkpoint.updated_at = datetime.utcnow()
+        checkpoint.updated_at = datetime.now(timezone.utc)
         with open(path, 'w') as f:
             json.dump(checkpoint.model_dump(), f, default=str)
         logger.info("checkpoint_saved", project_id=checkpoint.project_id, stage=checkpoint.stage)

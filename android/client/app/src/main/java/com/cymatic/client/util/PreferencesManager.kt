@@ -33,7 +33,7 @@ class PreferencesManager(private val context: Context) {
         set(value) = prefs.edit().putString(KEY_API_URL, value).apply()
     
     var signalingUrl: String
-        get() = prefs.getString(KEY_SIGNALING_URL, "ws://10.0.2.2:8080/ws")!!
+        get() = prefs.getString(KEY_SIGNALING_URL, "ws://10.0.2.2:8000")!!
         set(value) = prefs.edit().putString(KEY_SIGNALING_URL, value).apply()
     
     // Auth

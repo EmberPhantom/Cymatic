@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm, HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import Optional
 from datetime import timedelta
 from jose import JWTError
 from app.core.config import get_settings
 from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash, decode_token, revoke_token, is_token_revoked
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, security
 from app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -197,3 +197,14 @@ async def refresh_token(
     await revoke_token(token)
 
     return Token(access_token=new_access_token, refresh_token=new_refresh_token)
+
+
+@router.post("/logout")
+async def logout(
+    current_user: User = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """Revoke the current access token."""
+    from app.core.security import revoke_token
+    await revoke_token(credentials.credentials)
+    return {"message": "Successfully logged out"}

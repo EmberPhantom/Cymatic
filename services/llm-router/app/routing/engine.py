@@ -10,7 +10,7 @@ from app.routing.circuit_breaker import (
     can_execute_provider, get_circuit_breaker_status, get_all_circuit_breaker_status
 )
 import structlog
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = structlog.get_logger()
 
@@ -407,8 +407,8 @@ class RoutingEngine:
             self.status[provider].latency_ms = latency_ms
             if not success:
                 self.status[provider].error_count += 1
-            from datetime import datetime
-            self.status[provider].last_check = datetime.utcnow().isoformat()
+            from datetime import datetime, timezone
+            self.status[provider].last_check = datetime.now(timezone.utc).isoformat()
     
     def get_circuit_breaker_status(self) -> Dict[str, Dict]:
         """Get circuit breaker status for all providers."""
@@ -424,8 +424,8 @@ class RoutingEngine:
         self.status[name].healthy = healthy
         self.status[name].latency_ms = latency_ms
         self.status[name].error_count = error_count
-        from datetime import datetime
-        self.status[name].last_check = datetime.utcnow().isoformat()
+        from datetime import datetime, timezone
+        self.status[name].last_check = datetime.now(timezone.utc).isoformat()
     
     def get_provider_status(self) -> Dict[ProviderName, ProviderStatus]:
         return self.status

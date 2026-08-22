@@ -1,7 +1,7 @@
 """Tests for LLM Router"""
 import pytest
 import pytest_asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from httpx import AsyncClient, ASGITransport
 
 from app.main import app
@@ -69,7 +69,7 @@ async def test_circuit_breaker():
 async def test_circuit_breaker_half_open():
     cb = get_circuit_breaker(ProviderName.OPENAI)
     cb.state = "open"
-    cb.last_failure_time = datetime.utcnow() - timedelta(seconds=40)
+    cb.last_failure_time = datetime.now(timezone.utc) - timedelta(seconds=40)
 
     assert cb.can_execute() is True
     assert cb.state.value == "half_open"

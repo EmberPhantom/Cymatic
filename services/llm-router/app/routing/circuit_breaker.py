@@ -1,6 +1,6 @@
 """Circuit Breaker Implementation for LLM Provider Fault Tolerance"""
 from typing import Optional, Dict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pydantic import BaseModel, PrivateAttr
 from threading import Lock
@@ -39,7 +39,7 @@ class CircuitBreaker(BaseModel):
         with self._lock:
             self.failure_count = 0
             self.success_count += 1
-            self.last_success_time = datetime.utcnow()
+            self.last_success_time = datetime.now(timezone.utc)
             
             if self.state == CircuitState.HALF_OPEN and self.success_count >= self.success_threshold:
                 self.state = CircuitState.CLOSED
@@ -51,7 +51,7 @@ class CircuitBreaker(BaseModel):
         with self._lock:
             self.failure_count += 1
             self.success_count = 0
-            self.last_failure_time = datetime.utcnow()
+            self.last_failure_time = datetime.now(timezone.utc)
             
             if self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
                 self.state = CircuitState.OPEN
@@ -70,7 +70,7 @@ class CircuitBreaker(BaseModel):
             
             if self.state == CircuitState.OPEN:
                 if self.last_failure_time:
-                    elapsed = (datetime.utcnow() - self.last_failure_time).total_seconds()
+                    elapsed = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
                     if elapsed >= self.timeout:
                         self.state = CircuitState.HALF_OPEN
                         self.success_count = 0

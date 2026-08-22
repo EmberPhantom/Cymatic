@@ -251,7 +251,9 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     }
     
     private fun connectToRenderServer(sessionId: String) {
-        val signalingUrl = preferencesManager.getSignalingUrl()
+        val baseUrl = preferencesManager.getSignalingUrl()
+        val token = preferencesManager.accessToken ?: ""
+        val signalingUrl = "${baseUrl}/v1/stream/ws/${sessionId}?token=${token}&type=android"
         webRTCManager.connect(signalingUrl, sessionId)
     }
     

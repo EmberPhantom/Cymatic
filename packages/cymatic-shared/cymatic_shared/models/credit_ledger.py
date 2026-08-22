@@ -1,5 +1,5 @@
 """CreditLedger model"""
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
 from cymatic_shared.db import Base
 
@@ -13,4 +13,4 @@ class CreditLedger(Base):
     balance_after = Column(Integer, nullable=False)
     description = Column(String(255), nullable=True)
     metadata_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)

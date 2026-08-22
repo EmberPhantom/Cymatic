@@ -1,7 +1,7 @@
 """Shared Simulation Specification Schemas (Python/Pydantic)"""
 from typing import Literal, Optional, List, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 Domain = Literal["real_estate", "heritage"]
@@ -25,7 +25,7 @@ class SpecMetadata(BaseModel):
     description: str
     version: str = "1.0.0"
     author: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tags: List[str] = []
 
 
@@ -165,8 +165,8 @@ class GenerationJob(BaseModel):
     progress: float = 0.0
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AssetReference(BaseModel):

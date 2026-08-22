@@ -29,11 +29,11 @@ async def test_root(client):
 async def test_register_user(client):
     response = await client.post(
         "/v1/auth/register",
-        json={"email": "test@example.com", "password": "testpass123", "name": "Test User"},
+        json={"email": "register@example.com", "password": "testpass123", "name": "Test User"},
     )
     assert response.status_code == 201
     data = response.json()
-    assert data["email"] == "test@example.com"
+    assert data["email"] == "register@example.com"
     assert data["name"] == "Test User"
     assert "id" in data
 

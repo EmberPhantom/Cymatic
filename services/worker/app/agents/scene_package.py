@@ -5,7 +5,7 @@ from cymatic_shared.schemas.simulation_spec import SimulationSpec, Entity, Navig
 import structlog
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = structlog.get_logger()
 
@@ -13,7 +13,7 @@ logger = structlog.get_logger()
 class ScenePackageMetadata(BaseModel):
     format: str = "cymatic_v1"
     spec_version: int
-    generated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     generator: str = "cymatic-worker"
     unity_version: str = "2022.3"
     target_platform: str = "android"

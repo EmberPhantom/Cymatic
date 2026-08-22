@@ -1,5 +1,5 @@
 """Worker Tasks - Background job implementations using pipelines"""
-from datetime import datetime
+from datetime import datetime, timezone
 from app.core.queue import register_job_handler, Job, JobPriority, JobStatus
 from app.db.session import AsyncSessionLocal
 from cymatic_shared.models import Project, ProjectStatus
@@ -219,7 +219,7 @@ async def generate_scene_task(payload: dict) -> dict:
             metadata_json={
                 "format": "cymatic_v1",
                 "spec_version": spec.version,
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
                 "entity_count": len(scene_package.entities),
                 "navigation_points": len(scene_package.navigation.points),
             }

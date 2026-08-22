@@ -31,9 +31,11 @@ target_metadata = Base.metadata
 
 
 def get_url():
+    from cymatic_shared.utils import to_async_db_url
+
     from app.core.config import get_settings
     settings = get_settings()
-    return settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+    return to_async_db_url(settings.DATABASE_URL)
 
 
 def run_migrations_offline() -> None:

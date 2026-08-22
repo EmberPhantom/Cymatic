@@ -1,6 +1,6 @@
 """StreamSession model"""
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from cymatic_shared.db import Base
@@ -24,6 +24,6 @@ class StreamSession(Base):
     signaling_session_id = Column(String(255), nullable=True)
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     project = relationship("Project", back_populates="stream_sessions")

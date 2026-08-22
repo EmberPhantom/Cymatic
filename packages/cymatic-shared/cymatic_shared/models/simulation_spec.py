@@ -1,6 +1,6 @@
 """SimulationSpec model"""
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, JSON
 from sqlalchemy.orm import relationship
 from cymatic_shared.db import Base
@@ -22,7 +22,7 @@ class SimulationSpec(Base):
     version = Column(Integer, nullable=False, default=1)
     payload_json = Column(JSON, nullable=False)
     status = Column(Enum(SpecStatus), default=SpecStatus.DRAFT, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     project = relationship("Project", back_populates="specs")

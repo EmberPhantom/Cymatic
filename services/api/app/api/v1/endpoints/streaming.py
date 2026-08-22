@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Set, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+import json
 import httpx
 import structlog
 from jose import JWTError
@@ -111,8 +112,12 @@ async def create_stream_session(
                 await db.commit()
                 await db.refresh(session)
     except httpx.ConnectError:
+        session.status = StreamSessionStatus.ERROR
+        await db.commit()
         logger.warning("render_server_unavailable", session_id=session.id, url=settings.RENDER_SERVER_URL)
     except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+        session.status = StreamSessionStatus.ERROR
+        await db.commit()
         logger.error("render_server_signal_failed", session_id=session.id, error=str(e))
 
     logger.info("stream_session_created", session_id=session.id)
@@ -513,7 +518,11 @@ async def websocket_signaling(websocket: WebSocket, session_id: str, token: str 
 
     try:
         while True:
-            data = await websocket.receive_json()
+            try:
+                data = await websocket.receive_json()
+            except json.JSONDecodeError:
+                await websocket.close(code=4000, reason="Invalid JSON")
+                break
             msg_type = data.get("type", "")
             payload = data.get("payload", {})
 
@@ -539,8 +548,8 @@ async def websocket_signaling(websocket: WebSocket, session_id: str, token: str 
                 await websocket.send_json({"type": "pong", "id": data.get("id", "")})
 
     except WebSocketDisconnect:
-        signaling_manager.disconnect(websocket, session_id)
         logger.info("signaling.disconnected", session_id=session_id, client_type=client_type)
     except (WebSocketDisconnect, OSError) as e:
         logger.error("signaling.error", session_id=session_id, error=str(e))
+    finally:
         signaling_manager.disconnect(websocket, session_id)

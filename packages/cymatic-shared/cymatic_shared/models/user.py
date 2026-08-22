@@ -1,6 +1,6 @@
 """User model"""
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Boolean, Enum, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from cymatic_shared.db import Base
@@ -24,8 +24,8 @@ class User(Base):
     role = Column(Enum(UserRole), default=UserRole.CREATOR, nullable=False)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     organization = relationship("Organization", back_populates="users")
     projects = relationship("Project", back_populates="owner")

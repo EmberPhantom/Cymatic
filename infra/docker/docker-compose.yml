@@ -52,6 +52,8 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -80,6 +82,8 @@ services:
       dockerfile: services/worker/Dockerfile
       target: runtime
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -110,6 +114,9 @@ services:
       target: runtime
     ports:
       - "${LLM_ROUTER_PORT:-8001}:8001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     env_file: ../../.env
     environment:
       REDIS_URL: redis://redis:6379/0
@@ -148,7 +155,6 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
-    profiles: ["setup"]
 
   test-api:
     build:

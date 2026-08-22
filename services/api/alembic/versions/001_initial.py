@@ -17,24 +17,19 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create enum types
-    user_role = sa.Enum('owner', 'admin', 'creator', 'viewer', 'auditor', name='userrole')
-    user_role.create(op.get_bind())
+    op.execute("DO $$ BEGIN CREATE TYPE userrole AS ENUM ('owner', 'admin', 'creator', 'viewer', 'auditor'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE projectstatus AS ENUM ('draft', 'spec_generating', 'spec_ready', 'scene_generating', 'scene_ready', 'published', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE specstatus AS ENUM ('draft', 'validating', 'valid', 'invalid', 'superseded'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE assettype AS ENUM ('model_3d', 'texture', 'audio', 'material', 'image', 'other'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE assetstatus AS ENUM ('uploaded', 'processing', 'ready', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE streamsessionstatus AS ENUM ('pending', 'connecting', 'active', 'disconnected', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
 
-    project_status = sa.Enum('draft', 'spec_generating', 'spec_ready', 'scene_generating', 'scene_ready', 'published', 'failed', name='projectstatus')
-    project_status.create(op.get_bind())
-
-    spec_status = sa.Enum('draft', 'validating', 'valid', 'invalid', 'superseded', name='specstatus')
-    spec_status.create(op.get_bind())
-
-    asset_type = sa.Enum('model_3d', 'texture', 'audio', 'material', 'image', 'other', name='assettype')
-    asset_type.create(op.get_bind())
-
-    asset_status = sa.Enum('uploaded', 'processing', 'ready', 'failed', name='assetstatus')
-    asset_status.create(op.get_bind())
-
-    stream_session_status = sa.Enum('pending', 'connecting', 'active', 'disconnected', 'failed', name='streamsessionstatus')
-    stream_session_status.create(op.get_bind())
+    user_role = sa.Enum('owner', 'admin', 'creator', 'viewer', 'auditor', name='userrole', create_type=False)
+    project_status = sa.Enum('draft', 'spec_generating', 'spec_ready', 'scene_generating', 'scene_ready', 'published', 'failed', name='projectstatus', create_type=False)
+    spec_status = sa.Enum('draft', 'validating', 'valid', 'invalid', 'superseded', name='specstatus', create_type=False)
+    asset_type = sa.Enum('model_3d', 'texture', 'audio', 'material', 'image', 'other', name='assettype', create_type=False)
+    asset_status = sa.Enum('uploaded', 'processing', 'ready', 'failed', name='assetstatus', create_type=False)
+    stream_session_status = sa.Enum('pending', 'connecting', 'active', 'disconnected', 'failed', name='streamsessionstatus', create_type=False)
 
     # organizations table
     op.create_table(

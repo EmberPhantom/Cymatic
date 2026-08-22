@@ -2,7 +2,7 @@
 import asyncio
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -23,7 +23,7 @@ class UsageEventType(str, Enum):
 
 class UsageLog(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     task_type: str
     provider: str
     model: str
@@ -45,7 +45,7 @@ class QuotaLimit(BaseModel):
     limit_type: str  # rpm, tpm, daily_tokens, monthly_cost
     limit: int
     current: int = 0
-    window_start: datetime = Field(default_factory=datetime.utcnow)
+    window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     window_end: Optional[datetime] = None
 
 
@@ -59,10 +59,10 @@ class ProviderQuota(BaseModel):
     current_tpm: int = 0
     current_daily_tokens: int = 0
     current_monthly_cost_usd: float = 0.0
-    rpm_window_start: datetime = Field(default_factory=datetime.utcnow)
-    tpm_window_start: datetime = Field(default_factory=datetime.utcnow)
-    daily_window_start: datetime = Field(default_factory=datetime.utcnow)
-    monthly_window_start: datetime = Field(default_factory=datetime.utcnow)
+    rpm_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    tpm_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    daily_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    monthly_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class UsageTracker:
@@ -127,7 +127,7 @@ class UsageTracker:
         if not quota:
             return
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Reset RPM window if needed (1 minute)
         if (now - quota.rpm_window_start).total_seconds() >= 60:
@@ -175,7 +175,7 @@ class UsageTracker:
         if not quota:
             return True
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Check RPM
         if (now - quota.rpm_window_start).total_seconds() < 60:
@@ -200,7 +200,7 @@ class UsageTracker:
         if not quota:
             return {}
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Reset windows if needed
         if (now - quota.rpm_window_start).total_seconds() >= 60:
@@ -238,7 +238,7 @@ class UsageTracker:
         error_count = 0
         
         for i in range(days):
-            day = (datetime.utcnow() - timedelta(days=i)).strftime('%Y-%m-%d')
+            day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime('%Y-%m-%d')
             day_key = f"usage:daily:{day}"
             data = await self._client.hgetall(day_key)
             

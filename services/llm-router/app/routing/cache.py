@@ -2,7 +2,7 @@
 import json
 import hashlib
 import asyncio
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Optional, Any, Dict
 from pydantic import BaseModel
 import redis.asyncio as redis
@@ -96,7 +96,7 @@ class LLMCache:
             value=response,
             task_type=task_type,
             model=model,
-            created_at=datetime.utcnow().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
         
         # Store in Redis
@@ -177,7 +177,7 @@ class LLMCache:
             )
 
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Global cache instance
 llm_cache = LLMCache()

@@ -2,12 +2,13 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
 from cymatic_shared.db import Base
+from cymatic_shared.utils import to_async_db_url
 from app.core.config import get_settings
 
 settings = get_settings()
 
 engine = create_async_engine(
-    settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://"),
+    to_async_db_url(settings.DATABASE_URL),
     echo=settings.DEBUG,
     pool_pre_ping=True,
     pool_size=10,

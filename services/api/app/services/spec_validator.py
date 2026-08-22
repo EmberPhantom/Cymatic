@@ -1,7 +1,7 @@
 """Simulation Specification Validator"""
 from typing import List, Dict, Any, Optional
 from pydantic import ValidationError
-from schemas.simulation_spec import SimulationSpec, SpecMetadata, Entity, NavigationSpec, NavigationPoint, NavigationPath, LightingSpec, CopilotPolicy, PerformanceBudget
+from cymatic_shared.schemas.simulation_spec import SimulationSpec, SpecMetadata, Entity, NavigationSpec, NavigationPoint, NavigationPath, LightingSpec, CopilotPolicy, PerformanceBudget
 import structlog
 
 logger = structlog.get_logger()

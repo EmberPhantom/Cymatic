@@ -1,7 +1,7 @@
 """Job Queue Infrastructure - Redis-based task queue with distributed locking"""
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 from enum import Enum
 from pydantic import BaseModel, Field
@@ -41,8 +41,8 @@ class Job(BaseModel):
     error: Optional[str] = None
     retry_count: int = 0
     max_retries: int = 3
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     worker_id: Optional[str] = None
@@ -135,7 +135,7 @@ class JobQueue:
                 f"job:{job_id}",
                 mapping={
                     "lock_token": lock_token,
-                    "lock_expires_at": (datetime.utcnow() + timedelta(seconds=ttl)).isoformat(),
+                    "lock_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat(),
                     "worker_id": worker_id,
                 }
             )
@@ -204,11 +204,11 @@ class JobQueue:
             return None
         
         job.status = JobStatus.RUNNING
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now(timezone.utc)
         job.worker_id = worker_id
-        job.updated_at = datetime.utcnow()
+        job.updated_at = datetime.now(timezone.utc)
         job.lock_token = job.lock_token  # Will be set by acquire_job_lock
-        job.lock_expires_at = datetime.utcnow() + timedelta(seconds=self.LOCK_TTL)
+        job.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=self.LOCK_TTL)
         
         # Update job status with lock info
         await self.client.hset(
@@ -231,8 +231,8 @@ class JobQueue:
         
         job.status = JobStatus.COMPLETED
         job.result = result
-        job.completed_at = datetime.utcnow()
-        job.updated_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
+        job.updated_at = datetime.now(timezone.utc)
         job.lock_token = None
         job.lock_expires_at = None
         
@@ -256,13 +256,13 @@ class JobQueue:
         
         job.retry_count += 1
         job.error = error
-        job.updated_at = datetime.utcnow()
+        job.updated_at = datetime.now(timezone.utc)
         job.lock_token = None
         job.lock_expires_at = None
         
         if job.retry_count >= job.max_retries:
             job.status = JobStatus.FAILED
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             logger.error("job_failed_max_retries", job_id=job.id, error=error)
         else:
             job.status = JobStatus.RETRY
@@ -307,7 +307,7 @@ class JobQueue:
         
         # Mark as cancelled
         job.status = JobStatus.CANCELLED
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
         job.lock_token = None
         job.lock_expires_at = None
         
@@ -343,7 +343,7 @@ class JobQueue:
                 continue
             
             job = Job(**json.loads(job_data))
-            if job.lock_expires_at and datetime.utcnow() > job.lock_expires_at:
+            if job.lock_expires_at and datetime.now(timezone.utc) > job.lock_expires_at:
                 # Lock expired, release it
                 await self.release_job_lock(job_id, lock_token)
                 cleaned += 1

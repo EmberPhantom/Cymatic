@@ -1,5 +1,5 @@
 """AuditLog model"""
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
 from cymatic_shared.db import Base
 
@@ -15,4 +15,4 @@ class AuditLog(Base):
     resource_id = Column(Integer, nullable=True)
     details_json = Column(JSON, nullable=True)
     ip_address = Column(String(45), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
