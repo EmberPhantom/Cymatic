@@ -181,20 +181,24 @@ class AssetAgent:
             type_catalog = catalog[entity_type]
             if style in type_catalog:
                 style_catalog = type_catalog[style]
-                
+
                 # Match by entity name
                 entity_name_lower = entity.name.lower().replace(" ", "_")
-                for key, asset_uris in style_catalog.items():
-                    if key in entity_name_lower or entity_name_lower in key:
-                        for uri in asset_uris:
-                            assets.append(self._create_asset_reference(uri, profile, required=True))
-                        break
-                else:
-                    # Default to first available
-                    for asset_uris in style_catalog.values():
-                        for uri in asset_uris[:2]:  # Limit to 2 per category
-                            assets.append(self._create_asset_reference(uri, profile, required=True))
-                        break
+                if isinstance(style_catalog, dict):
+                    for key, asset_uris in style_catalog.items():
+                        if key in entity_name_lower or entity_name_lower in key:
+                            for uri in asset_uris:
+                                assets.append(self._create_asset_reference(uri, profile, required=True))
+                            break
+                    else:
+                        # Default to first available
+                        for asset_uris in style_catalog.values():
+                            for uri in asset_uris[:2]:  # Limit to 2 per category
+                                assets.append(self._create_asset_reference(uri, profile, required=True))
+                            break
+                elif isinstance(style_catalog, list):
+                    for uri in style_catalog[:2]:  # Limit to 2 per category
+                        assets.append(self._create_asset_reference(uri, profile, required=True))
         
         # Add decoration assets for rooms
         if entity_type == "room" and entity.properties.get("furnished", True):

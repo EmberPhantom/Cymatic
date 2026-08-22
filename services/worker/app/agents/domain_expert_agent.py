@@ -17,22 +17,22 @@ class DomainCheckResult(BaseModel):
 class DomainExpertAgent:
     """Applies domain-specific rules and checks plausibility."""
     
-    # Real Estate Rules
+    # Real Estate Rules (dimensions in METERS - matches SimulationSpec units)
     REAL_ESTATE_RULES = {
         "min_room_dimensions": {
-            "bedroom": {"width": 7, "depth": 9, "height": 8},  # feet
-            "bathroom": {"width": 5, "depth": 7, "height": 8},
-            "kitchen": {"width": 8, "depth": 10, "height": 8},
-            "living_room": {"width": 12, "depth": 15, "height": 9},
-            "dining_room": {"width": 10, "depth": 12, "height": 9},
+            "bedroom": {"width": 2.1, "depth": 2.7, "height": 2.4},
+            "bathroom": {"width": 1.5, "depth": 2.1, "height": 2.4},
+            "kitchen": {"width": 2.4, "depth": 3.0, "height": 2.4},
+            "living_room": {"width": 3.6, "depth": 4.5, "height": 2.7},
+            "dining_room": {"width": 3.0, "depth": 3.6, "height": 2.7},
         },
         "door_widths": {
-            "standard": 32,  # inches
-            "accessible": 36,
-            "exterior": 36,
+            "standard": 0.81,  # meters
+            "accessible": 0.91,
+            "exterior": 0.91,
         },
-        "corridor_width": 36,  # inches minimum
-        "ceiling_height_min": 8,  # feet
+        "corridor_width": 0.91,  # meters minimum
+        "ceiling_height_min": 2.4,  # meters
         "window_rules": {
             "bedroom_min": 1,  # per bedroom
             "living_min": 1,
@@ -106,34 +106,49 @@ class DomainExpertAgent:
         for room in rooms:
             room_type = self._identify_room_type(room)
             min_dims = self.REAL_ESTATE_RULES["min_room_dimensions"].get(room_type)
-            
+
             if min_dims:
-                size = room.properties.get("size", [0, 0, 0])
-                width, depth, height = size[0], size[1], size[2]
+                size = room.properties.get("size")
+                if (
+                    not isinstance(size, (list, tuple))
+                    or len(size) < 3
+                    or not all(isinstance(v, (int, float)) for v in size[:3])
+                ):
+                    # Missing/unparseable dimensions: flag as warning, not fatal
+                    issues.append({
+                        "entity": room.id,
+                        "field": "properties.size",
+                        "message": f"Room '{room.name}' has no measurable size (expected [width, depth, height])",
+                        "severity": "warning"
+                    })
+                    score -= 0.02
+                    continue
+
+                width, depth, height = float(size[0]), float(size[1]), float(size[2])
                 
                 if width < min_dims["width"]:
                     issues.append({
                         "entity": room.id,
                         "field": "size.width",
-                        "message": f"{room_type} width {width}ft below minimum {min_dims['width']}ft",
+                        "message": f"{room_type} width {width}m below minimum {min_dims['width']}m",
                         "severity": "warning"
                     })
                     score -= 0.05
-                
+
                 if depth < min_dims["depth"]:
                     issues.append({
                         "entity": room.id,
                         "field": "size.depth",
-                        "message": f"{room_type} depth {depth}ft below minimum {min_dims['depth']}ft",
+                        "message": f"{room_type} depth {depth}m below minimum {min_dims['depth']}m",
                         "severity": "warning"
                     })
                     score -= 0.05
-                
+
                 if height < self.REAL_ESTATE_RULES["ceiling_height_min"]:
                     issues.append({
                         "entity": room.id,
                         "field": "size.height",
-                        "message": f"Ceiling height {height}ft below minimum {self.REAL_ESTATE_RULES['ceiling_height_min']}ft",
+                        "message": f"Ceiling height {height}m below minimum {self.REAL_ESTATE_RULES['ceiling_height_min']}m",
                         "severity": "error"
                     })
                     score -= 0.1
