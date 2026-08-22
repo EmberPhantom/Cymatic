@@ -156,6 +156,8 @@ class JobQueue:
         job.worker_id = worker_id
         job.updated_at = datetime.now(timezone.utc)
         job.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=self.LOCK_TTL)
+        # Track the actual lock token so complete/fail can release it
+        job.lock_token = await self.client.get(f"job:lock:{job.id}")
 
         await self.client.hset(
             f"job:{job.id}",
@@ -182,7 +184,7 @@ class JobQueue:
         )
         logger.info("job_completed", job_id=job.id)
 
-    async def fail_job(self, job: Job, error: str):
+    async def fail_job(self, job: Job, error: str, queue_name: str = None):
         await self.connect()
         if job.lock_token:
             await self.release_job_lock(job.id, job.lock_token)
@@ -209,7 +211,7 @@ class JobQueue:
         if job.status == JobStatus.RETRY:
             delay = min(2 ** job.retry_count * 5, 300)
             await asyncio.sleep(delay)
-            await self.enqueue(job, job.type)
+            await self.enqueue(job, queue_name or job.type)
 
     async def get_queue_stats(self, queue_name: str = "generation") -> dict:
         await self.connect()

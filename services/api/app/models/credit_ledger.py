@@ -13,4 +13,4 @@ class CreditLedger(Base):
     balance_after = Column(Integer, nullable=False)
     description = Column(String(255), nullable=True)
     metadata_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

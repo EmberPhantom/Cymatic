@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
@@ -26,7 +27,7 @@ class CreditLedgerResponse(BaseModel):
     amount: int
     reference_id: Optional[int]
     reference_type: Optional[str]
-    created_at: str
+    created_at: datetime
 
 
 class CreditAdjustment(BaseModel):

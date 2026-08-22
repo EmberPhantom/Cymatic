@@ -99,6 +99,9 @@ class RealEstatePipeline:
         from app.agents.domain_expert_agent import check_domain_compliance
         
         result = PipelineResult()
+        # Hydrate outputs from prior stages (or a restored checkpoint) so
+        # downstream stages can reference intake/architect/etc.
+        self._load_stage_outputs(stage_outputs or {}, result)
         
         if job:
             job.status = JobStatus.RUNNING
@@ -271,9 +274,6 @@ class RealEstatePipeline:
                     result.scene_package = stage_result.scene_package
                 
                 if stage_result.status in ("awaiting_clarification", "domain_validation_failed", "validation_failed", "failed"):
-                    # Save checkpoint before returning
-                    if stage_result.checkpoint:
-                        stage_outputs[stage] = stage_result.__dict__ if hasattr(stage_result, '__dict__') else {}
                     return stage_result
                 
                 # Update checkpoint after each stage
@@ -299,7 +299,7 @@ class RealEstatePipeline:
                 
                 # Save checkpoint after each stage
                 self.checkpoint_manager.save_checkpoint(
-                    pipeline_checkpoint=PipelineCheckpoint(
+                    PipelineCheckpoint(
                         project_id=input_data.project_id,
                         stage=stage,
                         stage_index=stage_index,

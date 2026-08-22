@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
@@ -25,7 +26,7 @@ class AssetResponse(BaseModel):
     storage_key: str
     status: str
     metadata_json: dict
-    created_at: str
+    created_at: datetime
 
 
 class AssetUploadInit(BaseModel):

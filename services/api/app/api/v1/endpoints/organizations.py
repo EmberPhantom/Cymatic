@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
@@ -18,7 +19,7 @@ class OrganizationResponse(BaseModel):
     name: str
     plan: str
     settings_json: dict
-    created_at: str
+    created_at: datetime
 
 
 class OrganizationUpdate(BaseModel):

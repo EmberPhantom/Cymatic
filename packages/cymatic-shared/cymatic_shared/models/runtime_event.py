@@ -11,4 +11,4 @@ class RuntimeEvent(Base):
     session_id = Column(Integer, ForeignKey("stream_sessions.id"), nullable=False)
     event_type = Column(String(100), nullable=False)
     payload_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

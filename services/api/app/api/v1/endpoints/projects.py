@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
@@ -45,8 +46,8 @@ class ProjectResponse(ProjectBase):
     organization_id: int
     status: str
     created_by: int
-    created_at: str
-    updated_at: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
 
 @router.get("", response_model=List[ProjectResponse])

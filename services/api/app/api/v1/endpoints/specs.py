@@ -1,3 +1,4 @@
+from datetime import datetime
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
@@ -45,8 +46,8 @@ class SpecResponse(BaseModel):
     version: int
     payload_json: Dict[str, Any]
     status: str
-    created_at: str
-    updated_at: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
 
 class SpecGenerateRequest(BaseModel):

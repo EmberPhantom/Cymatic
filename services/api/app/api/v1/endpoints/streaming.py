@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -36,7 +37,7 @@ class StreamSessionResponse(BaseModel):
     status: str
     signaling_session_id: Optional[str] = None
     started_at: Optional[str] = None
-    ended_at: Optional[str] = None
+    ended_at: Optional[datetime] = None
 
 
 class WebRTCOffer(BaseModel):

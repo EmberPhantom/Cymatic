@@ -24,12 +24,12 @@ def upgrade() -> None:
     op.execute("DO $$ BEGIN CREATE TYPE assetstatus AS ENUM ('uploaded', 'processing', 'ready', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
     op.execute("DO $$ BEGIN CREATE TYPE streamsessionstatus AS ENUM ('pending', 'connecting', 'active', 'disconnected', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
 
-    user_role = sa.Enum('owner', 'admin', 'creator', 'viewer', 'auditor', name='userrole', create_type=False)
-    project_status = sa.Enum('draft', 'spec_generating', 'spec_ready', 'scene_generating', 'scene_ready', 'published', 'failed', name='projectstatus', create_type=False)
-    spec_status = sa.Enum('draft', 'validating', 'valid', 'invalid', 'superseded', name='specstatus', create_type=False)
-    asset_type = sa.Enum('model_3d', 'texture', 'audio', 'material', 'image', 'other', name='assettype', create_type=False)
-    asset_status = sa.Enum('uploaded', 'processing', 'ready', 'failed', name='assetstatus', create_type=False)
-    stream_session_status = sa.Enum('pending', 'connecting', 'active', 'disconnected', 'failed', name='streamsessionstatus', create_type=False)
+    user_role = postgresql.ENUM('owner', 'admin', 'creator', 'viewer', 'auditor', name='userrole', create_type=False)
+    project_status = postgresql.ENUM('draft', 'spec_generating', 'spec_ready', 'scene_generating', 'scene_ready', 'published', 'failed', name='projectstatus', create_type=False)
+    spec_status = postgresql.ENUM('draft', 'validating', 'valid', 'invalid', 'superseded', name='specstatus', create_type=False)
+    asset_type = postgresql.ENUM('model_3d', 'texture', 'audio', 'material', 'image', 'other', name='assettype', create_type=False)
+    asset_status = postgresql.ENUM('uploaded', 'processing', 'ready', 'failed', name='assetstatus', create_type=False)
+    stream_session_status = postgresql.ENUM('pending', 'connecting', 'active', 'disconnected', 'failed', name='streamsessionstatus', create_type=False)
 
     # organizations table
     op.create_table(
@@ -249,9 +249,9 @@ def downgrade() -> None:
     op.drop_table('organizations')
 
     # Drop enum types
-    sa.Enum(name='streamsessionstatus').drop(op.get_bind())
-    sa.Enum(name='assetstatus').drop(op.get_bind())
-    sa.Enum(name='assettype').drop(op.get_bind())
-    sa.Enum(name='specstatus').drop(op.get_bind())
-    sa.Enum(name='projectstatus').drop(op.get_bind())
-    sa.Enum(name='userrole').drop(op.get_bind())
+    postgresql.ENUM(name='streamsessionstatus').drop(op.get_bind())
+    postgresql.ENUM(name='assetstatus').drop(op.get_bind())
+    postgresql.ENUM(name='assettype').drop(op.get_bind())
+    postgresql.ENUM(name='specstatus').drop(op.get_bind())
+    postgresql.ENUM(name='projectstatus').drop(op.get_bind())
+    postgresql.ENUM(name='userrole').drop(op.get_bind())

@@ -107,8 +107,8 @@ DEFAULT_PROVIDERS = {
         ],
         supported_sensitivity=[SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL],
         models={
-            "llama-3.1-8b-instant": ModelProfile(
-                model_id="llama-3.1-8b-instant",
+            "openai/gpt-oss-20b": ModelProfile(
+                model_id="openai/gpt-oss-20b",
                 provider=ProviderName.GROQ,
                 task_types=[TaskType.INTENT_EXTRACTION, TaskType.CLARIFICATION, TaskType.COPILOT_CHAT],
                 cost_class="free",
@@ -117,8 +117,8 @@ DEFAULT_PROVIDERS = {
                 context_window=131072,
                 supports_json_mode=True,
             ),
-            "llama-3.1-70b-versatile": ModelProfile(
-                model_id="llama-3.1-70b-versatile",
+            "openai/gpt-oss-120b": ModelProfile(
+                model_id="openai/gpt-oss-120b",
                 provider=ProviderName.GROQ,
                 task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION, TaskType.DOMAIN_EXPERT],
                 cost_class="free",

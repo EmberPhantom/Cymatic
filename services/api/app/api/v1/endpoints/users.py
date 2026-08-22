@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import Optional, List
@@ -21,7 +22,7 @@ class UserResponse(BaseModel):
     role: str
     organization_id: int
     is_active: bool
-    created_at: str
+    created_at: datetime
 
 
 class UserCreate(BaseModel):

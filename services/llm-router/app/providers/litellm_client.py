@@ -162,7 +162,7 @@ class LiteLLMClient:
         
         # Prepare LiteLLM params
         params = {
-            "model": model,
+            "model": self._to_litellm_model(provider_name, model),
             "messages": request.messages,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
@@ -273,6 +273,7 @@ class LiteLLMClient:
                     if routing_decision.fallback and routing_decision.fallback != provider_name:
                         provider_name = routing_decision.fallback
                         model = routing_decision.model
+                        params["model"] = self._to_litellm_model(provider_name, model)
                         continue
                 
                 if attempt == max_retries:
@@ -333,7 +334,7 @@ class LiteLLMClient:
         
         try:
             response = await litellm.aembedding(
-                model=model,
+                model=self._to_litellm_model(provider_name, model),
                 input=request.input,
             )
             
@@ -521,6 +522,18 @@ class LiteLLMClient:
     def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
         """Convert messages to single prompt string for caching."""
         return "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+
+    @staticmethod
+    def _to_litellm_model(provider: ProviderName, model: str) -> str:
+        """Prefix model with litellm provider slug (e.g. groq/openai/gpt-oss-20b).
+
+        Model IDs are provider-relative and may themselves contain slashes
+        (e.g. 'openai/gpt-oss-20b' on Groq), so always prepend the routed
+        provider slug.
+        """
+        if provider is None:
+            return model
+        return f"{provider.value}/{model}"
     
     def _find_provider_for_model(self, model: str) -> Optional[ProviderName]:
         """Find which provider has the given model."""
