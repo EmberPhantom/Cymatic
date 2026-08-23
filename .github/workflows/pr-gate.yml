@@ -108,7 +108,7 @@ jobs:
           S3_ENDPOINT: http://localhost:9000
         run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-test-results
           path: services/api/coverage.xml
@@ -136,7 +136,7 @@ jobs:
       - run: .venv/bin/mypy app/
       - run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: worker-test-results
           path: services/worker/coverage.xml
@@ -167,7 +167,7 @@ jobs:
           ADMIN_API_KEY: test-admin-key-for-ci
         run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: router-test-results
           path: services/llm-router/coverage.xml
