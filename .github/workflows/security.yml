@@ -34,11 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -50,7 +50,7 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
       - name: Secret scan
-        uses: trufflesecurity/trufflehog@v3.90.8
+        uses: trufflesecurity/trufflehog@v3.97.0
         with:
           path: ./
           base: main

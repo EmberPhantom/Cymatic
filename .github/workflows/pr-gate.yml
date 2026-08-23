@@ -46,8 +46,8 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -86,8 +86,8 @@ jobs:
       run:
         working-directory: services/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -108,7 +108,7 @@ jobs:
           S3_ENDPOINT: http://localhost:9000
         run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-test-results
           path: services/api/coverage.xml
@@ -120,8 +120,8 @@ jobs:
       run:
         working-directory: services/worker
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -136,7 +136,7 @@ jobs:
       - run: .venv/bin/mypy app/
       - run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: worker-test-results
           path: services/worker/coverage.xml
@@ -148,8 +148,8 @@ jobs:
       run:
         working-directory: services/llm-router
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -167,7 +167,7 @@ jobs:
           ADMIN_API_KEY: test-admin-key-for-ci
         run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: router-test-results
           path: services/llm-router/coverage.xml
@@ -176,8 +176,8 @@ jobs:
     name: Shared Schema Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: |
@@ -185,7 +185,7 @@ jobs:
           python -m pip install -e packages/cymatic-shared
           python -m py_compile schemas/simulation_spec.py
           python -m pytest packages/cymatic-shared/tests/ -q
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - run: npx --yes -p typescript@5.7.2 tsc schemas/simulation_spec.ts --noEmit --strict
