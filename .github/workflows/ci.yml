@@ -273,7 +273,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build API image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/api/Dockerfile
@@ -282,7 +282,7 @@ jobs:
           load: true
 
       - name: Build Worker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/worker/Dockerfile
@@ -291,7 +291,7 @@ jobs:
           load: true
 
       - name: Build LLM Router image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/llm-router/Dockerfile
@@ -300,7 +300,7 @@ jobs:
           load: true
 
       - name: Build Frontend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./apps/web
           push: false
