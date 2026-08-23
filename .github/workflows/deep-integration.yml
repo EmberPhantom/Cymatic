@@ -1,27 +1,50 @@
 name: CYMATIC Deep Integration
 
 on:
-  workflow_run:
-    workflows: ["CYMATIC PR Gate"]
-    types: [completed]
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "services/**"
+      - "packages/**"
+      - "schemas/**"
+      - "infra/**"
+      - ".github/**"
+      - "*.toml"
+      - "*.yml"
+      - "*.yaml"
+      - "*.json"
+      - "Makefile"
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "services/**"
+      - "packages/**"
+      - "schemas/**"
+      - "infra/**"
+      - ".github/**"
+      - "*.toml"
+      - "*.yml"
+      - "*.yaml"
+      - "*.json"
+      - "Makefile"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deep-integration-${{ github.event.workflow_run.head_sha }}
+  group: deep-integration-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   integration:
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout tested revision
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Create CI environment
         run: |
@@ -75,7 +98,7 @@ jobs:
 
       - name: Upload integration logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: compose-integration-logs
           path: compose-integration.log

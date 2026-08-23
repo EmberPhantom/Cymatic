@@ -4,21 +4,35 @@ on:
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report actions without changing pull requests"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
   issues: write
   pull-requests: write
 
+concurrency:
+  group: repository-maintenance
+  cancel-in-progress: true
+
 jobs:
   consolidate-dependabot:
     runs-on: ubuntu-latest
+    env:
+      MAINTENANCE_APPLY: ${{ vars.MAINTENANCE_APPLY || 'false' }}
+      MAINTENANCE_DRY_RUN: ${{ inputs.dry_run || 'true' }}
     steps:
       - name: Close superseded Dependabot PRs
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             const { owner, repo } = context.repo;
+            const dryRun = process.env.MAINTENANCE_DRY_RUN !== 'false' || process.env.MAINTENANCE_APPLY !== 'true';
             const { data: pulls } = await github.rest.pulls.list({
               owner,
               repo,
@@ -46,6 +60,10 @@ jobs:
               const newest = prs[0];
               for (const older of prs.slice(1)) {
                 if (older.labels.some((label) => label.name === 'keep-open')) continue;
+                if (dryRun) {
+                  core.info(`[dry-run] Would close #${older.number} in favor of #${newest.number} for ${dependency}`);
+                  continue;
+                }
                 await github.rest.issues.createComment({
                   owner,
                   repo,
@@ -63,18 +81,24 @@ jobs:
 
   mark-stale:
     runs-on: ubuntu-latest
+    env:
+      MAINTENANCE_APPLY: ${{ vars.MAINTENANCE_APPLY || 'false' }}
+      MAINTENANCE_DRY_RUN: ${{ inputs.dry_run || 'true' }}
     steps:
       - name: Mark inactive pull requests
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             const { owner, repo } = context.repo;
+            const dryRun = process.env.MAINTENANCE_DRY_RUN !== 'false' || process.env.MAINTENANCE_APPLY !== 'true';
             const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
             const closeCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-            try {
-              await github.rest.issues.getLabel({ owner, repo, name: 'stale' });
-            } catch {
-              await github.rest.issues.createLabel({ owner, repo, name: 'stale', color: '6f42c1' });
+            if (!dryRun) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: 'stale' });
+              } catch {
+                await github.rest.issues.createLabel({ owner, repo, name: 'stale', color: '6f42c1' });
+              }
             }
             const { data: pulls } = await github.rest.pulls.list({
               owner, repo, state: 'open', per_page: 100, sort: 'updated', direction: 'asc'
@@ -87,12 +111,20 @@ jobs:
               if (updated > cutoff) continue;
               const stale = pr.labels.some((label) => label.name === 'stale');
               if (!stale) {
+                if (dryRun) {
+                  core.info(`[dry-run] Would mark #${pr.number} stale`);
+                  continue;
+                }
                 await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: ['stale'] });
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: pr.number,
                   body: 'This PR has had no activity for 14 days. Add the `keep-open` label or update it within 7 days to keep it active.'
                 });
               } else if (updated < closeCutoff) {
+                if (dryRun) {
+                  core.info(`[dry-run] Would close inactive PR #${pr.number}`);
+                  continue;
+                }
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: pr.number,
                   body: 'Closing this inactive PR after the stale period. Reopen it when the work is ready to continue.'

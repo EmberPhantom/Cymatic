@@ -46,8 +46,10 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -55,8 +57,15 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run type-check
-      - run: npm run test
+      - run: npm run test -- --coverage --reporter=default --reporter=junit --outputFile=frontend-test-results.xml
       - run: npm run build
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-test-results
+          path: |
+            apps/web/coverage
+            apps/web/frontend-test-results.xml
 
   api:
     name: API Unit & Test
@@ -86,8 +95,10 @@ jobs:
       run:
         working-directory: services/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           cache: pip
@@ -97,7 +108,7 @@ jobs:
           source .venv/bin/activate
           pip install -r requirements.txt
           pip install -e ../../packages/cymatic-shared
-          pip install pytest pytest-asyncio pytest-cov ruff mypy
+          pip install pytest pytest-asyncio pytest-cov diff-cover ruff mypy
       - run: .venv/bin/ruff check app/
       - run: .venv/bin/mypy app/
       - name: Test API
@@ -106,12 +117,17 @@ jobs:
           DATABASE_URL: postgresql://cymatic:cymatic@localhost:5432/cymatic_test
           REDIS_URL: redis://localhost:6379/0
           S3_ENDPOINT: http://localhost:9000
-        run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+        run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
+      - name: Enforce changed-line coverage
+        if: github.event_name == 'pull_request'
+        run: .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=70
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: api-test-results
-          path: services/api/coverage.xml
+          path: |
+            services/api/coverage.xml
+            services/api/test-results.xml
 
   worker:
     name: Worker Unit & Test
@@ -120,8 +136,10 @@ jobs:
       run:
         working-directory: services/worker
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           cache: pip
@@ -131,15 +149,20 @@ jobs:
           source .venv/bin/activate
           pip install -r requirements.txt
           pip install -e ../../packages/cymatic-shared
-          pip install pytest pytest-asyncio pytest-cov ruff mypy
+          pip install pytest pytest-asyncio pytest-cov diff-cover ruff mypy
       - run: .venv/bin/ruff check app/
       - run: .venv/bin/mypy app/
-      - run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+      - run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
+      - name: Enforce changed-line coverage
+        if: github.event_name == 'pull_request'
+        run: .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=70
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: worker-test-results
-          path: services/worker/coverage.xml
+          path: |
+            services/worker/coverage.xml
+            services/worker/test-results.xml
 
   router:
     name: LLM Router Unit & Test
@@ -148,8 +171,10 @@ jobs:
       run:
         working-directory: services/llm-router
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           cache: pip
@@ -159,25 +184,32 @@ jobs:
           source .venv/bin/activate
           pip install -r requirements.txt
           pip install -e ../../packages/cymatic-shared
-          pip install pytest pytest-cov ruff mypy
+          pip install pytest pytest-cov diff-cover ruff mypy
       - run: .venv/bin/ruff check app/
       - run: .venv/bin/mypy app/
       - name: Test router
         env:
           ADMIN_API_KEY: test-admin-key-for-ci
-        run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+        run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
+      - name: Enforce changed-line coverage
+        if: github.event_name == 'pull_request'
+        run: .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=70
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: router-test-results
-          path: services/llm-router/coverage.xml
+          path: |
+            services/llm-router/coverage.xml
+            services/llm-router/test-results.xml
 
   schemas:
     name: Shared Schema Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
       - run: |
@@ -185,7 +217,7 @@ jobs:
           python -m pip install -e packages/cymatic-shared
           python -m py_compile schemas/simulation_spec.py
           python -m pytest packages/cymatic-shared/tests/ -q
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
       - run: npx --yes -p typescript@5.7.2 tsc schemas/simulation_spec.ts --noEmit --strict

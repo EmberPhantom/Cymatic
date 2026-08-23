@@ -32,7 +32,7 @@ The Playwright smoke suite expects the frontend to be available at `http://127.0
 
 ## CI policy
 
-Pull requests run the fast `CYMATIC PR Gate` for frontend unit/build checks, API/worker/router tests, shared schema tests, type checks, linting, and coverage collection. Successful gates trigger `CYMATIC Deep Integration` for Docker Compose, migrations, service health, and Playwright browser smoke tests. `CYMATIC Security` runs independently for vulnerability and secret scanning. Coverage is initially reported per subsystem while the repository establishes a baseline; changed-line enforcement is intended to begin at 70% and ratchet upward.
+Pull requests run the fast `CYMATIC PR Gate` for frontend unit/build checks, API/worker/router tests, shared schema tests, type checks, linting, and coverage collection. `CYMATIC Deep Integration` runs as a direct PR check for Docker Compose, migrations, service health, and Playwright browser smoke tests, so its required status always exists even when a fast job fails. `CYMATIC Security` runs independently for vulnerability and secret scanning. Python changed-line coverage is enforced at 70% on pull requests; total coverage is reported per subsystem while the repository establishes a baseline.
 
 Backend Dockerfiles must be built with the repository root as context because they install `packages/cymatic-shared`. Compose migration and test services must complete before dependent application services are considered ready.
 
@@ -42,7 +42,9 @@ Tests must mock external LLM providers and avoid tenant or production resources.
 
 ## Pull-request volume
 
-Dependabot groups routine updates by ecosystem and limits each ecosystem to two open PRs. The scheduled repository-maintenance workflow closes superseded Dependabot PRs and marks inactive human PRs after 14 days before closing them after the stale period. Add `keep-open` or `pinned` when a PR must remain active.
+Dependabot groups routine updates by ecosystem and limits each ecosystem to two open PRs. The scheduled repository-maintenance workflow is dry-run by default, reports superseded Dependabot PRs, and marks inactive human PRs after 14 days before closing them after the stale period. Set repository variable `MAINTENANCE_APPLY=true` and manually dispatch with `dry_run=false` only after reviewing the report. Add `keep-open` or `pinned` when a PR must remain active.
+
+All GitHub Actions are pinned to immutable commit SHAs and annotated with their release tags; Dependabot updates those pins.
 
 ## GitHub settings
 

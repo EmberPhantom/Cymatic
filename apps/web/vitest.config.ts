@@ -9,6 +9,12 @@ export default defineConfig({
     minWorkers: 1,
     maxWorkers: 1,
     fileParallelism: false,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "cobertura"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/test/**"],
+    },
   },
   resolve: {
     alias: {
