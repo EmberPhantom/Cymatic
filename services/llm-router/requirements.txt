@@ -1,5 +1,5 @@
 # LLM Router Dependencies
-fastapi==0.111.0
+fastapi==0.141.1
 uvicorn[standard]==0.30.1
 pydantic==2.7.4
 pydantic-settings==2.3.3
