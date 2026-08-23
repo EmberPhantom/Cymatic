@@ -50,7 +50,7 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
       - name: Secret scan
-        uses: trufflesecurity/trufflehog@v3.90.8
+        uses: trufflesecurity/trufflehog@v3.97.0
         with:
           path: ./
           base: main
