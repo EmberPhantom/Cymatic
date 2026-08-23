@@ -47,7 +47,7 @@ jobs:
         working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -185,7 +185,7 @@ jobs:
           python -m pip install -e packages/cymatic-shared
           python -m py_compile schemas/simulation_spec.py
           python -m pytest packages/cymatic-shared/tests/ -q
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - run: npx --yes -p typescript@5.7.2 tsc schemas/simulation_spec.ts --noEmit --strict
