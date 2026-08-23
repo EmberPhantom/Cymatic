@@ -122,11 +122,12 @@ class TestDomainExpertAgent:
             domain="real_estate",
             metadata={"title": "Test", "description": "Test", "version": "1.0"},
             entities=[
-                Entity(id="room1", type="room", name="Tiny Bedroom", position=[0,0,0], properties={"size": [5, 5, 7]}),  # Too small
+                # Simulation dimensions are meters; 1.8m is below the 2.4m ceiling minimum.
+                Entity(id="room1", type="room", name="Tiny Bedroom", position=[0,0,0], properties={"size": [1.5, 2.0, 1.8]}),
             ],
             navigation=NavigationSpec(
                 points=[
-                    NavigationPoint(id="nav1", name="Tiny Bedroom", position=[2.5, 1.6, 2.5], connections=[]),
+                    NavigationPoint(id="nav1", name="Tiny Bedroom", position=[0.75, 0.9, 1.0], connections=[]),
                 ],
                 paths=[],
                 default_start_point="nav1"

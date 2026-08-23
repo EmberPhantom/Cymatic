@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible problem in CYMATIC
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include commands, inputs, logs, and the smallest reproduction.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser/device, commit, and service versions.
+    validations:
+      required: true
+  - type: checkboxes
+    id: sensitive
+    attributes:
+      label: Sensitive data
+      options:
+        - label: I removed credentials, tenant data, and private URLs.
+          required: true

@@ -24,9 +24,9 @@ litellm.drop_params = True
 def verify_admin_key(x_api_key: str = Header(None)):
     """Simple API key check for admin endpoints."""
     if not settings.ADMIN_API_KEY:
-        return
+        raise HTTPException(status_code=503, detail="Admin API key is not configured")
     if x_api_key != settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing admin API key")
+        raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
 
 
 @asynccontextmanager

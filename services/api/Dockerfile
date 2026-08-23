@@ -29,12 +29,9 @@ WORKDIR /app
 COPY services/api/app/ ./app/
 COPY services/api/alembic.ini ./alembic.ini
 COPY services/api/alembic/ ./alembic/
-COPY services/api/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
 EXPOSE 8000
 
-ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # ── Test stage ──────────────────────────────────────────────

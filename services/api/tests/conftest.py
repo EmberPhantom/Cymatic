@@ -75,7 +75,15 @@ async def setup_db():
     """Apply Alembic migrations only. No create_all fallback."""
     alembic_dir = os.path.join(os.path.dirname(__file__), '..')
     result = subprocess.run(
-        ["alembic", "-c", "alembic.ini", "upgrade", "head"],
+        [
+            sys.executable,
+            "-c",
+            "from alembic.config import CommandLine; CommandLine(prog='alembic').main()",
+            "-c",
+            "alembic.ini",
+            "upgrade",
+            "head",
+        ],
         cwd=alembic_dir,
         capture_output=True,
         text=True,

@@ -10,6 +10,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   frontend-lint:
     name: Frontend Lint & Type Check
@@ -36,6 +40,18 @@ jobs:
 
       - name: Run type check
         run: npm run type-check
+
+      - name: Run frontend unit tests
+        run: npm run test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run frontend smoke tests
+        run: npm run test:e2e
 
   api-lint:
     name: Backend API Lint & Test
@@ -82,7 +98,8 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx ruff mypy
+          pip install -e ../../packages/cymatic-shared
+          pip install pytest pytest-asyncio pytest-cov httpx ruff mypy
 
       - name: Run lint (ruff)
         run: |
@@ -102,7 +119,13 @@ jobs:
           S3_ENDPOINT: http://localhost:9000
         run: |
           source .venv/bin/activate
-          pytest tests/ -v --tb=short
+          pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: services/api/coverage.xml
 
   worker-lint:
     name: Worker Lint & Test
@@ -126,7 +149,8 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio ruff mypy
+          pip install -e ../../packages/cymatic-shared
+          pip install pytest pytest-asyncio pytest-cov ruff mypy
 
       - name: Run lint (ruff)
         run: |
@@ -142,6 +166,17 @@ jobs:
         run: |
           source .venv/bin/activate
           python -m compileall -q app/
+
+      - name: Run tests with coverage
+        run: |
+          source .venv/bin/activate
+          pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-coverage
+          path: services/worker/coverage.xml
 
   llm-router-lint:
     name: LLM Router Lint & Test
@@ -165,7 +200,8 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install -r requirements.txt
-          pip install pytest ruff mypy
+          pip install -e ../../packages/cymatic-shared
+          pip install pytest pytest-cov ruff mypy
 
       - name: Run lint (ruff)
         run: |
@@ -182,6 +218,19 @@ jobs:
           source .venv/bin/activate
           python -m compileall -q app/
 
+      - name: Run tests with coverage
+        env:
+          ADMIN_API_KEY: test-admin-key-for-ci
+        run: |
+          source .venv/bin/activate
+          pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-router-coverage
+          path: services/llm-router/coverage.xml
+
   schema-validation:
     name: Schema Validation
     runs-on: ubuntu-latest
@@ -196,8 +245,10 @@ jobs:
 
       - name: Validate Python schemas
         run: |
-          pip install pydantic
+          pip install pydantic pytest pytest-cov
+          pip install -e packages/cymatic-shared
           python -m py_compile schemas/simulation_spec.py
+          pytest packages/cymatic-shared/tests/ -q
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -224,7 +275,8 @@ jobs:
       - name: Build API image
         uses: docker/build-push-action@v5
         with:
-          context: ./services/api
+          context: .
+          file: services/api/Dockerfile
           push: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:test
           load: true
@@ -232,7 +284,8 @@ jobs:
       - name: Build Worker image
         uses: docker/build-push-action@v5
         with:
-          context: ./services/worker
+          context: .
+          file: services/worker/Dockerfile
           push: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:test
           load: true
@@ -240,7 +293,8 @@ jobs:
       - name: Build LLM Router image
         uses: docker/build-push-action@v5
         with:
-          context: ./services/llm-router
+          context: .
+          file: services/llm-router/Dockerfile
           push: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/llm-router:test
           load: true
@@ -253,6 +307,9 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/web:test
           load: true
 
+      - name: Validate Compose configuration
+        run: docker compose -f infra/docker/docker-compose.yml --profile test config --quiet
+
   docker-compose-test:
     name: Docker Compose Integration Test
     runs-on: ubuntu-latest
@@ -263,9 +320,12 @@ jobs:
 
       - name: Start infrastructure
         run: |
+          cp .env.example .env
+          sed -i 's/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=test-secret-key-for-compose-that-is-at-least-32-chars/' .env
+          sed -i 's/^ADMIN_API_KEY=.*/ADMIN_API_KEY=test-admin-key-for-compose/' .env
           cd infra/docker
-          docker compose up -d postgres redis minio
-          sleep 10
+          docker compose --profile test up -d --build
+          sleep 15
 
       - name: Verify services
         run: |
@@ -274,6 +334,14 @@ jobs:
           docker compose exec -T postgres pg_isready -U cymatic
           docker compose exec -T redis redis-cli ping
           curl -f http://localhost:9000/minio/health/live
+          docker compose --profile test ps
+          docker compose --profile test logs --no-color test-api test-worker test-llm-router
+          docker compose --profile test wait test-api test-worker test-llm-router
+          for service in test-api test-worker test-llm-router; do
+            container_id=$(docker compose ps -aq "$service")
+            exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
+            test "$exit_code" = "0" || exit "$exit_code"
+          done
 
       - name: Cleanup
         if: always()
@@ -287,6 +355,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@0.28.0
@@ -302,7 +372,7 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
       - name: Check for secrets
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@v3.90.8
         with:
           path: ./
           base: main

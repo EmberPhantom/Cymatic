@@ -11,6 +11,7 @@ from app.routing.engine import routing_engine
 from app.routing.circuit_breaker import get_circuit_breaker
 
 settings = get_settings()
+settings.ADMIN_API_KEY = "test-admin-key"
 
 
 @pytest_asyncio.fixture
@@ -51,6 +52,18 @@ async def test_list_policies(client):
 
 
 @pytest.mark.asyncio
+async def test_admin_routes_reject_missing_api_key(client):
+    response = await client.get("/v1/router/providers")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_routes_reject_wrong_api_key(client):
+    response = await client.get("/v1/router/cache/stats", headers={"X-Api-Key": "wrong-key"})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_circuit_breaker():
     cb = get_circuit_breaker(ProviderName.GROQ)
     assert cb.can_execute() is True
@@ -83,14 +96,14 @@ async def test_circuit_breaker_half_open():
 async def test_routing_engine_intent_extraction():
     decision = routing_engine.route(TaskType.INTENT_EXTRACTION, SensitivityLevel.INTERNAL)
     assert decision.provider == "groq"
-    assert decision.model == "llama-3.1-8b-instant"
+    assert decision.model == "openai/gpt-oss-20b"
 
 
 @pytest.mark.asyncio
 async def test_routing_engine_spec_generation():
     decision = routing_engine.route(TaskType.SPEC_GENERATION, SensitivityLevel.INTERNAL)
     assert decision.provider == "groq"
-    assert decision.model == "llama-3.1-70b-versatile"
+    assert decision.model == "openai/gpt-oss-120b"
 
 
 @pytest.mark.asyncio
@@ -111,7 +124,7 @@ async def test_routing_embedding():
 async def test_routing_copilot_chat():
     decision = routing_engine.route(TaskType.COPILOT_CHAT, SensitivityLevel.PUBLIC)
     assert decision.provider == "groq"
-    assert decision.model == "llama-3.1-8b-instant"
+    assert decision.model == "openai/gpt-oss-20b"
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,12 @@
+# Replace these team handles with the repository's real maintainers before enabling enforcement.
+* @cymatic-maintainers
+
+/apps/web/ @cymatic-frontend
+/services/api/ @cymatic-backend
+/services/worker/ @cymatic-backend
+/services/llm-router/ @cymatic-ai
+/packages/ @cymatic-backend
+/schemas/ @cymatic-backend
+/infra/ @cymatic-platform
+/android/ @cymatic-client
+/unity/ @cymatic-client

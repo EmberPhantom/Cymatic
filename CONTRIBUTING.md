@@ -22,6 +22,8 @@ For frontend-only changes, also run `npm run type-check`, `npm run lint`, and `n
 
 For API, worker, or router changes, include focused tests for authorization, tenant isolation, schema validation, failure handling, and queue behavior where applicable.
 
+Coverage and browser-test details are documented in `docs/08-testing-and-ci.md`. Pull requests must include the relevant unit, integration, and Playwright validation for changed behavior.
+
 ## Change Boundaries
 
 - `apps/web/**`: frontend
