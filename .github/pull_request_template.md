@@ -2,6 +2,11 @@
 
 <!-- Describe the behavior changed and why. -->
 
+## Tracking
+
+- Related issue or reason for change:
+- This PR contains one logical change only: [ ]
+
 ## Validation
 
 - [ ] Relevant unit/integration tests added or updated
@@ -9,6 +14,7 @@
 - [ ] `make lint` and type checks pass where applicable
 - [ ] Docker Compose configuration validated where applicable
 - [ ] Coverage impact reviewed
+- [ ] No duplicate or superseded PR covers the same change
 
 ## Safety Review
 

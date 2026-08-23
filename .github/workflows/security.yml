@@ -1,0 +1,57 @@
+name: CYMATIC Security
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "services/**"
+      - "packages/**"
+      - "schemas/**"
+      - "infra/**"
+      - ".github/**"
+      - "*.lock"
+      - "*.toml"
+      - "*.yml"
+      - "*.yaml"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Vulnerability and Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          ignore-unfixed: true
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+      - name: Secret scan
+        uses: trufflesecurity/trufflehog@v3.90.8
+        with:
+          path: ./
+          base: main
+          head: HEAD

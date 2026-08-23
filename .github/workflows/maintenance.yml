@@ -1,0 +1,102 @@
+name: CYMATIC Repository Maintenance
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  consolidate-dependabot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close superseded Dependabot PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const { data: pulls } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+              sort: 'updated',
+              direction: 'desc'
+            });
+
+            const dependabot = pulls.filter((pr) =>
+              pr.user?.login === 'dependabot[bot]' && /^Bump /.test(pr.title)
+            );
+            const groups = new Map();
+
+            for (const pr of dependabot) {
+              const match = pr.title.match(/^Bump (.+?) from /);
+              if (!match) continue;
+              const key = match[1].toLowerCase();
+              if (!groups.has(key)) groups.set(key, []);
+              groups.get(key).push(pr);
+            }
+
+            for (const [dependency, prs] of groups) {
+              prs.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+              const newest = prs[0];
+              for (const older of prs.slice(1)) {
+                if (older.labels.some((label) => label.name === 'keep-open')) continue;
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: older.number,
+                  body: `Closing this superseded Dependabot update in favor of #${newest.number} for ${dependency}.`
+                });
+                await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number: older.number,
+                  state: 'closed'
+                });
+              }
+            }
+
+  mark-stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark inactive pull requests
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+            const closeCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: 'stale' });
+            } catch {
+              await github.rest.issues.createLabel({ owner, repo, name: 'stale', color: '6f42c1' });
+            }
+            const { data: pulls } = await github.rest.pulls.list({
+              owner, repo, state: 'open', per_page: 100, sort: 'updated', direction: 'asc'
+            });
+
+            for (const pr of pulls) {
+              if (pr.labels.some((label) => ['keep-open', 'pinned'].includes(label.name))) continue;
+              if (pr.user?.login === 'dependabot[bot]') continue;
+              const updated = new Date(pr.updated_at).getTime();
+              if (updated > cutoff) continue;
+              const stale = pr.labels.some((label) => label.name === 'stale');
+              if (!stale) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: ['stale'] });
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pr.number,
+                  body: 'This PR has had no activity for 14 days. Add the `keep-open` label or update it within 7 days to keep it active.'
+                });
+              } else if (updated < closeCutoff) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pr.number,
+                  body: 'Closing this inactive PR after the stale period. Reopen it when the work is ready to continue.'
+                });
+                await github.rest.pulls.update({ owner, repo, pull_number: pr.number, state: 'closed' });
+              }
+            }

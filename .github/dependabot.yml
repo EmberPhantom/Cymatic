@@ -4,29 +4,53 @@ updates:
     directory: /apps/web
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    labels: [dependencies, javascript]
+    groups:
+      npm-dependencies:
+        patterns: ["*"]
   - package-ecosystem: pip
     directory: /services/api
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    labels: [dependencies, python, api]
+    groups:
+      api-python-dependencies:
+        patterns: ["*"]
   - package-ecosystem: pip
     directory: /services/worker
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    labels: [dependencies, python, worker]
+    groups:
+      worker-python-dependencies:
+        patterns: ["*"]
   - package-ecosystem: pip
     directory: /services/llm-router
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    labels: [dependencies, python, ai]
+    groups:
+      router-python-dependencies:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /infra/docker
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    labels: [dependencies, docker]
+    groups:
+      docker-images:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
+    labels: [dependencies, github-actions]
+    groups:
+      github-actions:
+        patterns: ["*"]

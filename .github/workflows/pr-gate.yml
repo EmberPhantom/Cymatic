@@ -1,0 +1,191 @@
+name: CYMATIC PR Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "services/**"
+      - "packages/**"
+      - "schemas/**"
+      - "infra/**"
+      - ".github/**"
+      - "*.toml"
+      - "*.yml"
+      - "*.yaml"
+      - "*.json"
+      - "Makefile"
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "services/**"
+      - "packages/**"
+      - "schemas/**"
+      - "infra/**"
+      - ".github/**"
+      - "*.toml"
+      - "*.yml"
+      - "*.yaml"
+      - "*.json"
+      - "Makefile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend Unit & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run test
+      - run: npm run build
+
+  api:
+    name: API Unit & Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cymatic
+          POSTGRES_PASSWORD: cymatic
+          POSTGRES_DB: cymatic_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/api/requirements.txt
+      - run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+          pip install -e ../../packages/cymatic-shared
+          pip install pytest pytest-asyncio pytest-cov ruff mypy
+      - run: .venv/bin/ruff check app/
+      - run: .venv/bin/mypy app/
+      - name: Test API
+        env:
+          JWT_SECRET_KEY: test-secret-key-for-ci-that-is-at-least-32-chars
+          DATABASE_URL: postgresql://cymatic:cymatic@localhost:5432/cymatic_test
+          REDIS_URL: redis://localhost:6379/0
+          S3_ENDPOINT: http://localhost:9000
+        run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-results
+          path: services/api/coverage.xml
+
+  worker:
+    name: Worker Unit & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/worker/requirements.txt
+      - run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+          pip install -e ../../packages/cymatic-shared
+          pip install pytest pytest-asyncio pytest-cov ruff mypy
+      - run: .venv/bin/ruff check app/
+      - run: .venv/bin/mypy app/
+      - run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-test-results
+          path: services/worker/coverage.xml
+
+  router:
+    name: LLM Router Unit & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/llm-router
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/llm-router/requirements.txt
+      - run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+          pip install -e ../../packages/cymatic-shared
+          pip install pytest pytest-cov ruff mypy
+      - run: .venv/bin/ruff check app/
+      - run: .venv/bin/mypy app/
+      - name: Test router
+        env:
+          ADMIN_API_KEY: test-admin-key-for-ci
+        run: .venv/bin/pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-test-results
+          path: services/llm-router/coverage.xml
+
+  schemas:
+    name: Shared Schema Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install pydantic pytest
+          python -m pip install -e packages/cymatic-shared
+          python -m py_compile schemas/simulation_spec.py
+          python -m pytest packages/cymatic-shared/tests/ -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npx --yes -p typescript@5.7.2 tsc schemas/simulation_spec.ts --noEmit --strict

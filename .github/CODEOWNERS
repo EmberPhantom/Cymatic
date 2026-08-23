@@ -1,12 +1,12 @@
-# Replace these team handles with the repository's real maintainers before enabling enforcement.
-* @cymatic-maintainers
+# Repository owner is the default reviewer until dedicated teams are configured.
+* @EmberPhantom
 
-/apps/web/ @cymatic-frontend
-/services/api/ @cymatic-backend
-/services/worker/ @cymatic-backend
-/services/llm-router/ @cymatic-ai
-/packages/ @cymatic-backend
-/schemas/ @cymatic-backend
-/infra/ @cymatic-platform
-/android/ @cymatic-client
-/unity/ @cymatic-client
+/apps/web/ @EmberPhantom
+/services/api/ @EmberPhantom
+/services/worker/ @EmberPhantom
+/services/llm-router/ @EmberPhantom
+/packages/ @EmberPhantom
+/schemas/ @EmberPhantom
+/infra/ @EmberPhantom
+/android/ @EmberPhantom
+/unity/ @EmberPhantom

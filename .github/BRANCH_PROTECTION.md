@@ -1,6 +1,6 @@
 # GitHub Repository Settings
 
-Configure these settings in the GitHub repository because they cannot be enforced solely by tracked files.
+Configure these settings in the GitHub repository because they cannot be enforced solely by tracked files. `main` is the protected merge target; `develop` is not a required branch unless it is actively reintroduced by maintainers.
 
 ## Main branch
 
@@ -8,9 +8,11 @@ Configure these settings in the GitHub repository because they cannot be enforce
 - Require at least one approving review and require CODEOWNERS review for owned paths.
 - Dismiss stale approvals when new commits are pushed.
 - Require all conversations to be resolved.
-- Require these status checks: `Frontend Lint & Type Check`, `Backend API Lint & Test`, `Worker Lint & Test`, `LLM Router Lint & Test`, `Schema Validation`, `Docker Build Test`, `Docker Compose Integration Test`, and `Security Scan`.
+- Require these status checks: `Frontend Unit & Build`, `API Unit & Test`, `Worker Unit & Test`, `LLM Router Unit & Test`, `Shared Schema Validation`, `CYMATIC Deep Integration / integration`, and `CYMATIC Security / scan`.
 - Require branches to be up to date before merging.
 - Disable force-pushes and branch deletion.
+- Enable automatic deletion of head branches after merge.
+- Prefer squash merging and disable merge commits.
 
 ## Security
 
