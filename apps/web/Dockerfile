@@ -12,10 +12,14 @@ ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 ARG NEXT_PUBLIC_MINIO_URL=http://localhost:9000
 ENV NEXT_PUBLIC_MINIO_URL=$NEXT_PUBLIC_MINIO_URL
 
+ARG API_INTERNAL_URL=http://localhost:8000
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
+
 COPY package*.json ./
 RUN npm ci
 
 COPY . .
+RUN mkdir -p public
 RUN npm run build
 
 # Production stage

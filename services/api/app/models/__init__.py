@@ -11,6 +11,7 @@ from app.models.agent_action import AgentAction
 from app.models.voice_session import VoiceSession
 from app.models.credit_ledger import CreditLedger
 from app.models.audit_log import AuditLog
+from app.models.generation_run import GenerationRun
 
 __all__ = [
     "User",
@@ -31,4 +32,5 @@ __all__ = [
     "VoiceSession",
     "CreditLedger",
     "AuditLog",
+    "GenerationRun",
 ]

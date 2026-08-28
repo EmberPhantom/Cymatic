@@ -34,13 +34,14 @@ export default function LoginPage() {
     setLoading(true)
     setError("")
     try {
-      const response = await api.post("/v1/auth/login", {
+      const { data: session } = await api.post("/auth/login", new URLSearchParams({
         username: data.email,
         password: data.password,
-      })
-      const { access_token, user } = response.data
-      setAuth(user, access_token)
-      router.push("/dashboard")
+      }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } })
+      const { data: user } = await api.get("/v1/auth/me")
+      const next = new URLSearchParams(window.location.search).get("next")
+      setAuth(user, session.access_token)
+      router.replace(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard")
     } catch (err: any) {
       setError(err.response?.data?.detail || "Login failed")
     } finally {

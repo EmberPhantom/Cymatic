@@ -37,6 +37,7 @@ services:
       - ../../apps/web/tsconfig.json:/app/tsconfig.json
       - ../../apps/web/tailwind.config.js:/app/tailwind.config.js
     environment:
+      API_INTERNAL_URL: http://api:8000
       NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
       NEXT_PUBLIC_WS_URL: ws://localhost:${API_PORT:-8000}
       NEXT_PUBLIC_MINIO_URL: http://localhost:${MINIO_API_PORT:-9000}

@@ -1,6 +1,6 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -23,7 +23,7 @@ VALID_STATUS_TRANSITIONS = {
 
 
 class ProjectBase(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=255)
     domain: str  # real_estate, heritage
     category: Optional[str] = None
 
@@ -33,7 +33,7 @@ class ProjectCreate(ProjectBase):
 
 
 class ProjectUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
     domain: Optional[str] = None
     category: Optional[str] = None
     status: Optional[str] = None

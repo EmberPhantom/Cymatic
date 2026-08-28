@@ -127,13 +127,19 @@ services:
       context: ../../apps/web
       dockerfile: Dockerfile
       args:
+        API_INTERNAL_URL: http://api:8000
         NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
         NEXT_PUBLIC_WS_URL: ws://localhost:${API_PORT:-8000}
         NEXT_PUBLIC_MINIO_URL: http://localhost:${MINIO_API_PORT:-9000}
     ports:
       - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_INTERNAL_URL: http://api:8000
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -158,6 +164,8 @@ services:
       dockerfile: services/api/Dockerfile
       target: test
     depends_on:
+      test-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -168,7 +176,7 @@ services:
         condition: service_completed_successfully
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/cymatic_test
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -182,6 +190,8 @@ services:
       dockerfile: services/worker/Dockerfile
       target: test
     depends_on:
+      test-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -194,7 +204,7 @@ services:
         condition: service_completed_successfully
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/cymatic_test
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -213,6 +223,38 @@ services:
     env_file: ../../.env
     environment:
       REDIS_URL: redis://redis:6379/0
+    profiles: ["test"]
+
+  test-db:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cymatic}
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        until pg_isready -h postgres -U ${POSTGRES_USER:-cymatic}; do sleep 1; done;
+        psql -h postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        -c "DROP DATABASE IF EXISTS cymatic_test;";
+        psql -h postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        -c "CREATE DATABASE cymatic_test OWNER ${POSTGRES_USER:-cymatic};"
+    profiles: ["test"]
+
+  test-migrate:
+    build:
+      context: ../..
+      dockerfile: services/api/Dockerfile
+      target: runtime
+    entrypoint: []
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    depends_on:
+      test-db:
+        condition: service_completed_successfully
+    env_file: ../../.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/cymatic_test
     profiles: ["test"]
 
 volumes:

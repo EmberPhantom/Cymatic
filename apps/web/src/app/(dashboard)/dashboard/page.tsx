@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { useProjects } from "@/hooks/use-projects"
 import { useCreateProject } from "@/hooks/use-create-project"
@@ -11,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 
 export default function DashboardPage() {
+  const router = useRouter()
   const { data: projects, isLoading } = useProjects()
   const createProject = useCreateProject()
   const [showNewProject, setShowNewProject] = useState(false)
@@ -19,9 +21,14 @@ export default function DashboardPage() {
 
   const handleCreate = async () => {
     if (!name.trim()) return
-    await createProject.mutateAsync({ name, domain })
-    setShowNewProject(false)
-    setName("")
+    try {
+      const project = await createProject.mutateAsync({ name, domain })
+      setShowNewProject(false)
+      setName("")
+      router.push(`/dashboard/projects/${project.id}/builder`)
+    } catch {
+      // The mutation error is rendered below.
+    }
   }
 
   return (
@@ -63,6 +70,12 @@ export default function DashboardPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {createProject.isError && (
+        <div className="mb-4 rounded-md bg-destructive/15 p-3 text-sm text-destructive">
+          Unable to create the project. Please try again.
+        </div>
+      )}
 
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -35,19 +35,19 @@ export default function RegisterPage() {
     setLoading(true)
     setError("")
     try {
-      const registerRes = await api.post("/v1/auth/register", {
+      await api.post("/v1/auth/register", {
         name: data.name,
         email: data.email,
         password: data.password,
       })
       // Auto-login after registration
-      const loginRes = await api.post("/v1/auth/login", {
+      const { data: session } = await api.post("/auth/login", new URLSearchParams({
         username: data.email,
         password: data.password,
-      })
-      const { access_token, user } = loginRes.data
-      setAuth(user, access_token)
-      router.push("/dashboard")
+      }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } })
+      const { data: user } = await api.get("/v1/auth/me")
+      setAuth(user, session.access_token)
+      router.replace("/dashboard")
     } catch (err: any) {
       setError(err.response?.data?.detail || "Registration failed")
     } finally {

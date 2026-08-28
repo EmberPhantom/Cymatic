@@ -3,6 +3,7 @@ from typing import Optional
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 import redis.asyncio as aioredis
+import asyncio
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -12,12 +13,17 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _revoked_tokens_key = "cymatic:revoked_tokens"
 
 _redis_client: Optional[aioredis.Redis] = None
+_redis_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 async def _get_redis() -> aioredis.Redis:
-    global _redis_client
-    if _redis_client is None:
+    global _redis_client, _redis_loop
+    current_loop = asyncio.get_running_loop()
+    if _redis_client is None or _redis_loop is not current_loop:
+        # Redis asyncio clients are loop-bound. In test clients, a prior loop
+        # may already be closed, so do not await cleanup on that old client.
         _redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        _redis_loop = current_loop
     return _redis_client
 
 

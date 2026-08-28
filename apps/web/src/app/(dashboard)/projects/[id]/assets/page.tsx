@@ -47,8 +47,8 @@ export default function AssetsPage() {
                 <div className="h-20 bg-muted rounded flex items-center justify-center text-2xl mb-2">
                   {asset.content_type?.startsWith("image/") ? "🖼️" : asset.content_type?.includes("audio") ? "🎵" : "📄"}
                 </div>
-                <p className="text-sm font-medium truncate">{asset.filename}</p>
-                <p className="text-xs text-muted-foreground">{(asset.size / 1024).toFixed(1)} KB</p>
+                <p className="text-sm font-medium truncate">{asset.filename || asset.metadata_json?.original_filename || asset.storage_key}</p>
+                <p className="text-xs text-muted-foreground">{asset.size ? `${(asset.size / 1024).toFixed(1)} KB` : asset.status}</p>
               </CardContent>
             </Card>
           ))}

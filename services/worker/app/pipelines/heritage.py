@@ -157,17 +157,9 @@ class HeritagePipeline:
                 result.error = "Final validation failed"
                 return result
             
-            # Stage 10: Scene Package Generation
-            logger.info("pipeline_stage_start", stage="scene_package", project_id=input_data.project_id)
-            spec_version = 1
-            result.scene_package = generate_scene_package(
-                spec=result.architect.spec,
-                spec_version=spec_version,
-                asset_manifest=result.assets.manifest.model_dump() if result.assets else {}
-            )
-            
             # Success
             result.spec = result.architect.spec
+            result.scene_package = None
             result.status = "completed"
             
             logger.info("pipeline_completed", project_id=input_data.project_id, status=result.status)

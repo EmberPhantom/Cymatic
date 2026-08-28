@@ -1,5 +1,8 @@
 from datetime import datetime
 import asyncio
+import hashlib
+import json
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
@@ -14,6 +17,8 @@ from app.core.queue import job_queue, Job, JobPriority, JobStatus
 from cymatic_shared.agents.intake_agent import process_intake
 from cymatic_shared.agents.clarification_agent import process_clarification_answers
 from app.models.scene_package import ScenePackage
+from app.services.minio_client import get_minio_client
+from app.models import GenerationRun
 
 router = APIRouter()
 
@@ -53,10 +58,14 @@ class SpecResponse(BaseModel):
 class SpecGenerateRequest(BaseModel):
     prompt: str
     context: Optional[Dict[str, Any]] = {}
+    run_id: Optional[str] = None
+    clarification_answers: Dict[str, Any] = {}
 
 
 class SpecClarifyRequest(BaseModel):
     answers: Dict[str, str]
+    run_id: Optional[str] = None
+    current_intake: Dict[str, Any] = {}
 
 
 class SpecValidateResponse(BaseModel):
@@ -69,6 +78,36 @@ class JobResponse(BaseModel):
     job_id: str
     status: str
     message: str
+    run_id: Optional[str] = None
+
+
+class GenerationRunResponse(BaseModel):
+    id: str
+    project_id: int
+    stage: str
+    status: str
+    progress: int
+    intake: Optional[Dict[str, Any]] = None
+    clarification: Dict[str, Any] = {}
+    error: Optional[Dict[str, Any]] = None
+    result: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ScenePackageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    spec_id: int
+    storage_key: str
+    status: str
+    metadata_json: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
 
 @router.post("/{project_id}/intake", response_model=Dict[str, Any])
@@ -90,8 +129,20 @@ async def intake_prompt(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # Use Intake Agent
+    # Use Intake Agent and persist the result for the subsequent stages.
     intake_result = await process_intake(request.prompt, request.context)
+    input_hash = hashlib.sha256(json.dumps({"prompt": request.prompt, "context": request.context}, sort_keys=True).encode()).hexdigest()
+    run = GenerationRun(
+        id=f"run_{uuid.uuid4().hex}", project_id=project_id,
+        organization_id=project.organization_id, prompt=request.prompt,
+        context_json=request.context, intake_json=intake_result.model_dump(),
+        clarification_json={}, input_hash=input_hash,
+        stage="clarification" if intake_result.missing_fields else "spec",
+        status="needs_clarification" if intake_result.missing_fields else "ready_for_spec",
+        progress=15 if intake_result.missing_fields else 25,
+    )
+    db.add(run)
+    await db.commit()
     
     return {
         "detected_domain": intake_result.detected_domain,
@@ -99,7 +150,8 @@ async def intake_prompt(
         "missing_fields": intake_result.missing_fields,
         "suggested_questions": intake_result.suggested_questions,
         "extracted_entities": intake_result.extracted_entities,
-        "confidence": intake_result.confidence
+        "confidence": intake_result.confidence,
+        "run_id": run.id,
     }
 
 
@@ -121,16 +173,31 @@ async def clarify_requirements(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # Get current intake state from request (client should send it)
-    # For now, we'll use the project domain and empty current answers
-    # In practice, frontend would maintain intake state
+    run = None
+    if request.run_id:
+        run = await db.scalar(select(GenerationRun).where(
+            GenerationRun.id == request.run_id,
+            GenerationRun.project_id == project_id,
+            GenerationRun.organization_id == current_user.organization_id,
+        ))
+        if not run:
+            raise HTTPException(status_code=404, detail="Generation run not found")
+    current_answers = dict((run.clarification_json if run else {}) or {})
+    current_answers.update(request.current_intake.get("extracted_entities", {}))
     
     clarification_result = await process_clarification_answers(
         domain=project.domain,
-        current_answers={},  # Frontend should provide this
+        current_answers=current_answers,
         new_answers=request.answers
     )
     
+    if run:
+        run.clarification_json = clarification_result.updated_fields
+        run.stage = "spec" if clarification_result.ready_for_generation else "clarification"
+        run.status = "ready_for_spec" if clarification_result.ready_for_generation else "needs_clarification"
+        run.progress = 30 if clarification_result.ready_for_generation else 20
+        await db.commit()
+
     return {
         "updated_fields": clarification_result.updated_fields,
         "ready_for_generation": clarification_result.ready_for_generation,
@@ -144,11 +211,12 @@ async def clarify_requirements(
                 "required": q.required
             }
             for q in clarification_result.questions
-        ]
+        ],
+        "run_id": run.id if run else None,
     }
 
 
-@router.post("/{project_id}/generate-spec", response_model=JobResponse)
+@router.post("/{project_id}/generate-spec", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def generate_spec(
     project_id: int,
     request: SpecGenerateRequest,
@@ -166,14 +234,43 @@ async def generate_spec(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
+    run = None
+    if request.run_id:
+        run = await db.scalar(select(GenerationRun).where(
+            GenerationRun.id == request.run_id,
+            GenerationRun.project_id == project_id,
+            GenerationRun.organization_id == current_user.organization_id,
+        ))
+        if not run:
+            raise HTTPException(status_code=404, detail="Generation run not found")
+    else:
+        input_hash = hashlib.sha256(json.dumps({"prompt": request.prompt, "context": request.context, "answers": request.clarification_answers}, sort_keys=True).encode()).hexdigest()
+        run = await db.scalar(select(GenerationRun).where(
+            GenerationRun.project_id == project_id,
+            GenerationRun.input_hash == input_hash,
+            GenerationRun.status.in_(["queued", "generating_spec", "validating_spec", "spec_ready", "generating_scene", "scene_ready"]),
+        ).order_by(GenerationRun.created_at.desc()))
+        if not run:
+            run = GenerationRun(
+                id=f"run_{uuid.uuid4().hex}", project_id=project_id,
+                organization_id=project.organization_id, prompt=request.prompt,
+                context_json=request.context, clarification_json=request.clarification_answers,
+                input_hash=input_hash, stage="spec", status="queued", progress=30,
+            )
+            db.add(run)
+        else:
+            return JobResponse(job_id=f"run_{run.id}", status=run.status, message="Generation already queued", run_id=run.id)
+
     # Enqueue spec generation job
     job = Job(
-        id=f"spec_{project_id}_{int(asyncio.get_event_loop().time())}",
+        id=f"spec_{run.id}",
         type="generate_spec",
         payload={
             "project_id": project_id,
             "prompt": request.prompt,
             "context": request.context,
+            "clarification_answers": request.clarification_answers or run.clarification_json or {},
+            "run_id": run.id,
         },
         priority=JobPriority.HIGH,
     )
@@ -182,12 +279,36 @@ async def generate_spec(
     
     # Update project status
     project.status = ProjectStatus.SPEC_GENERATING
+    run.status = "queued"
+    run.stage = "spec"
     await db.commit()
     
     return JobResponse(
         job_id=job.id,
         status=JobStatus.QUEUED.value,
-        message="Spec generation queued"
+        message="Spec generation queued", run_id=run.id
+    )
+
+
+@router.get("/{project_id}/generation-runs/{run_id}", response_model=GenerationRunResponse)
+async def get_generation_run(
+    project_id: int,
+    run_id: str,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    run = await db.scalar(select(GenerationRun).where(
+        GenerationRun.id == run_id,
+        GenerationRun.project_id == project_id,
+        GenerationRun.organization_id == current_user.organization_id,
+    ))
+    if not run:
+        raise HTTPException(status_code=404, detail="Generation run not found")
+    return GenerationRunResponse(
+        id=run.id, project_id=run.project_id, stage=run.stage, status=run.status,
+        progress=run.progress, intake=run.intake_json,
+        clarification=run.clarification_json or {}, error=run.error_json,
+        result=run.result_json, created_at=run.created_at, updated_at=run.updated_at,
     )
 
 
@@ -202,6 +323,7 @@ async def validate_spec(
         select(SimulationSpec)
         .where(SimulationSpec.project_id == project_id)
         .order_by(SimulationSpec.version.desc())
+        .limit(1)
     )
     spec = result.scalar_one_or_none()
     if not spec:
@@ -267,6 +389,12 @@ async def get_spec(
     spec = result.scalar_one_or_none()
     if not spec:
         raise HTTPException(status_code=404, detail="Spec not found")
+    project = await db.scalar(select(Project).where(
+        Project.id == project_id,
+        Project.organization_id == current_user.organization_id,
+    ))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
     return spec
 
 
@@ -293,6 +421,7 @@ async def generate_scene(
         select(SimulationSpec)
         .where(SimulationSpec.project_id == project_id)
         .order_by(SimulationSpec.version.desc())
+        .limit(1)
     )
     spec = spec_result.scalar_one_or_none()
     if not spec:
@@ -302,12 +431,17 @@ async def generate_scene(
         raise HTTPException(status_code=400, detail=f"Spec must be valid to generate scene. Current status: {spec.status.value}")
 
     # Enqueue scene generation job
+    run = await db.scalar(select(GenerationRun).where(
+        GenerationRun.project_id == project_id,
+        GenerationRun.status.in_(["spec_ready", "ready_for_spec"]),
+    ).order_by(GenerationRun.created_at.desc()))
     job = Job(
-        id=f"scene_{project_id}_{int(asyncio.get_event_loop().time())}",
+        id=f"scene_{project_id}_{spec.id}",
         type="generate_scene",
         payload={
             "project_id": project_id,
             "spec_id": spec.id,
+            "run_id": run.id if run else None,
         },
         priority=JobPriority.HIGH,
     )
@@ -316,12 +450,16 @@ async def generate_scene(
 
     # Update project status
     project.status = ProjectStatus.SCENE_GENERATING
+    if run:
+        run.status = "generating_scene"
+        run.stage = "scene"
+        run.progress = 75
     await db.commit()
 
     return JobResponse(
         job_id=job.id,
         status=JobStatus.QUEUED.value,
-        message="Scene generation queued"
+        message="Scene generation queued", run_id=run.id if run else None
     )
 
 
@@ -348,6 +486,7 @@ async def publish_scene(
         select(ScenePackage)
         .where(ScenePackage.project_id == project_id)
         .order_by(ScenePackage.created_at.desc())
+        .limit(1)
     )
     scene_pkg = pkg_result.scalar_one_or_none()
     if not scene_pkg:
@@ -355,6 +494,13 @@ async def publish_scene(
 
     if scene_pkg.status != "ready":
         raise HTTPException(status_code=400, detail=f"Scene package must be ready to publish. Current status: {scene_pkg.status}")
+
+    try:
+        artifact = get_minio_client().get_object_info(scene_pkg.storage_key)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Scene package artifact is unavailable") from exc
+    if not artifact:
+        raise HTTPException(status_code=503, detail="Scene package artifact is unavailable")
 
     # Enqueue publish job
     job = Job(
@@ -376,9 +522,58 @@ async def publish_scene(
     )
 
 
+@router.get("/{project_id}/generation-runs", response_model=List[GenerationRunResponse])
+async def list_generation_runs(
+    project_id: int,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await db.scalar(select(Project).where(
+        Project.id == project_id,
+        Project.organization_id == current_user.organization_id,
+    ))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = await db.execute(
+        select(GenerationRun)
+        .where(
+            GenerationRun.project_id == project_id,
+            GenerationRun.organization_id == current_user.organization_id,
+        )
+        .order_by(GenerationRun.created_at.desc())
+    )
+    return [GenerationRunResponse(
+        id=run.id, project_id=run.project_id, stage=run.stage, status=run.status,
+        progress=run.progress, intake=run.intake_json,
+        clarification=run.clarification_json or {}, error=run.error_json,
+        result=run.result_json, created_at=run.created_at, updated_at=run.updated_at,
+    ) for run in result.scalars().all()]
+
+
+@router.get("/{project_id}/scene-packages", response_model=List[ScenePackageResponse])
+async def list_scene_packages(
+    project_id: int,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await db.scalar(select(Project).where(
+        Project.id == project_id,
+        Project.organization_id == current_user.organization_id,
+    ))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = await db.execute(
+        select(ScenePackage)
+        .where(ScenePackage.project_id == project_id)
+        .order_by(ScenePackage.created_at.desc())
+    )
+    return result.scalars().all()
+
+
 class ClarifyWithStateRequest(BaseModel):
     answers: Dict[str, str]
     current_intake: Dict[str, Any] = {}
+    run_id: Optional[str] = None
 
 
 @router.post("/{project_id}/clarify-with-state", response_model=Dict[str, Any])
@@ -405,6 +600,20 @@ async def clarify_with_state(
         current_answers=request.current_intake.get("extracted_entities", {}),
         new_answers=request.answers
     )
+
+    if request.run_id:
+        run = await db.scalar(select(GenerationRun).where(
+            GenerationRun.id == request.run_id,
+            GenerationRun.project_id == project_id,
+            GenerationRun.organization_id == current_user.organization_id,
+        ))
+        if not run:
+            raise HTTPException(status_code=404, detail="Generation run not found")
+        run.clarification_json = clarification_result.updated_fields
+        run.stage = "spec" if clarification_result.ready_for_generation else "clarification"
+        run.status = "ready_for_spec" if clarification_result.ready_for_generation else "needs_clarification"
+        run.progress = 30 if clarification_result.ready_for_generation else 20
+        await db.commit()
     
     return {
         "updated_fields": clarification_result.updated_fields,
@@ -419,5 +628,6 @@ async def clarify_with_state(
                 "required": q.required
             }
             for q in clarification_result.questions
-        ]
+        ],
+        "run_id": request.run_id,
     }

@@ -3,9 +3,9 @@ import { api } from "@/lib/api"
 import type { ClarifyResult } from "@/types"
 
 export function useClarify(projectId: number) {
-  return useMutation<ClarifyResult, Error, { answers: Record<string, string> }>({
-    mutationFn: async ({ answers }) => {
-      const res = await api.post(`/v1/projects/${projectId}/clarify`, { answers })
+  return useMutation<ClarifyResult, Error, { answers: Record<string, string>; run_id?: string; current_intake?: Record<string, any> }>({
+    mutationFn: async ({ answers, run_id, current_intake }) => {
+      const res = await api.post(`/v1/projects/${projectId}/clarify`, { answers, run_id, current_intake })
       return res.data
     },
   })
