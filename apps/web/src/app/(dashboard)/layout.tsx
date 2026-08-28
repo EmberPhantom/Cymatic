@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
@@ -14,6 +15,7 @@ const navItems = [
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const router = useRouter()
   const { user, setAuth, logout, authReady } = useAuthStore()
   const [authError, setAuthError] = useState<string | null>(null)
 
@@ -23,11 +25,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       .then(({ data }) => { if (active) { setAuth(data); setAuthError(null) } })
       .catch((error) => {
         if (!active) return
-        if (error.response?.status === 401) logout()
+        if (error.response?.status === 401) {
+          logout()
+          router.replace(`/login?next=${encodeURIComponent(pathname)}`)
+        }
         else setAuthError("Unable to load your session. Please retry.")
       })
     return () => { active = false }
-  }, [setAuth, logout])
+  }, [setAuth, logout, router, pathname])
 
   if (!authReady) {
     return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Loading your workspace…</div>

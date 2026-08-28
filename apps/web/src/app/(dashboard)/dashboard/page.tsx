@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 
 export default function DashboardPage() {
   const router = useRouter()
-  const { data: projects, isLoading } = useProjects()
+  const { data: projects, isLoading, isError, error, refetch } = useProjects()
   const createProject = useCreateProject()
   const [showNewProject, setShowNewProject] = useState(false)
   const [name, setName] = useState("")
@@ -77,7 +77,13 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {isLoading ? (
+      {isError ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-6 text-center">
+          <p className="font-medium text-destructive">Unable to load your projects</p>
+          <p className="mt-1 text-sm text-muted-foreground">{error instanceof Error ? error.message : "Please try again."}</p>
+          <Button className="mt-4" variant="outline" onClick={() => refetch()}>Retry</Button>
+        </div>
+      ) : isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
             <Card key={i} className="animate-pulse">
