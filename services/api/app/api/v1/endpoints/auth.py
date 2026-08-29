@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from fastapi.security import OAuth2PasswordRequestForm, HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import Optional
@@ -28,7 +28,7 @@ class TokenData(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    token: str
+    token: Optional[str] = None
 
 
 class UserCreate(BaseModel):
@@ -62,6 +62,7 @@ class OrganizationResponse(BaseModel):
 
 @router.post("/login", response_model=Token)
 async def login(
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
@@ -90,7 +91,14 @@ async def login(
         expires_delta=timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
     )
 
+    _set_auth_cookies(response, access_token, refresh_token)
     return Token(access_token=access_token, refresh_token=refresh_token)
+
+
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    secure = settings.ENVIRONMENT == "production"
+    response.set_cookie("cymatic_access_token", access_token, httponly=True, secure=secure, samesite="lax", max_age=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60, path="/")
+    response.set_cookie("cymatic_refresh_token", refresh_token, httponly=True, secure=secure, samesite="lax", max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400, path="/v1/auth")
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -134,10 +142,14 @@ async def get_current_user_info(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
-    request: RefreshRequest,
+    response: Response,
+    http_request: Request,
+    refresh_request: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    token = request.token
+    token = refresh_request.token or http_request.cookies.get("cymatic_refresh_token")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is required")
     try:
         payload = decode_token(token)
     except (JWTError, ValueError):
@@ -196,15 +208,22 @@ async def refresh_token(
 
     await revoke_token(token)
 
+    _set_auth_cookies(response, new_access_token, new_refresh_token)
     return Token(access_token=new_access_token, refresh_token=new_refresh_token)
 
 
 @router.post("/logout")
 async def logout(
+    response: Response,
+    request: Request,
     current_user: User = Depends(get_current_user),
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
     """Revoke the current access token."""
     from app.core.security import revoke_token
-    await revoke_token(credentials.credentials)
+    token = credentials.credentials if credentials else request.cookies.get("cymatic_access_token")
+    if token:
+        await revoke_token(token)
+    response.delete_cookie("cymatic_access_token", path="/")
+    response.delete_cookie("cymatic_refresh_token", path="/v1/auth")
     return {"message": "Successfully logged out"}

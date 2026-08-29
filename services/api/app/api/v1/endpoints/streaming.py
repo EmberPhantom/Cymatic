@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -113,11 +113,11 @@ async def create_stream_session(
                 await db.commit()
                 await db.refresh(session)
     except httpx.ConnectError:
-        session.status = StreamSessionStatus.ERROR
+        session.status = StreamSessionStatus.FAILED
         await db.commit()
         logger.warning("render_server_unavailable", session_id=session.id, url=settings.RENDER_SERVER_URL)
     except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
-        session.status = StreamSessionStatus.ERROR
+        session.status = StreamSessionStatus.FAILED
         await db.commit()
         logger.error("render_server_signal_failed", session_id=session.id, error=str(e))
 
@@ -169,6 +169,7 @@ async def handle_offer(
             resp.raise_for_status()
             answer_data = resp.json()
             session.status = StreamSessionStatus.ACTIVE
+            session.started_at = datetime.now(timezone.utc)
             await db.commit()
             return {"status": "offer_forwarded", "session_id": session_id, "answer": answer_data}
     except httpx.ConnectError:
@@ -216,6 +217,26 @@ async def handle_answer(
     except OSError as e:
         logger.error("answer_forward_failed", session_id=session_id, error=str(e))
         raise HTTPException(status_code=500, detail="Failed to forward answer")
+
+
+@router.post("/sessions/{session_id}/end", response_model=StreamSessionResponse)
+async def end_stream_session(
+    session_id: int,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await db.scalar(select(StreamSession).where(
+        StreamSession.id == session_id,
+        StreamSession.user_id == current_user.id,
+    ))
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status not in (StreamSessionStatus.DISCONNECTED, StreamSessionStatus.FAILED):
+        session.status = StreamSessionStatus.DISCONNECTED
+        session.ended_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(session)
+    return session
 
 
 @router.post("/sessions/{session_id}/candidate")

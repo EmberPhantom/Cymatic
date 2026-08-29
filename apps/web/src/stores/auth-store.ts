@@ -5,20 +5,24 @@ interface AuthState {
   user: User | null
   token: string | null
   isAuthenticated: boolean
-  setAuth: (user: User, token: string) => void
+  authReady: boolean
+  setAuth: (user: User, token?: string | null) => void
+  setAuthReady: (ready: boolean) => void
   logout: () => void
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  token: typeof window !== "undefined" ? localStorage.getItem("cymatic_token") : null,
-  isAuthenticated: typeof window !== "undefined" ? !!localStorage.getItem("cymatic_token") : false,
-  setAuth: (user, token) => {
-    localStorage.setItem("cymatic_token", token)
-    set({ user, token, isAuthenticated: true })
+  token: null,
+  isAuthenticated: false,
+  authReady: false,
+  setAuth: (user, token = null) => {
+    set({ user, token, isAuthenticated: true, authReady: true })
+  },
+  setAuthReady: (authReady) => {
+    set({ authReady })
   },
   logout: () => {
-    localStorage.removeItem("cymatic_token")
-    set({ user: null, token: null, isAuthenticated: false })
+    set({ user: null, token: null, isAuthenticated: false, authReady: true })
   },
 }))

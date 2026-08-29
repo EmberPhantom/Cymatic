@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation"
 import { useState } from "react"
-import { useCreateStreamSession } from "@/hooks/use-stream-session"
+import { useCreateStreamSession, useEndStreamSession } from "@/hooks/use-stream-session"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -10,15 +10,24 @@ export default function StreamPage() {
   const params = useParams()
   const projectId = Number(params.id)
   const createSession = useCreateStreamSession()
+  const endSession = useEndStreamSession()
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [sessionError, setSessionError] = useState<string | null>(null)
 
   const handleStartStream = async () => {
     try {
+      setSessionError(null)
       const session = await createSession.mutateAsync({ projectId })
       setSessionId(session.id)
-    } catch (err) {
-      console.error("Failed to create session:", err)
+      if (session.status === "failed") setSessionError("The render server is unavailable. Start it and try again.")
+    } catch (err: any) {
+      setSessionError(err?.response?.data?.detail || "Unable to start the stream.")
     }
+  }
+
+  const handleEndStream = async () => {
+    if (sessionId) await endSession.mutateAsync({ sessionId: Number(sessionId) })
+    setSessionId(null)
   }
 
   return (
@@ -30,6 +39,7 @@ export default function StreamPage() {
           <CardDescription>Launch a VR stream to your Android headset</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {sessionError && <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">{sessionError}</div>}
           {sessionId ? (
             <div className="space-y-4">
               <div className="rounded-md bg-muted p-4 text-center">
@@ -39,7 +49,7 @@ export default function StreamPage() {
               <p className="text-sm text-muted-foreground text-center">
                 Connect your Android VR client to start streaming.
               </p>
-              <Button variant="outline" className="w-full" onClick={() => setSessionId(null)}>
+              <Button variant="outline" className="w-full" onClick={handleEndStream} disabled={endSession.isPending}>
                 End Session
               </Button>
             </div>

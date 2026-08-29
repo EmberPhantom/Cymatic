@@ -177,6 +177,29 @@ async def list_assets(
     return result.scalars().all()
 
 
+@router.get("/projects/{project_id}", response_model=List[AssetResponse])
+async def list_project_assets(
+    project_id: int,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await db.scalar(select(Project).where(
+        Project.id == project_id,
+        Project.organization_id == current_user.organization_id,
+    ))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = await db.execute(
+        select(Asset)
+        .where(
+            Asset.project_id == project_id,
+            Asset.organization_id == current_user.organization_id,
+        )
+        .order_by(Asset.created_at.desc())
+    )
+    return result.scalars().all()
+
+
 @router.get("/{asset_id}", response_model=AssetResponse)
 async def get_asset(
     asset_id: int,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { useProjects } from "@/hooks/use-projects"
 import { useCreateProject } from "@/hooks/use-create-project"
@@ -11,7 +12,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 
 export default function DashboardPage() {
-  const { data: projects, isLoading } = useProjects()
+  const router = useRouter()
+  const { data: projects, isLoading, isError, error, refetch } = useProjects()
   const createProject = useCreateProject()
   const [showNewProject, setShowNewProject] = useState(false)
   const [name, setName] = useState("")
@@ -19,9 +21,14 @@ export default function DashboardPage() {
 
   const handleCreate = async () => {
     if (!name.trim()) return
-    await createProject.mutateAsync({ name, domain })
-    setShowNewProject(false)
-    setName("")
+    try {
+      const project = await createProject.mutateAsync({ name, domain })
+      setShowNewProject(false)
+      setName("")
+      router.push(`/dashboard/projects/${project.id}/builder`)
+    } catch {
+      // The mutation error is rendered below.
+    }
   }
 
   return (
@@ -64,7 +71,19 @@ export default function DashboardPage() {
         </Dialog>
       </div>
 
-      {isLoading ? (
+      {createProject.isError && (
+        <div className="mb-4 rounded-md bg-destructive/15 p-3 text-sm text-destructive">
+          Unable to create the project. Please try again.
+        </div>
+      )}
+
+      {isError ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-6 text-center">
+          <p className="font-medium text-destructive">Unable to load your projects</p>
+          <p className="mt-1 text-sm text-muted-foreground">{error instanceof Error ? error.message : "Please try again."}</p>
+          <Button className="mt-4" variant="outline" onClick={() => refetch()}>Retry</Button>
+        </div>
+      ) : isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
             <Card key={i} className="animate-pulse">

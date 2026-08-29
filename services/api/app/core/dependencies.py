@@ -20,11 +20,13 @@ class AuthError(Exception):
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Get current authenticated user from JWT token."""
-    if not credentials:
+    token = credentials.credentials if credentials else request.cookies.get("cymatic_access_token")
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
@@ -32,7 +34,7 @@ async def get_current_user(
         )
     
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_token(token)
         if payload.get("type") not in ("access", None):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -51,7 +53,7 @@ async def get_current_user(
 
     # Check token revocation
     from app.core.security import is_token_revoked
-    if await is_token_revoked(credentials.credentials):
+    if await is_token_revoked(token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has been revoked",

@@ -210,7 +210,6 @@ class ScenePackageGenerator:
         # Metadata
         metadata = ScenePackageMetadata(
             spec_version=spec_version,
-            asset_manifest=asset_manifest or {}
         )
         
         package = ScenePackage(

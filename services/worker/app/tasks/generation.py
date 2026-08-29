@@ -12,7 +12,9 @@ from sqlalchemy import select, func
 import structlog
 import asyncio
 import json
+import hashlib
 from minio.error import S3Error
+from cymatic_shared.models import GenerationRun
 
 logger = structlog.get_logger()
 
@@ -24,6 +26,7 @@ async def generate_spec_task(payload: dict) -> dict:
     prompt = payload.get("prompt")
     context = payload.get("context", {})
     clarification_answers = payload.get("clarification_answers", {})
+    run_id = payload.get("run_id")
     
     logger.info("generate_spec_started", project_id=project_id)
     
@@ -40,6 +43,14 @@ async def generate_spec_task(payload: dict) -> dict:
         
         # Update project status
         project.status = ProjectStatus.SPEC_GENERATING
+        if run_id:
+            run = await db.scalar(select(GenerationRun).where(
+                GenerationRun.id == run_id, GenerationRun.project_id == project_id
+            ))
+            if run:
+                run.status = "generating_spec"
+                run.stage = "spec"
+                run.progress = 35
         await db.commit()
     
     # Run appropriate pipeline based on domain
@@ -65,16 +76,42 @@ async def generate_spec_task(payload: dict) -> dict:
     # Handle pipeline result
     if pipeline_result.status == "awaiting_clarification":
         # Return clarification questions
-        return {
+        result = {
             "status": "awaiting_clarification",
             "questions": [q.model_dump() for q in pipeline_result.clarification.questions] if pipeline_result.clarification else [],
             "current_answers": pipeline_result.clarification.updated_fields if pipeline_result.clarification else {},
             "completion": pipeline_result.clarification.completion_percentage if pipeline_result.clarification else 0
         }
+        async with AsyncSessionLocal() as db:
+            if run_id:
+                run = await db.scalar(select(GenerationRun).where(GenerationRun.id == run_id))
+                if run:
+                    run.status = "needs_clarification"
+                    run.stage = "clarification"
+                    run.progress = int(result["completion"] * 100)
+                    run.clarification_json = result["current_answers"]
+                    await db.commit()
+        return result
     
     if pipeline_result.status != "completed" or not pipeline_result.spec:
         raise ValueError(f"Pipeline failed: {pipeline_result.error}")
     
+    # Validate the complete proposal before it can become trusted state.
+    from app.agents.validation_agent import validate_simulation_spec
+    validation_result = validate_simulation_spec(pipeline_result.spec.model_dump())
+    if not validation_result.valid:
+        errors = validation_result.errors
+        async with AsyncSessionLocal() as db:
+            if run_id:
+                run = await db.scalar(select(GenerationRun).where(GenerationRun.id == run_id))
+                if run:
+                    run.status = "failed"
+                    run.stage = "validation"
+                    run.progress = 55
+                    run.error_json = {"code": "spec_validation_failed", "errors": errors}
+                    await db.commit()
+        raise ValueError(f"Generated specification failed validation: {errors}")
+
     # Save spec to database with atomic version assignment
     async with AsyncSessionLocal() as db:
         spec = pipeline_result.spec
@@ -102,6 +139,16 @@ async def generate_spec_task(payload: dict) -> dict:
         project = project_result.scalar_one_or_none()
         if project:
             project.status = ProjectStatus.SPEC_READY
+        if run_id:
+            run = await db.scalar(select(GenerationRun).where(GenerationRun.id == run_id))
+            if run:
+                run.status = "spec_ready"
+                run.stage = "validation"
+                run.progress = 60
+                run.result_json = {
+                    "spec_id": db_spec.id, "version": db_spec.version,
+                    "validation": validation_result.model_dump(),
+                }
         
         await db.commit()
         await db.refresh(db_spec)
@@ -116,6 +163,7 @@ async def generate_spec_task(payload: dict) -> dict:
                 "research": pipeline_result.research.model_dump() if pipeline_result.research else None,
                 "domain_check_score": pipeline_result.domain_check.compliance_score if pipeline_result.domain_check else None,
                 "validation_score": pipeline_result.validation.spec_score if pipeline_result.validation else None,
+                "validation": validation_result.model_dump(),
             }
         }
 
@@ -153,6 +201,7 @@ async def generate_scene_task(payload: dict) -> dict:
     """Generate 3D scene package from validated spec using Scene Package Generator."""
     project_id = payload.get("project_id")
     spec_id = payload.get("spec_id")
+    run_id = payload.get("run_id")
     
     logger.info("generate_scene_started", project_id=project_id, spec_id=spec_id)
     
@@ -163,10 +212,37 @@ async def generate_scene_task(payload: dict) -> dict:
         spec_result = await db.execute(select(SimulationSpec).where(SimulationSpec.id == spec_id))
         spec = spec_result.scalar_one_or_none()
         
-        if not project or not spec:
+        if not project or not spec or spec.project_id != project_id:
             raise ValueError("Project or spec not found")
+        if spec.status != SpecStatus.VALID:
+            raise ValueError("Scene generation requires a valid specification")
+
+        existing = await db.scalar(select(ScenePackageModel).where(
+            ScenePackageModel.project_id == project_id,
+            ScenePackageModel.spec_id == spec_id,
+            ScenePackageModel.status == "ready",
+        ).order_by(ScenePackageModel.created_at.desc()))
+        if existing:
+            project.status = ProjectStatus.SCENE_READY
+            if run_id:
+                run = await db.scalar(select(GenerationRun).where(GenerationRun.id == run_id))
+                if run:
+                    run.status = "scene_ready"
+                    run.stage = "artifact_verification"
+                    run.progress = 100
+                    run.result_json = {"scene_package_id": existing.id, "storage_key": existing.storage_key}
+            await db.commit()
+            return {"scene_package_id": existing.id, "storage_key": existing.storage_key, "idempotent": True}
         
         project.status = ProjectStatus.SCENE_GENERATING
+        if run_id:
+            run = await db.scalar(select(GenerationRun).where(
+                GenerationRun.id == run_id, GenerationRun.project_id == project_id
+            ))
+            if run:
+                run.status = "generating_scene"
+                run.stage = "scene"
+                run.progress = 70
         await db.commit()
         
         # Generate scene package using our generator
@@ -187,8 +263,11 @@ async def generate_scene_task(payload: dict) -> dict:
             asset_manifest=asset_result.manifest.model_dump() if asset_result else {}
         )
         
+        # Validate the renderer-neutral package before storage.
+        scene_package.model_validate(scene_package.model_dump())
         # Serialize to JSON
         scene_json = scene_package_to_json(scene_package)
+        checksum = hashlib.sha256(scene_json.encode("utf-8")).hexdigest()
         
         # Upload to MinIO
         storage_key = f"orgs/{project.organization_id}/projects/{project_id}/scenes/spec_{spec_id}_v{spec.version}.cymatic"
@@ -203,6 +282,7 @@ async def generate_scene_task(payload: dict) -> dict:
                     "spec_id": str(spec_id),
                     "domain": project.domain,
                     "format": "cymatic_v1",
+                    "sha256": checksum,
                 }
             )
             logger.info("scene_package_uploaded", storage_key=storage_key)
@@ -210,6 +290,11 @@ async def generate_scene_task(payload: dict) -> dict:
             logger.error("minio_upload_failed", error=str(e))
             raise
         
+        # Confirm the object is readable before exposing it as ready.
+        object_info = get_minio_client().get_object_info(storage_key)
+        if not object_info or int(object_info.get("size", 0)) != len(scene_json.encode("utf-8")):
+            raise ValueError("Scene package artifact verification failed")
+
         # Create DB record
         scene_package_record = ScenePackageModel(
             project_id=project_id,
@@ -222,11 +307,21 @@ async def generate_scene_task(payload: dict) -> dict:
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "entity_count": len(scene_package.entities),
                 "navigation_points": len(scene_package.navigation.points),
+                "sha256": checksum,
+                "size": len(scene_json.encode("utf-8")),
+                "verified": True,
             }
         )
         db.add(scene_package_record)
         
         project.status = ProjectStatus.SCENE_READY
+        if run_id:
+            run = await db.scalar(select(GenerationRun).where(GenerationRun.id == run_id))
+            if run:
+                run.status = "scene_ready"
+                run.stage = "artifact_verification"
+                run.progress = 95
+                run.result_json = {"scene_package_id": scene_package_record.id, "storage_key": storage_key, "sha256": checksum}
         await db.commit()
         await db.refresh(scene_package_record)
         
@@ -275,6 +370,13 @@ async def publish_scene_task(payload: dict) -> dict:
         spec = spec_result.scalar_one_or_none()
         if not spec or spec.status not in (SpecStatus.VALID,):
             raise ValueError("Referenced spec is missing or not valid")
+
+        try:
+            artifact = get_minio_client().get_object_info(scene_pkg.storage_key)
+        except (S3Error, OSError) as exc:
+            raise ValueError("Scene package artifact is unavailable") from exc
+        if not artifact:
+            raise ValueError("Scene package artifact is unavailable")
 
         project.status = ProjectStatus.PUBLISHED
         await db.commit()

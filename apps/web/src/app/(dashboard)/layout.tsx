@@ -2,9 +2,12 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { api } from "@/lib/api"
 
 const navItems = [
   { href: "/dashboard", label: "Projects" },
@@ -12,7 +15,32 @@ const navItems = [
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const { user, logout } = useAuthStore()
+  const router = useRouter()
+  const { user, setAuth, logout, authReady } = useAuthStore()
+  const [authError, setAuthError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    api.get("/v1/auth/me")
+      .then(({ data }) => { if (active) { setAuth(data); setAuthError(null) } })
+      .catch((error) => {
+        if (!active) return
+        if (error.response?.status === 401) {
+          logout()
+          router.replace(`/login?next=${encodeURIComponent(pathname)}`)
+        }
+        else setAuthError("Unable to load your session. Please retry.")
+      })
+    return () => { active = false }
+  }, [setAuth, logout, router, pathname])
+
+  if (!authReady) {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Loading your workspace…</div>
+  }
+
+  if (authError) {
+    return <div className="flex min-h-screen items-center justify-center"><div className="space-y-3 text-center"><p className="text-sm text-destructive">{authError}</p><Button onClick={() => window.location.reload()}>Retry</Button></div></div>
+  }
 
   return (
     <div className="flex min-h-screen">
@@ -41,7 +69,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="p-4 border-t">
           <div className="text-sm font-medium truncate">{user?.name || "User"}</div>
           <div className="text-xs text-muted-foreground truncate">{user?.email}</div>
-          <Button variant="ghost" size="sm" className="mt-2 w-full justify-start" onClick={logout}>
+          <Button variant="ghost" size="sm" className="mt-2 w-full justify-start" onClick={async () => {
+            try { await api.post("/v1/auth/logout") } finally { logout() }
+          }}>
             Sign Out
           </Button>
         </div>

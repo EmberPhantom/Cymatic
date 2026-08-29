@@ -13,3 +13,12 @@ export function useCreateStreamSession() {
     },
   })
 }
+
+export function useEndStreamSession() {
+  return useMutation<StreamSession, Error, { sessionId: number }>({
+    mutationFn: async ({ sessionId }) => {
+      const res = await api.post(`/v1/stream/sessions/${sessionId}/end`)
+      return res.data
+    },
+  })
+}

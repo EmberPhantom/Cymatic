@@ -1,5 +1,8 @@
 "use client"
 
+/* The polling effect intentionally depends on stable workflow state, not mutation object identities. */
+/* eslint-disable react-hooks/exhaustive-deps */
+
 import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useIntake } from "@/hooks/use-intake"
@@ -13,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import type { IntakeResult, ClarificationQuestion, ValidationResult } from "@/types"
+import type { IntakeResult, ClarificationQuestion } from "@/types"
 
 type Step = "prompt" | "clarify" | "review" | "generate" | "publish"
 
@@ -36,6 +39,8 @@ export default function BuilderPage() {
   const [clarifyResult, setClarifyResult] = useState<any>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
+  const [generationStage, setGenerationStage] = useState<"spec" | "validation" | "scene" | "publish">("spec")
+  const [workflowError, setWorkflowError] = useState<string | null>(null)
 
   const intake = useIntake(projectId)
   const clarify = useClarify(projectId)
@@ -46,57 +51,104 @@ export default function BuilderPage() {
 
   const jobStatus = useJobStatus(currentJobId, !!currentJobId)
 
-  // Handle job completion
+  // Mutation objects are intentionally excluded: changing them would restart the active job.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (jobStatus.data?.status === "completed") {
-      if (step === "generate") {
-        setStep("publish")
-        setCurrentJobId(null)
+    const status = jobStatus.data?.status
+    if (!currentJobId || !status || ["queued", "running", "retry"].includes(status)) return
+    if (status === "failed" || status === "cancelled") {
+      setWorkflowError(jobStatus.data?.error || "The workflow step failed. Please retry.")
+      setCurrentJobId(null)
+      return
+    }
+    if (status !== "completed") return
+    let active = true
+    const continueWorkflow = async () => {
+      try {
+        setWorkflowError(null)
+        if (generationStage === "spec") {
+          const result = await validateSpec.mutateAsync()
+          if (active) { setGenerationStage("validation"); setCurrentJobId(result.job_id) }
+        } else if (generationStage === "validation") {
+          const result = await generateScene.mutateAsync()
+          if (active) { setGenerationStage("scene"); setCurrentJobId(result.job_id) }
+        } else if (generationStage === "scene" && active) {
+          setCurrentJobId(null)
+          setStep("publish")
+        } else if (generationStage === "publish" && active) {
+          router.replace(`/dashboard/projects/${projectId}/stream`)
+        }
+      } catch (error: any) {
+        if (active) {
+          setWorkflowError(error?.response?.data?.detail || error?.message || "The workflow could not continue.")
+          setCurrentJobId(null)
+        }
       }
     }
-  }, [jobStatus.data?.status, step])
+    void continueWorkflow()
+    return () => { active = false }
+  }, [currentJobId, jobStatus.data?.status, generationStage])
+
+/* eslint-enable react-hooks/exhaustive-deps */
 
   const stepIndex = STEPS.findIndex((s) => s.key === step)
 
   // Step handlers
   const handleIntake = async () => {
     if (!prompt.trim()) return
-    const result = await intake.mutateAsync({ prompt })
-    setIntakeResult(result)
-    if (result.missing_fields.length > 0) {
-      setStep("clarify")
-    } else {
-      // Skip clarification, go to review
-      setStep("review")
+    try {
+      setWorkflowError(null)
+      const result = await intake.mutateAsync({ prompt })
+      setIntakeResult(result)
+      setStep(result.missing_fields.length > 0 ? "clarify" : "review")
+    } catch (error: any) {
+      setWorkflowError(error?.response?.data?.detail || error?.message || "Unable to analyze the prompt.")
     }
   }
 
   const handleClarify = async () => {
-    const result = await clarify.mutateAsync({ answers })
-    setClarifyResult(result)
-    if (result.ready_for_generation || result.remaining_questions.length === 0) {
-      setStep("review")
+    try {
+      setWorkflowError(null)
+      const result = await clarify.mutateAsync({ answers, run_id: intakeResult?.run_id, current_intake: intakeResult || {} })
+      setClarifyResult(result)
+      if (result.ready_for_generation || result.remaining_questions.length === 0) setStep("review")
+      else setWorkflowError("Please answer the remaining required questions.")
+    } catch (error: any) {
+      setWorkflowError(error?.response?.data?.detail || error?.message || "Unable to save clarification answers.")
     }
   }
 
   const handleGenerateSpec = async () => {
-    const result = await generateSpec.mutateAsync({ prompt })
-    setCurrentJobId(result.job_id)
-    setStep("generate")
-  }
-
-  const handleGenerateScene = async () => {
-    const result = await generateScene.mutateAsync()
-    setCurrentJobId(result.job_id)
+    try {
+      setWorkflowError(null)
+      const result = await generateSpec.mutateAsync({ prompt, run_id: intakeResult?.run_id, clarification_answers: answers })
+      setGenerationStage("spec")
+      setCurrentJobId(result.job_id)
+      setStep("generate")
+    } catch (error: any) {
+      setWorkflowError(error?.response?.data?.detail || error?.message || "Unable to start specification generation.")
+    }
   }
 
   const handlePublish = async () => {
-    await publish.mutateAsync()
-    router.push(`/dashboard/projects/${projectId}`)
+    try {
+      setWorkflowError(null)
+      const result = await publish.mutateAsync()
+      setGenerationStage("publish")
+      setCurrentJobId(result.job_id)
+    } catch (error: any) {
+      setWorkflowError(error?.response?.data?.detail || error?.message || "Unable to publish the simulation.")
+    }
   }
 
   return (
     <div className="max-w-3xl mx-auto">
+      <div className="mb-6">
+        <p className="text-sm text-muted-foreground">Project {projectId}</p>
+        <h2 className="text-2xl font-bold">Create Simulation</h2>
+        <p className="text-muted-foreground">Build a validated simulation package ready for streaming.</p>
+      </div>
+      {workflowError && <div className="mb-4 rounded-md bg-destructive/15 p-3 text-sm text-destructive">{workflowError}</div>}
       {/* Step indicator */}
       <div className="flex items-center mb-8">
         {STEPS.map((s, i) => (
@@ -189,11 +241,7 @@ export default function BuilderPage() {
                 <pre>{JSON.stringify(intakeResult.extracted_entities, null, 2)}</pre>
               </div>
             )}
-            {validateSpec.data && (
-              <div className={`rounded-md p-3 text-sm ${validateSpec.data.valid ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-                {validateSpec.data.valid ? "Spec is valid" : `Errors: ${validateSpec.data.errors.join(", ")}`}
-              </div>
-            )}
+            <p className="text-sm text-muted-foreground">The worker will create and validate the structured Simulation Specification before building the scene.</p>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setStep("clarify")}>Back</Button>
               <Button onClick={handleGenerateSpec} disabled={generateSpec.isPending}>
@@ -208,26 +256,19 @@ export default function BuilderPage() {
       {step === "generate" && (
         <Card>
           <CardHeader>
-            <CardTitle>Generating Scene</CardTitle>
-            <CardDescription>Your simulation is being generated...</CardDescription>
+            <CardTitle>Building Simulation</CardTitle>
+            <CardDescription>{generationStage === "spec" ? "Creating the structured specification..." : generationStage === "validation" ? "Validating the specification..." : "Generating the 3D scene package..."}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-center py-8">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
             </div>
             <p className="text-center text-sm text-muted-foreground">
-              {jobStatus.data?.status === "completed" ? "Scene generated!" : "Generating scene package..."}
+              {jobStatus.data?.message || "The worker is processing your request."}
             </p>
             {jobStatus.data?.status === "failed" && (
               <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive text-center">
                 Generation failed. Please try again.
-              </div>
-            )}
-            {!currentJobId && (
-              <div className="flex justify-center">
-                <Button onClick={handleGenerateScene} disabled={generateScene.isPending}>
-                  {generateScene.isPending ? "Starting..." : "Generate 3D Scene"}
-                </Button>
               </div>
             )}
           </CardContent>
@@ -251,7 +292,7 @@ export default function BuilderPage() {
               <Button variant="outline" onClick={() => router.push(`/dashboard/projects/${projectId}`)}>
                 Back to Project
               </Button>
-              <Button onClick={handlePublish} disabled={publish.isPending}>
+              <Button onClick={handlePublish} disabled={publish.isPending || !!currentJobId}>
                 {publish.isPending ? "Publishing..." : "Publish & Stream"}
               </Button>
             </div>

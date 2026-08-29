@@ -10,10 +10,12 @@ import pytest
 import pytest_asyncio
 import sys
 import os
+import uuid
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 from alembic.config import Config
 from alembic import command
 
@@ -37,13 +39,13 @@ os.environ.setdefault("S3_REGION", "us-east-1")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 try:
-    from services.api.app.main import app
-    from services.api.app.db.session import Base, get_db
-    from services.api.app.core.config import get_settings
-except ModuleNotFoundError:
     from app.main import app
     from app.db.session import Base, get_db
     from app.core.config import get_settings
+except ModuleNotFoundError:
+    from services.api.app.main import app
+    from services.api.app.db.session import Base, get_db
+    from services.api.app.core.config import get_settings
 
 # ---------------------------------------------------------------------------
 # Test engine + session factory
@@ -52,7 +54,7 @@ TEST_DATABASE_URL = to_async_db_url(
     os.environ.get("DATABASE_URL", "postgresql://cymatic:cymatic@localhost:5432/cymatic")
 )
 
-engine = create_async_engine(TEST_DATABASE_URL, echo=False, pool_pre_ping=True)
+engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
 TestingSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -97,20 +99,52 @@ async def db_session(setup_db) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.models.project import Project, ProjectStatus
 from app.core.security import get_password_hash, create_access_token
+from cymatic_shared.agents.intake_agent import IntakeResult
+from cymatic_shared.agents.clarification_agent import ClarificationResult
+from cymatic_shared.agents.clarification_agent import ClarificationQuestion
+
+
+@pytest.fixture(autouse=True)
+def deterministic_agent_results(monkeypatch):
+    """Keep endpoint tests deterministic and independent of live LLM providers."""
+    async def intake(prompt, context=None):
+        return IntakeResult(
+            detected_domain="real_estate",
+            objective=prompt,
+            missing_fields=["bedrooms"],
+            suggested_questions=["How many bedrooms are required?"],
+            extracted_entities={},
+            confidence=0.95,
+        )
+
+    async def clarify(domain, current_answers, new_answers):
+        return ClarificationResult(
+            questions=[],
+            updated_fields=dict(new_answers),
+            ready_for_generation=True,
+            completion_percentage=1.0,
+        )
+
+    monkeypatch.setattr("app.api.v1.endpoints.specs.process_intake", intake)
+    monkeypatch.setattr("app.api.v1.endpoints.specs.process_clarification_answers", clarify)
 
 
 @pytest_asyncio.fixture
 async def test_user(db_session):
+    organization = Organization(name="Fixture Organization", plan="free")
+    db_session.add(organization)
+    await db_session.flush()
     """Fixture user — uses a unique email to avoid collision with test_register_user."""
     user = User(
-        email="fixture@example.com",
+        email=f"fixture-{uuid.uuid4().hex[:10]}@example.com",
         name="Fixture User",
         hashed_password=get_password_hash("testpass123"),
         role=UserRole.CREATOR,
-        organization_id=1,
+        organization_id=organization.id,
         is_active=True,
     )
     db_session.add(user)

@@ -110,18 +110,33 @@ async def test_intake_prompt(client, auth_headers, test_project):
     data = response.json()
     assert "detected_domain" in data
     assert "suggested_questions" in data
+    assert data["run_id"].startswith("run_")
+
+    status_response = await client.get(
+        f"/v1/projects/{test_project.id}/generation-runs/{data['run_id']}",
+        headers=auth_headers,
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "needs_clarification"
 
 
 @pytest.mark.asyncio
 async def test_clarify_requirements(client, auth_headers, test_project):
+    intake = await client.post(
+        f"/v1/projects/{test_project.id}/intake",
+        json={"prompt": "Create a modern 3-bedroom apartment"},
+        headers=auth_headers,
+    )
+    run_id = intake.json()["run_id"]
     response = await client.post(
         f"/v1/projects/{test_project.id}/clarify",
-        json={"answers": {"style": "modern", "bedrooms": "3"}},
+        json={"answers": {"style": "modern", "bedrooms": "3"}, "run_id": run_id},
         headers=auth_headers,
     )
     assert response.status_code == 200
     data = response.json()
     assert "updated_fields" in data
+    assert data["run_id"] == run_id
 
 
 @pytest.mark.asyncio
@@ -163,4 +178,5 @@ async def test_unauthorized_access(client, auth_headers, test_project):
         f"/v1/projects/{test_project.id}",
         headers={"Authorization": f"Bearer {other_token}"},
     )
-    assert response.status_code == 403
+    # Cross-organization resources are intentionally hidden to avoid leaking IDs.
+    assert response.status_code == 404

@@ -36,6 +36,7 @@ export interface IntakeResult {
   suggested_questions: string[]
   extracted_entities: Record<string, any>
   confidence: number
+  run_id?: string
 }
 
 export interface ClarifyResult {
@@ -43,6 +44,7 @@ export interface ClarifyResult {
   ready_for_generation: boolean
   completion_percentage: number
   remaining_questions: ClarificationQuestion[]
+  run_id?: string
 }
 
 export interface ClarificationQuestion {
@@ -64,6 +66,22 @@ export interface JobStatus {
   job_id: string
   status: string
   message?: string
+  result?: Record<string, any>
+  error?: string
+}
+
+export interface GenerationRun {
+  id: string
+  project_id: number
+  stage: string
+  status: string
+  progress: number
+  intake?: Record<string, any>
+  clarification: Record<string, any>
+  error?: Record<string, any>
+  result?: Record<string, any>
+  created_at: string
+  updated_at?: string
 }
 
 export interface StreamSession {
@@ -77,11 +95,16 @@ export interface StreamSession {
 }
 
 export interface Asset {
-  id: string
-  filename: string
-  content_type: string
-  size: number
-  url: string
+  id: number
+  organization_id: number
+  project_id?: number
+  type: string
+  storage_key: string
+  status: string
+  metadata_json: Record<string, any>
+  filename?: string
+  content_type?: string
+  size?: number
   created_at: string
 }
 

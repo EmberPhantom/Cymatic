@@ -54,7 +54,6 @@ class RealEstatePipeline:
         "domain_expert",
         "asset_selection",
         "validation",
-        "scene_package",
     ]
     
     def __init__(self):
@@ -201,18 +200,9 @@ class RealEstatePipeline:
                         error="Final validation failed"
                     )
                 
-            elif stage == "scene_package":
-                logger.info("pipeline_stage_start", stage="scene_package", project_id=input_data.project_id)
-                spec_version = 1
-                result.scene_package = generate_scene_package(
-                    spec=result.architect.spec,
-                    spec_version=spec_version,
-                    asset_manifest=result.assets.manifest.model_dump() if result.assets else {}
-                )
-            
             return PipelineResult(
                 spec=result.architect.spec if result.architect else None,
-                scene_package=result.scene_package,
+                scene_package=None,
                 intake=result.intake,
                 clarification=result.clarification,
                 research=result.research,
