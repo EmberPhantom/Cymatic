@@ -1,0 +1,42 @@
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (tag name)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Production (placeholder)
+        run: |
+          echo "Deploying to production environment..."
+          echo "Version: ${{ github.event.release.tag_name || github.event.inputs.version }}"
+          echo "This would typically:"
+          echo "  1. Verify release artifacts"
+          echo "  2. Build and push production Docker images"
+          echo "  3. Update Kubernetes manifests / Docker Compose"
+          echo "  4. Apply to production cluster with blue/green or rolling deploy"
+          echo "  5. Run production smoke tests"
+          echo "  6. Monitor health checks"
+          echo "  7. Notify team and update status page"
+          echo ""
+          echo "Production deployment simulated successfully!"

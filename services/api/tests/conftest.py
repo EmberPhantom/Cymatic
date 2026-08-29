@@ -10,11 +10,12 @@ import pytest
 import pytest_asyncio
 import sys
 import os
-import subprocess
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from alembic.config import Config
+from alembic import command
 
 from cymatic_shared.utils import to_async_db_url
 
@@ -74,26 +75,11 @@ app.dependency_overrides[get_db] = override_get_db
 async def setup_db():
     """Apply Alembic migrations only. No create_all fallback."""
     alembic_dir = os.path.join(os.path.dirname(__file__), '..')
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from alembic.config import CommandLine; CommandLine(prog='alembic').main()",
-            "-c",
-            "alembic.ini",
-            "upgrade",
-            "head",
-        ],
-        cwd=alembic_dir,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "DATABASE_URL": TEST_DATABASE_URL.replace("+asyncpg", "")},
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Alembic migration failed (exit {result.returncode}):\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+    alembic_cfg = Config(os.path.join(alembic_dir, "alembic.ini"))
+    # Use sync URL for alembic
+    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "")
+    alembic_cfg.set_main_option("sqlalchemy.url", sync_url)
+    command.upgrade(alembic_cfg, "head")
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

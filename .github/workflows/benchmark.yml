@@ -1,0 +1,212 @@
+name: Performance Benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/**"
+      - "apps/web/**"
+      - "infra/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/**"
+      - "apps/web/**"
+      - "infra/**"
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"  # Daily at 4 AM
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-benchmark:
+    name: API Performance Benchmark
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cymatic
+          POSTGRES_PASSWORD: cymatic
+          POSTGRES_DB: cymatic_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      minio:
+        image: minio/minio:latest
+        command: server /data --console-address ":9001"
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/api/requirements.txt
+
+      - name: Cache Python venv
+        uses: actions/cache@v4
+        with:
+          path: services/api/.venv
+          key: ${{ runner.os }}-api-venv-${{ hashFiles('services/api/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-api-venv-
+
+      - name: Install dependencies
+        run: |
+          cd services/api
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+          pip install -e ../../packages/cymatic-shared
+          pip install pytest pytest-asyncio pytest-benchmark pytest-cov
+
+      - name: Run API Benchmarks
+        env:
+          JWT_SECRET_KEY: test-secret-key-for-benchmark-that-is-at-least-32-chars
+          DATABASE_URL: postgresql://cymatic:cymatic@localhost:5432/cymatic_test
+          REDIS_URL: redis://localhost:6379/0
+          S3_ENDPOINT: http://localhost:9000
+        run: |
+          cd services/api
+          .venv/bin/pytest tests/ -v --benchmark-only --benchmark-json=benchmark-results.json \
+            --benchmark-min-rounds=10 --benchmark-warmup=true
+
+      - name: Upload Benchmark Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-benchmark-results
+          path: services/api/benchmark-results.json
+
+      - name: Comment Benchmark Results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const results = JSON.parse(fs.readFileSync('services/api/benchmark-results.json', 'utf8'));
+            
+            let comment = '## API Benchmark Results\n\n';
+            comment += '| Test | Mean (ms) | Median (ms) | StdDev | Rounds |\n';
+            comment += '|------|-----------|-------------|--------|--------|\n';
+            
+            for (const bench of results.benchmarks) {
+              const mean = (bench.stats.mean * 1000).toFixed(2);
+              const median = (bench.stats.median * 1000).toFixed(2);
+              const stddev = (bench.stats.stddev * 1000).toFixed(2);
+              comment += `| ${bench.name} | ${mean} | ${median} | ${stddev} | ${bench.stats.rounds} |\n`;
+            }
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment
+            });
+
+  frontend-bundle-size:
+    name: Frontend Bundle Size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: apps/web/node_modules
+          key: ${{ runner.os }}-web-node-${{ hashFiles('apps/web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-web-node-
+
+      - run: cd apps/web && npm ci
+
+      - name: Build Production Bundle
+        run: cd apps/web && npm run build
+
+      - name: Analyze Bundle Size
+        run: |
+          cd apps/web
+          npx --yes next-bundle-analyzer || true
+          # Get .next/static/chunks sizes
+          du -sh .next/static/chunks/* 2>/dev/null | sort -hr | head -20
+
+      - name: Upload Bundle Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-bundle-report
+          path: apps/web/.next/
+          retention-days: 7
+
+  docker-image-size:
+    name: Docker Image Size Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        run: docker build -t cymatic/api:benchmark ./services/api
+
+      - name: Build Worker image
+        run: docker build -t cymatic/worker:benchmark ./services/worker
+
+      - name: Build LLM Router image
+        run: docker build -t cymatic/llm-router:benchmark ./services/llm-router
+
+      - name: Build Frontend image
+        run: docker build -t cymatic/web:benchmark ./apps/web
+
+      - name: Check Image Sizes
+        run: |
+          echo "## Docker Image Sizes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
+          for img in cymatic/api:benchmark cymatic/worker:benchmark cymatic/llm-router:benchmark cymatic/web:benchmark; do
+            size=$(docker image inspect $img --format '{{.Size}}' | numfmt --to=iec)
+            echo "| $img | $size |" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Alert on Large Images
+        run: |
+          for img in cymatic/api:benchmark cymatic/worker:benchmark cymatic/llm-router:benchmark cymatic/web:benchmark; do
+            size=$(docker image inspect $img --format '{{.Size}}')
+            # Alert if > 1GB
+            if [ $size -gt 1073741824 ]; then
+              echo "::warning::$img is larger than 1GB ($size bytes)"
+            fi
+          done
