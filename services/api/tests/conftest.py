@@ -11,6 +11,7 @@ import pytest_asyncio
 import sys
 import os
 import uuid
+import asyncio
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -76,10 +77,22 @@ app.dependency_overrides[get_db] = override_get_db
 @pytest_asyncio.fixture(scope="session")
 async def setup_db():
     """Apply Alembic migrations only. No create_all fallback."""
+    # Wait for PostgreSQL to be ready
+    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "")
+    for attempt in range(30):
+        try:
+            import asyncpg
+            conn = await asyncpg.connect(sync_url)
+            await conn.close()
+            break
+        except Exception:
+            if attempt == 29:
+                raise RuntimeError("PostgreSQL not ready after 30s")
+            await asyncio.sleep(1)
+    
     alembic_dir = os.path.join(os.path.dirname(__file__), '..')
     alembic_cfg = Config(os.path.join(alembic_dir, "alembic.ini"))
     # Use sync URL for alembic
-    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "")
     alembic_cfg.set_main_option("sqlalchemy.url", sync_url)
     command.upgrade(alembic_cfg, "head")
     yield

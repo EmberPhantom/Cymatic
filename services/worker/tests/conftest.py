@@ -1,12 +1,104 @@
-"""Worker test configuration - mock LLM client for test isolation.
+"""Worker test configuration - database setup and LLM mocking.
 
-Patches call_llm_json at each consumer namespace (not at the definition site)
-and returns realistic per-domain data so the LLM code paths are exercised.
+Provides:
+  - PostgreSQL test database with alembic migrations
+  - Redis + MinIO environment config
+  - LLM client mocking for test isolation
 """
 import json as _json
+import os
+import sys
 import pytest
+import pytest_asyncio
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, patch
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+from alembic.config import Config
+from alembic import command
 
+from cymatic_shared.utils import to_async_db_url
+
+# ---------------------------------------------------------------------------
+# Environment defaults — must be set BEFORE importing any app module
+# ---------------------------------------------------------------------------
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-testing-only-32charslong")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://cymatic:cymatic@localhost:5432/cymatic_test")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("S3_ENDPOINT", "http://localhost:9000")
+os.environ.setdefault("S3_ACCESS_KEY", "minioadmin")
+os.environ.setdefault("S3_SECRET_KEY", "minioadmin")
+os.environ.setdefault("S3_BUCKET_NAME", "cymatic")
+os.environ.setdefault("S3_REGION", "us-east-1")
+os.environ.setdefault("LLM_ROUTER_URL", "http://localhost:8001")
+
+# ---------------------------------------------------------------------------
+# Path setup + app imports
+# ---------------------------------------------------------------------------
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+try:
+    from services.worker.app.main import app
+    from services.worker.app.db.session import get_db
+    from services.worker.app.core.config import get_settings
+    from cymatic_shared.db import Base
+except ModuleNotFoundError:
+    from app.main import app
+    from app.db.session import get_db
+    from app.core.config import get_settings
+    from cymatic_shared.db import Base
+
+# ---------------------------------------------------------------------------
+# Test engine + session factory
+# ---------------------------------------------------------------------------
+TEST_DATABASE_URL = to_async_db_url(
+    os.environ.get("DATABASE_URL", "postgresql://cymatic:cymatic@localhost:5432/cymatic")
+)
+
+engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
+TestingSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def override_get_db():
+    async with TestingSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+app.dependency_overrides[get_db] = override_get_db
+
+
+# ---------------------------------------------------------------------------
+# Database Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture(scope="session")
+async def setup_db():
+    """Apply Alembic migrations only. No create_all fallback."""
+    # Use API's alembic.ini since worker shares the same database schema
+    alembic_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'api')
+    alembic_cfg = Config(os.path.join(alembic_dir, "alembic.ini"))
+    # Use sync URL for alembic
+    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "")
+    alembic_cfg.set_main_option("sqlalchemy.url", sync_url)
+    command.upgrade(alembic_cfg, "head")
+    yield
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest_asyncio.fixture
+async def db_session(setup_db) -> AsyncGenerator[AsyncSession, None]:
+    async with TestingSessionLocal() as session:
+        yield session
+
+
+# ---------------------------------------------------------------------------
+# LLM Mock Fixtures
+# ---------------------------------------------------------------------------
 
 def _intake_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None):
     """Return intake-appropriate mock data based on prompt content."""
