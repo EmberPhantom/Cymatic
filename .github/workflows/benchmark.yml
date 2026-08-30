@@ -80,22 +80,22 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd services/api
-          python -m venv .venv
-          source .venv/bin/activate
-          pip install -r requirements.txt
-          pip install -e ../../packages/cymatic-shared
+          python -m venv services/api/.venv
+          source services/api/.venv/bin/activate
+          pip install -r services/api/requirements.txt
+          pip install -e packages/cymatic-shared
           pip install pytest pytest-asyncio pytest-benchmark pytest-cov
 
       - name: Run API Benchmarks
         env:
+          PYTHONPATH: ${{ github.workspace }}
           JWT_SECRET_KEY: test-secret-key-for-benchmark-that-is-at-least-32-chars
           DATABASE_URL: postgresql://cymatic:cymatic@localhost:5432/cymatic_test
           REDIS_URL: redis://localhost:6379/0
           S3_ENDPOINT: http://localhost:9000
         run: |
-          cd services/api
-          .venv/bin/pytest tests/ -v --benchmark-only --benchmark-json=benchmark-results.json \
+          source services/api/.venv/bin/activate
+          .venv/bin/pytest services/api/tests/ -v --benchmark-only --benchmark-json=services/api/benchmark-results.json \
             --benchmark-min-rounds=10 --benchmark-warmup=true
 
       - name: Upload Benchmark Results
