@@ -2,7 +2,8 @@ name: CYMATIC Semantic Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,46 @@
+# Gitleaks configuration for CYMATIC
+# https://github.com/gitleaks/gitleaks
+
+[allowlist]
+description = "Allowlisted paths and patterns"
+paths = [
+    "(?i)package-lock\\.json",
+    "(?i)yarn\\.lock",
+    "(?i)\\.gitleaks\\.toml",
+    "(?i)\\.env\\.example",
+    "(?i)\\.github/workflows/.*",
+    "scripts/.*",
+    "docs/.*",
+    "infra/.*",
+    "schemas/.*",
+    "docker-compose\\.yml",
+    "docker-compose\\.dev\\.yml",
+    "Dockerfile",
+    "Dockerfile\\.",
+    "Makefile",
+]
+
+[allowlist]
+description = "Test files and fixtures"
+regexes = [
+    """(?i)test.*secret.*""",
+    """(?i)mock.*secret.*""",
+    """(?i)fake.*secret.*""",
+    """(?i)example.*secret.*""",
+    """(?i)placeholder.*secret.*""",
+    """(?i)dummy.*secret.*""",
+]
+
+[allowlist]
+description = "Known test constants"
+regexes = [
+    """test-secret-key-for-testing-only-32charslong""",
+    """test-secret-key-for-ci-that-is-at-least-32-chars""",
+    """test-secret-key-for-compose-that-is-at-least-32-chars""",
+    """test-secret-key-for-benchmark-that-is-at-least-32-chars""",
+    """test-admin-key-for-ci""",
+    """test-admin-key-for-compose""",
+    """minioadmin""",
+    """cymatic""",
+    """cymatic_test""",
+]

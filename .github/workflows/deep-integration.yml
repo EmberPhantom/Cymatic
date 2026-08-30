@@ -61,7 +61,11 @@ jobs:
 
       - name: Wait for test containers
         working-directory: infra/docker
-        run: docker compose --profile test wait test-api test-worker test-llm-router
+        run: |
+          # Wait for test-db and test-migrate first
+          docker compose --profile test wait test-db test-migrate
+          # Then wait for test services
+          docker compose --profile test wait test-api test-worker test-llm-router
 
       - name: Verify test container exit codes
         working-directory: infra/docker
