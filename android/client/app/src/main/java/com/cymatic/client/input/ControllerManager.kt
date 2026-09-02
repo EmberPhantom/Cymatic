@@ -2,13 +2,13 @@ package com.cymatic.client.input
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.ContextCompat
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.hardware.input.InputManager
+import android.hardware.input.InputManager as AndroidInputManager
 import android.os.Build
 import android.util.Log
 import android.view.InputDevice
@@ -18,7 +18,11 @@ import kotlinx.coroutines.channels.Channel
 
 class ControllerManager(private val context: Context) {
 
-    private val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+    private val bluetoothAdapter = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+    } else {
+        BluetoothAdapter.getDefaultAdapter()
+    }
     private var connectedController: BluetoothDevice? = null
     private var inputDevice: InputDevice? = null
     
@@ -59,9 +63,12 @@ class ControllerManager(private val context: Context) {
                 addAction(BluetoothDevice.ACTION_BATTERY_STATE_CHANGED)
             }
         }
-        
-        context.registerReceiver(bluetoothReceiver, filter, 
-            ContextCompat.getSystemService(context, android.content.pm.PermissionManager::class.java)?.getPermission("android.permission.BLUETOOTH_CONNECT") == PackageManager.PERMISSION_GRANTED)
+        try {
+            context.registerReceiver(bluetoothReceiver, filter)
+        } catch (e: SecurityException) {
+            Log.w("ControllerManager", "Bluetooth permission not granted, skip receiver")
+        }
+    }
     }
     
     private val bluetoothReceiver = object : BroadcastReceiver() {
@@ -78,8 +85,9 @@ class ControllerManager(private val context: Context) {
                         onControllerDisconnected()
                     }
                 }
-                BluetoothDevice.ACTION_BATTERY_LEVEL_CHANGED -> {
+                BluetoothDevice.ACTION_BATTERY_LEVEL_CHANGED, BluetoothDevice.ACTION_BATTERY_STATE_CHANGED -> {
                     val level = intent?.getIntExtra(BluetoothDevice.EXTRA_BATTERY_LEVEL, -1)
+                        ?: intent?.getIntExtra("android.bluetooth.device.extra.BATTERY_LEVEL", -1) ?: -1
                     if (level != -1) {
                         batteryLevel = level
                     }
@@ -98,11 +106,10 @@ class ControllerManager(private val context: Context) {
     }
     
     private fun isControllerDevice(device: BluetoothDevice): Boolean {
-        // Check if device is a VR controller
         val name = device.name?.lowercase() ?: ""
         return name.contains("controller") || name.contains("daydream") || 
                name.contains("gear vr") || name.contains("oculus") ||
-               name.contains("vr") || device.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.PERIPHERAL
+               name.contains("vr")
     }
     
     private fun onControllerConnected(device: BluetoothDevice) {
@@ -135,7 +142,7 @@ class ControllerManager(private val context: Context) {
     // Handle input from Android's InputDevice API (for Daydream, etc.)
     fun onGenericMotionEvent(event: MotionEvent): Boolean {
         val deviceId = event.deviceId
-        inputDevice = context.getSystemService(Context.INPUT_SERVICE) as InputManager
+        inputDevice = (context.getSystemService(Context.INPUT_SERVICE) as AndroidInputManager)
             .getInputDevice(deviceId)
         
         if (inputDevice == null) return false
@@ -145,9 +152,9 @@ class ControllerManager(private val context: Context) {
         touchpadX = axes.first
         touchpadY = axes.second
         
-        // Touchpad
-        val touchX = event.getAxisValue(MotionEvent.AXIS_TOUCH_X)
-        val touchY = event.getAxisValue(MotionEvent.AXIS_TOUCH_Y)
+        // Touchpad - use AXIS_X/Y for touchpad fallback
+        val touchX = event.getAxisValue(MotionEvent.AXIS_X)
+        val touchY = event.getAxisValue(MotionEvent.AXIS_Y)
         if (touchX != 0f || touchY != 0f) {
             touchpadTouched = true
             touchpadDeltaX = touchX - touchpadX
