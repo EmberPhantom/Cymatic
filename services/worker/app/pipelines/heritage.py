@@ -12,6 +12,7 @@ from app.agents.composer_agent import compose_scene, ComposerResult
 from app.agents.validation_agent import validate_simulation_spec, ValidationAgentResult
 from app.agents.scene_package import generate_scene_package, ScenePackage
 from app.core.queue import Job, JobStatus
+from app.pipelines.heritage_templates import create_heritage_spec_from_template, HeritageTemplateLibrary
 import structlog
 
 logger = structlog.get_logger()
@@ -107,16 +108,24 @@ class HeritagePipeline:
             # Stage 4: Apply heritage template
             template = self.HERITAGE_TEMPLATES.get(site_type, self.HERITAGE_TEMPLATES["courtyard"])
             
-            # Stage 5: Architect - Create spec with template
+            # Stage 5: Architect - Create spec with template (use full library if available)
             logger.info("pipeline_stage_start", stage="architect", project_id=input_data.project_id)
             clarification_data = result.clarification.updated_fields if result.clarification else {}
-            result.architect = await create_simulation_spec(
-                domain=result.intake.detected_domain,
-                objective=input_data.prompt,
-                intake_data={**result.intake.extracted_entities, "site_type": site_type, "template": template},
-                clarification_data=clarification_data,
-                context=input_data.context
-            )
+            # If template_id provided or site_type matches library, use full template library for richer heritage spec
+            template_id = (input_data.context or {}).get("template_id") or clarification_data.get("template_id")
+            if template_id and template_id in HeritageTemplateLibrary.TEMPLATES:
+                # Full library path includes courtyard_sequence radial fixes
+                spec = create_heritage_spec_from_template(template_id, f"Project {input_data.project_id}", {**clarification_data, "site_type": site_type})
+                from app.agents.architect_agent import ArchitectResult
+                result.architect = ArchitectResult(spec=spec, prompt=input_data.prompt, domain="heritage", used_fallback=False)
+            else:
+                result.architect = await create_simulation_spec(
+                    domain=result.intake.detected_domain,
+                    objective=input_data.prompt,
+                    intake_data={**result.intake.extracted_entities, "site_type": site_type, "template": template},
+                    clarification_data=clarification_data,
+                    context=input_data.context
+                )
             
             # Stage 6: Composer - Spatial layout
             logger.info("pipeline_stage_start", stage="composer", project_id=input_data.project_id)
