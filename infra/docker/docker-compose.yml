@@ -277,7 +277,7 @@ services:
   test-migrate-worker:
     build:
       context: ../..
-      dockerfile: services/api/Dockerfile
+      dockerfile: services/worker/Dockerfile
       target: runtime
     entrypoint: []
     command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]

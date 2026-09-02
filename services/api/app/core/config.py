@@ -1,6 +1,9 @@
 from functools import lru_cache
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
+
+_ENV_FILE = str(Path(__file__).resolve().parents[3] / ".env")
 
 
 class Settings(BaseSettings):
@@ -76,9 +79,10 @@ class Settings(BaseSettings):
         return v
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",
     )
 
 

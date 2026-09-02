@@ -14,14 +14,17 @@ const nextConfig = {
     ],
   },
   async rewrites() {
+    const apiBase = process.env.API_INTERNAL_URL
+      || (process.env.NODE_ENV === 'production' ? 'http://api:8000' : process.env.NEXT_PUBLIC_API_URL)
+      || 'http://localhost:8000';
     return [
       {
-        source: '/dashboard/projects/:path*',
-        destination: '/projects/:path*',
+        source: '/v1/:path*',
+        destination: `${apiBase}/v1/:path*`,
       },
       {
         source: '/api/:path*',
-        destination: `${process.env.API_INTERNAL_URL || (process.env.NODE_ENV === 'production' ? 'http://api:8000' : process.env.NEXT_PUBLIC_API_URL) || 'http://localhost:8000'}/:path*`,
+        destination: `${apiBase}/:path*`,
       },
     ];
   },

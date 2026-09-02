@@ -11,6 +11,11 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup validation for required env vars
+    if not settings.JWT_SECRET_KEY or len(settings.JWT_SECRET_KEY) < 32:
+        raise RuntimeError("JWT_SECRET_KEY must be set and >=32 chars")
+    if not settings.DATABASE_URL or "localhost" in settings.DATABASE_URL and settings.ENVIRONMENT == "production":
+        raise RuntimeError("DATABASE_URL must be configured for production")
     await init_db()
     yield
     await close_db()

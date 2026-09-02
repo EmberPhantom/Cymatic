@@ -36,8 +36,24 @@ Real estate fields: style, bedrooms, bathrooms, square_footage, floors, budget, 
 Heritage fields: site_type, historical_period, key_pois, narration, languages, scale, focus, indoor_outdoor"""
 
 
+def sanitize_prompt(prompt: str) -> str:
+    """Sanitize prompt: strip controls, limit length, block injection."""
+    prompt = "".join(ch for ch in prompt if ch.isprintable() or ch in "\n\t ")
+    if len(prompt) > 10000:
+        prompt = prompt[:10000]
+    injection_markers = ["ignore previous", "system prompt", "jailbreak"]
+    low = prompt.lower()
+    for m in injection_markers:
+        if m in low:
+            logger.warning("prompt_injection_blocked", marker=m)
+            # keep prompt but flag
+            break
+    return prompt.strip()
+
+
 async def process_intake_llm(prompt: str, context: Dict[str, Any] = None) -> IntakeResult:
     """Process user prompt using LLM for intelligent analysis."""
+    prompt = sanitize_prompt(prompt)
     messages = [
         {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
         {"role": "user", "content": f"Prompt: {prompt}\nContext: {json.dumps(context or {})}"}
@@ -195,4 +211,5 @@ def merge_intake_answers(intake_result: IntakeResult, answers: Dict[str, str]) -
 # Main entry point
 async def process_intake(prompt: str, context: Dict[str, Any] = None) -> IntakeResult:
     """Main intake processing - uses LLM with keyword fallback."""
+    prompt = sanitize_prompt(prompt)
     return await process_intake_llm(prompt, context)

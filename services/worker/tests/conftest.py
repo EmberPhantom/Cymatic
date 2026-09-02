@@ -78,8 +78,7 @@ app.dependency_overrides[get_db] = override_get_db
 @pytest_asyncio.fixture(scope="session")
 async def setup_db():
     """Apply Alembic migrations only. No create_all fallback."""
-    # Use API's alembic.ini since worker shares the same database schema
-    alembic_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'api')
+    alembic_dir = os.path.join(os.path.dirname(__file__), '..')
     alembic_cfg = Config(os.path.join(alembic_dir, "alembic.ini"))
     # Use sync URL for alembic
     sync_url = TEST_DATABASE_URL.replace("+asyncpg", "")

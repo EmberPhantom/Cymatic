@@ -3,8 +3,11 @@ import httpx
 import json
 from typing import Dict, List, Any, Optional
 import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 
 logger = structlog.get_logger()
+
+_RETRYABLE = (httpx.TimeoutException, httpx.ConnectError, httpx.ReadTimeout)
 
 # Lazy-loaded settings to avoid import-time failures
 _settings = None
@@ -38,6 +41,13 @@ class LLMRouterClient:
     async def close(self):
         await self.client.aclose()
 
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(_RETRYABLE),
+        before_sleep=before_sleep_log(logger, 20),
+    )
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -50,7 +60,7 @@ class LLMRouterClient:
         organization_id: Optional[str] = None,
         project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Call chat completions endpoint."""
+        """Call chat completions endpoint with retry."""
         request = {
             "messages": messages,
             "task_type": task_type,
@@ -67,6 +77,9 @@ class LLMRouterClient:
             f"{self.base_url}/v1/chat/completions",
             json=request,
         )
+        # Retry on 502/503 gateway errors
+        if response.status_code in (502, 503):
+            raise httpx.ConnectError(f"LLM router {response.status_code}")
         response.raise_for_status()
         return response.json()
 
