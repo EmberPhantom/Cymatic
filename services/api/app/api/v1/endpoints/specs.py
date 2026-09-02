@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.dependencies import get_current_user, require_creator, require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.project import Project, ProjectStatus
 from app.models.simulation_spec import SimulationSpec, SpecStatus
@@ -216,7 +217,7 @@ async def clarify_requirements(
     }
 
 
-@router.post("/{project_id}/generate-spec", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/{project_id}/generate-spec", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(rate_limit("50/minute"))])
 async def generate_spec(
     project_id: int,
     request: SpecGenerateRequest,

@@ -7,6 +7,7 @@ from jose import JWTError
 from app.core.config import get_settings
 from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash, decode_token, revoke_token, is_token_revoked
 from app.core.dependencies import get_current_user, security
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -60,7 +61,7 @@ class OrganizationResponse(BaseModel):
     plan: str
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=Token, dependencies=[Depends(rate_limit("100/minute"))])
 async def login(
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -101,7 +102,7 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str)
     response.set_cookie("cymatic_refresh_token", refresh_token, httponly=True, secure=secure, samesite="lax", max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400, path="/v1/auth")
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit("100/minute"))])
 async def register(
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db),

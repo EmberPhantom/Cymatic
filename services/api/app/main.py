@@ -59,9 +59,45 @@ app.add_middleware(
 app.include_router(api_router, prefix="/v1")
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc):
+    import traceback
+    corr = getattr(request.state, "correlation_id", None) or request.headers.get("X-Correlation-ID", "-")
+    structlog.get_logger().error("unhandled_exception", correlation_id=corr, path=str(request.url), error=str(exc), traceback=traceback.format_exc())
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={"type": "about:blank", "title": "Internal Server Error", "status": 500, "detail": "Unexpected error", "instance": str(request.url), "correlation_id": corr},
+    )
+
+
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "version": settings.APP_VERSION}
+    checks = {"status": "healthy", "api": "healthy", "version": settings.APP_VERSION}
+    # DB check
+    try:
+        from app.db.session import AsyncSessionLocal
+        from sqlalchemy import text
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+        checks["db"] = "healthy"
+    except Exception as e:
+        checks["db"] = f"unhealthy: {e}"
+        checks["status"] = "degraded"
+        checks["api"] = "degraded"
+    # Redis check
+    try:
+        from app.core.rate_limit import _get_redis
+        r = _get_redis()
+        if r is not None:
+            await r.ping()
+            checks["redis"] = "healthy"
+        else:
+            checks["redis"] = "unknown"
+    except Exception as e:
+        checks["redis"] = f"unhealthy: {e}"
+        checks["status"] = "degraded"
+    return checks
 
 
 @app.get("/metrics")

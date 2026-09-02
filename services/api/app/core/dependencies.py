@@ -76,6 +76,11 @@ async def get_current_user(
             detail="Inactive user",
         )
     
+    # Populate request state for audit middleware
+    request.state.user_id = user.id
+    request.state.organization_id = user.organization_id
+    request.state.user_role = user.role
+    
     return user
 
 
