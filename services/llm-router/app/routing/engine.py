@@ -62,7 +62,7 @@ class RoutingEngine:
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o-mini",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
             ),
             
             # Strong reasoning for spec generation
@@ -85,7 +85,7 @@ class RoutingEngine:
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
             ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.REGULATED}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
@@ -116,7 +116,7 @@ class RoutingEngine:
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
             ),
             
             # Low latency for copilot chat
@@ -139,7 +139,7 @@ class RoutingEngine:
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o-mini",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
             ),
             
             # Embeddings
@@ -217,7 +217,7 @@ class RoutingEngine:
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
             ),
             
             # Asset selection
