@@ -36,7 +36,7 @@ class AudioManager(private val context: Context) {
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .setFlags(AudioAttributes.FLAG_HW_AV_SYNC)
+                .setFlags(AudioAttributes.FLAG_NONE)
                 .build()
         )
         .setOnAudioFocusChangeListener { focusChange ->
@@ -77,7 +77,7 @@ class AudioManager(private val context: Context) {
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setFlags(AudioAttributes.FLAG_HW_AV_SYNC)
+                    .setFlags(AudioAttributes.FLAG_NONE)
                     .build()
             )
             .setAudioFormat(
@@ -97,9 +97,11 @@ class AudioManager(private val context: Context) {
     private fun startPlayback() {
         playbackExecutor.execute {
             while (isPlaying) {
-                val data = jitterBuffer.receiveOrNull()
+                val data = jitterBuffer.tryReceive().getOrNull()
                 if (data != null && audioTrack != null) {
                     audioTrack.write(data, 0, data.size, AudioTrack.WRITE_BLOCKING)
+                } else {
+                    try { Thread.sleep(5) } catch (_: InterruptedException) { break }
                 }
             }
         }
@@ -121,17 +123,15 @@ class AudioManager(private val context: Context) {
     
     fun stop() {
         isPlaying = false
-        audioTrack?.stop()
-        audioTrack?.release()
+        try { audioTrack?.stop() } catch (_: Exception) {}
+        try { audioTrack?.release() } catch (_: Exception) {}
         audioTrack = null
-        
-        audioDecoder?.stop()
-        audioDecoder?.release()
+        try { audioDecoder?.stop() } catch (_: Exception) {}
+        try { audioDecoder?.release() } catch (_: Exception) {}
         audioDecoder = null
-        
-        audioManager.abandonAudioFocusRequest(focusRequest)
-        jitterBuffer.close()
-        playbackExecutor.shutdown()
+        try { audioManager.abandonAudioFocusRequest(focusRequest) } catch (_: Exception) {}
+        try { if (!jitterBuffer.isClosedForSend) jitterBuffer.close() } catch (_: Exception) {}
+        try { playbackExecutor.shutdown() } catch (_: Exception) {}
     }
     
     fun setVolume(volume: Float) {
@@ -151,8 +151,8 @@ class AudioManager(private val context: Context) {
     }
     
     fun dispose() {
-        stop()
-        jitterBuffer.close()
-        playbackExecutor.shutdownNow()
+        try { stop() } catch (_: Exception) {}
+        try { if (!jitterBuffer.isClosedForSend) jitterBuffer.close() } catch (_: Exception) {}
+        try { playbackExecutor.shutdownNow() } catch (_: Exception) {}
     }
 }

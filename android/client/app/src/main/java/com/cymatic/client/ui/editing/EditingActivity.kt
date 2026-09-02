@@ -60,16 +60,20 @@ class EditingActivity : AppCompatActivity() {
     private fun loadSpec() {
         lifecycleScope.launch {
             try {
-                val response = ApiClient.apiService.getSpec(projectId, specId).await()
+                val response = ApiClient.apiService.getSpecById(projectId, specId)
                 
                 if (response.isSuccessful) {
                     val spec = response.body()!!
                     runOnUiThread {
-                        binding.tvSpecTitle.text = spec.payloadJson["metadata"]?.getString("title") ?: "Spec v${spec.version}"
+                        val meta = spec.payloadJson["metadata"] as? Map<String, Any>
+                        binding.tvSpecTitle.text = (meta?.get("title") as? String) ?: "Spec v${spec.version}"
                         binding.tvSpecVersion.text = "Version ${spec.version}"
                         
                         val entities = spec.payloadJson["entities"] as? List<Any> ?: emptyList()
-                        currentEntities = entities.map { it as JSONObject }.toMutableList()
+                        currentEntities = entities.map { 
+                            val map = it as? Map<String, Any> ?: emptyMap<String, Any>()
+                            JSONObject(map as Map<*,*>)
+                        }.toMutableList()
                         updateEntityList()
                     }
                 } else {
@@ -115,7 +119,7 @@ class EditingActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val request = EditRequest(operations = operations)
-                val response = ApiClient.apiService.editSpec(projectId, specId, request).await()
+                val response = ApiClient.apiService.editSpec(projectId, specId, request)
                 
                 if (response.isSuccessful) {
                     val result = response.body()!!

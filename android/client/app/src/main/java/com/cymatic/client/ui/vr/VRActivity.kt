@@ -157,7 +157,7 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
         // Initialize WebRTC with EglBase
         webRTCManager = WebRTCManager(this, eglBase!!)
         
-        apiService = ApiClient.create()
+        apiService = ApiClient.apiService
         preferencesManager = PreferencesManager(this)
         
         // Setup WebRTC callbacks
@@ -217,7 +217,7 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     private fun startStreamingSession() {
         lifecycleScope.launch {
             try {
-                val projectId = preferencesManager.getSelectedProjectId()
+                val projectId = preferencesManager.selectedProjectId ?: 1
                 val deviceInfo = mapOf(
                     "model" to android.os.Build.MODEL,
                     "manufacturer" to android.os.Build.MANUFACTURER,
@@ -226,9 +226,9 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
                     "screen_height" to resources.displayMetrics.heightPixels,
                     "density" to resources.displayMetrics.density
                 )
-                
                 val request = StreamSessionRequest(projectId = projectId, deviceInfo = deviceInfo)
-                val response = apiService.createStreamSession(request).await()
+                
+                val response = apiService.createStreamSession(request)
                 
                 if (response.isSuccessful) {
                     val session = response.body()!!
@@ -251,7 +251,7 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     }
     
     private fun connectToRenderServer(sessionId: String) {
-        val baseUrl = preferencesManager.getSignalingUrl()
+        val baseUrl = preferencesManager.signalingUrl
         val token = preferencesManager.accessToken ?: ""
         val signalingUrl = "${baseUrl}/v1/stream/ws/${sessionId}?token=${token}&type=android"
         webRTCManager.connect(signalingUrl, sessionId)

@@ -260,3 +260,20 @@ data class CreditLedgerResponse(
     @SerializedName("reference_type") val referenceType: String?,
     @SerializedName("created_at") val createdAt: String
 )
+
+data class EditOperation(
+    @SerializedName("operation") val operation: String,
+    @SerializedName("entity_id") val entityId: String,
+    @SerializedName("params") val params: Map<String, Any> = emptyMap()
+)
+
+data class EditRequest(
+    @SerializedName("operations") val operations: List<EditOperation>
+)
+
+data class EditResponse(
+    @SerializedName("success") val success: Boolean,
+    @SerializedName("message") val message: String,
+    @SerializedName("spec_id") val specId: Int? = null,
+    @SerializedName("new_version") val newVersion: Int? = null
+)

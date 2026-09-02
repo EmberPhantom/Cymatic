@@ -28,7 +28,7 @@ class VoiceManager(private val context: Context) {
         audioFormat
     ) * 2
     
-    private val audioChannel = Channel<ByteArray>(100)
+    private var audioChannel = Channel<ByteArray>(100)
     private val scope = CoroutineScope(Dispatchers.IO)
     
     // Callbacks
@@ -48,7 +48,7 @@ class VoiceManager(private val context: Context) {
     
     fun startRecording() {
         if (isRecording) return
-        
+        if (audioChannel.isClosedForSend) audioChannel = Channel(100)
         isRecording = true
         
         audioRecord = AudioRecord(
@@ -78,10 +78,11 @@ class VoiceManager(private val context: Context) {
     
     fun stopRecording() {
         isRecording = false
-        audioRecord?.stop()
-        audioRecord?.release()
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
-        audioChannel.close()
+        // keep channel open for next recording, drain only
+        scope.launch { try { audioChannel.tryReceive().getOrNull() } catch (_: Exception) {} }
     }
     
     private fun sendToSTT(audioData: ByteArray) {
@@ -98,7 +99,7 @@ class VoiceManager(private val context: Context) {
                 val response = ApiClient.apiService.voiceTranscript(
                     sessionId = "", // Would come from current session
                     request
-                ).await()
+                )
                 
                 if (response.isSuccessful) {
                     val voiceResponse = response.body()!!
@@ -133,7 +134,7 @@ class VoiceManager(private val context: Context) {
                             .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
                             .build()
                     )
-                    .setBufferSizeInBytes(audioBytes.size)
+                    .setBufferSizeInBytes(maxOf(audioBytes.size, AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)))
                     .setTransferMode(android.media.AudioTrack.MODE_STATIC)
                     .build()
                 
