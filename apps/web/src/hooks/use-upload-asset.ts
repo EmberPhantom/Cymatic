@@ -5,7 +5,14 @@ export function useUploadAsset(projectId: number) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (file: File) => {
-      const type = file.type.startsWith("image/") ? "image" : file.type.startsWith("audio/") ? "audio" : file.type.includes("model") || /\.(glb|gltf|fbx|obj)$/i.test(file.name) ? "model" : "document"
+      if (file.size > 50 * 1024 * 1024) throw new Error("File too large (max 50MB)")
+      const lower = file.name.toLowerCase()
+      let type: string
+      if (file.type.startsWith("image/")) type = "image"
+      else if (file.type.startsWith("audio/")) type = "audio"
+      else if (/\.(glb|gltf|fbx|obj)$/i.test(lower) || file.type.includes("model") || file.type === "model/gltf-binary") type = "model_3d"
+      else if (/\.(png|jpg|jpeg|webp|hdr|exr)$/i.test(lower)) type = "texture"
+      else type = "other"
       const init = await api.post("/v1/assets/upload/init", {
         filename: file.name,
         content_type: file.type || "application/octet-stream",

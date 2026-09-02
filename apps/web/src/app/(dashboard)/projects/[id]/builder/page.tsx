@@ -203,16 +203,31 @@ export default function BuilderPage() {
             <CardDescription>Answer a few questions to refine your simulation</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {intakeResult.suggested_questions.map((q, i) => (
-              <div key={i} className="space-y-2">
-                <Label>{q}</Label>
-                <Input
-                  placeholder="Your answer..."
-                  value={answers[q] || ""}
-                  onChange={(e) => setAnswers({ ...answers, [q]: e.target.value })}
-                />
-              </div>
-            ))}
+            {(clarifyResult?.remaining_questions?.length ? clarifyResult.remaining_questions : intakeResult.suggested_questions.map((q) => ({ field: q.toLowerCase().includes("style") ? "style" : q.toLowerCase().includes("bedroom") ? "bedrooms" : q.toLowerCase().includes("bathroom") ? "bathrooms" : q.toLowerCase().includes("square") ? "square_footage" : q.toLowerCase().includes("floor") ? "floors" : q.toLowerCase().includes("budget") ? "budget" : q.toLowerCase().includes("furnished") ? "furnished" : q.toLowerCase().includes("outdoor") ? "outdoor_spaces" : q.toLowerCase().includes("heritage") || q.toLowerCase().includes("site_type") ? "site_type" : q, question: typeof q === "string" ? q : (q as any).question || String(q), type: "text", options: [], required: true } as any))).map((q: any, i) => {
+              const field = q.field || q.question || String(q)
+              const question = q.question || String(q)
+              const type = q.type || "text"
+              const options: string[] = q.options || []
+              return (
+                <div key={field + i} className="space-y-2">
+                  <Label>{question} {q.required === false ? "(optional)" : ""}</Label>
+                  {type === "choice" && options.length ? (
+                    <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={answers[field] || ""} onChange={(e) => setAnswers({ ...answers, [field]: e.target.value })}>
+                      <option value="">Select...</option>
+                      {options.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : type === "boolean" ? (
+                    <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={answers[field] || ""} onChange={(e) => setAnswers({ ...answers, [field]: e.target.value })}>
+                      <option value="">Select...</option>
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  ) : (
+                    <Input placeholder="Your answer..." value={answers[field] || ""} onChange={(e) => setAnswers({ ...answers, [field]: e.target.value })} />
+                  )}
+                </div>
+              )
+            })}
             {clarify.isError && (
               <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
                 {clarify.error.message}
