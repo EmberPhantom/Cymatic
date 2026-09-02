@@ -1,13 +1,29 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.Networking;
 using Cysharp.Threading.Tasks;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Cymatic.Pooling;
 using Cymatic.Prefabs;
 using Cymatic.Materials;
 using Cymatic.Navigation;
+
+public class Vector3Converter : JsonConverter<Vector3>
+{
+    public override Vector3 ReadJson(JsonReader reader, Type objectType, Vector3 existingValue, bool hasExistingValue, JsonSerializer serializer)
+    {
+        var arr = JArray.Load(reader);
+        if (arr.Count >= 3) return new Vector3((float)arr[0], (float)arr[1], (float)arr[2]);
+        return Vector3.zero;
+    }
+    public override void WriteJson(JsonWriter writer, Vector3 value, JsonSerializer serializer)
+    {
+        writer.WriteStartArray(); writer.WriteValue(value.x); writer.WriteValue(value.y); writer.WriteValue(value.z); writer.WriteEndArray();
+    }
+}
 
 namespace Cymatic
 {
@@ -48,7 +64,9 @@ namespace Cymatic
                 }
                 
                 var json = request.downloadHandler.text;
-                var package = JsonConvert.DeserializeObject<CymaticScenePackage>(json);
+                var settings = new JsonSerializerSettings();
+                settings.Converters.Add(new Vector3Converter());
+                var package = JsonConvert.DeserializeObject<CymaticScenePackage>(json, settings);
                 return package;
             }
         }
@@ -111,6 +129,7 @@ namespace Cymatic
             go.transform.localPosition = entity.position;
             go.transform.localRotation = Quaternion.Euler(entity.rotation);
             go.transform.localScale = entity.scale;
+            if (entity.type == "room" || entity.type == "floor" || entity.type == "wall") go.isStatic = true;
             
             // Add components
             foreach (var comp in entity.components)
@@ -146,18 +165,23 @@ namespace Cymatic
         
         private void AddComponent(GameObject go, ComponentData comp)
         {
-            var type = Type.GetType($"UnityEngine.{comp.type}, UnityEngine");
+            var type = Type.GetType($"UnityEngine.{comp.type}, UnityEngine.CoreModule")
+                         ?? Type.GetType($"UnityEngine.{comp.type}, UnityEngine");
+            if (type == null) type = System.AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => a.GetTypes()).FirstOrDefault(t => t.Name == comp.type);
             if (type != null)
             {
                 var component = go.AddComponent(type);
-                // Apply component properties
                 foreach (var prop in comp.properties)
                 {
-                    var field = type.GetField(prop.Key);
-                    if (field != null)
-                    {
-                        field.SetValue(component, Convert.ChangeType(prop.Value, field.FieldType));
-                    }
+                    var field = type.GetField(prop.Key) ?? type.GetProperty(prop.Key)?.GetGetMethod() != null ? type.GetProperty(prop.Key) : null;
+                    try {
+                        var targetType = (field as System.Reflection.FieldInfo)?.FieldType ?? (field as System.Reflection.PropertyInfo)?.PropertyType;
+                        if (targetType != null) {
+                            object val = prop.Value is JToken jt ? jt.ToObject(targetType) : Convert.ChangeType(prop.Value, targetType);
+                            if (field is System.Reflection.FieldInfo fi) fi.SetValue(component, val);
+                            else if (field is System.Reflection.PropertyInfo pi) pi.SetValue(component, val);
+                        }
+                    } catch {}
                 }
             }
         }
@@ -364,9 +388,26 @@ namespace Cymatic
                     mainLight.color = new Color(0.9f, 0.95f, 1f);
                     RenderSettings.ambientLight = new Color(0.2f, 0.25f, 0.3f);
                     break;
+                case "neutral":
+                    mainLight.color = Color.white;
+                    RenderSettings.ambientLight = new Color(0.25f, 0.25f, 0.25f);
+                    break;
+                case "blue_hour":
+                    mainLight.color = new Color(0.6f, 0.7f, 1f);
+                    RenderSettings.ambientLight = new Color(0.15f, 0.18f, 0.25f);
+                    break;
+                case "custom":
+                    if (lighting.custom_lights != null && lighting.custom_lights.Count > 0) {
+                        // custom lights handled below
+                        RenderSettings.ambientLight = Color.white * lighting.ambient_intensity;
+                    }
+                    break;
                 case "golden_hour":
                     mainLight.color = new Color(1f, 0.8f, 0.5f);
                     RenderSettings.ambientLight = new Color(0.4f, 0.3f, 0.2f);
+                    break;
+                default:
+                    mainLight.color = new Color(1f, 0.95f, 0.85f);
                     break;
             }
             

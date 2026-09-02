@@ -105,7 +105,9 @@ namespace Cymatic
             _webRTCStreamer.Configure(renderWidth, renderHeight, targetFPS, minBitrate, maxBitrate);
             _performanceManager.Configure(targetFPS, adaptiveQuality);
             _eventBridge.Configure(backendUrl, renderServerId);
-            _signalingClient.Configure($"ws://localhost:{signalingPort}");
+            var signalingHost = "localhost";
+            try { signalingHost = new System.Uri(backendUrl).Host; } catch {}
+            _signalingClient.Configure($"ws://{signalingHost}:{signalingPort}");
         }
         
         private async void Start()
@@ -127,19 +129,17 @@ namespace Cymatic
         
         private async void HandleOfferReceived(string sessionId, string sdp)
         {
-            _currentSessionId = sessionId;
-            Debug.Log($"[RenderServer] Received offer for session {sessionId}");
-            
-            // Load scene if needed
-            var sessionInfo = await _eventBridge.GetSessionInfo(sessionId);
-            if (sessionInfo != null && !string.IsNullOrEmpty(sessionInfo.scenePackageUrl))
-            {
-                await LoadScene(sessionInfo.scenePackageUrl);
-            }
-            
-            // Create WebRTC answer
-            var answer = await _webRTCStreamer.CreateAnswer(sdp);
-            await _signalingClient.SendAnswer(sessionId, answer);
+            try {
+                _currentSessionId = sessionId;
+                Debug.Log($"[RenderServer] Received offer for session {sessionId}");
+                var sessionInfo = await _eventBridge.GetSessionInfo(sessionId);
+                if (sessionInfo != null && !string.IsNullOrEmpty(sessionInfo.scenePackageUrl))
+                {
+                    await LoadScene(sessionInfo.scenePackageUrl);
+                }
+                var answer = await _webRTCStreamer.CreateAnswer(sdp);
+                await _signalingClient.SendAnswer(sessionId, answer);
+            } catch (System.Exception e) { Debug.LogError($"[RenderServer] HandleOffer error: {e}"); }
         }
         
         private async void HandleAnswerReceived(string sessionId, string sdp)
@@ -196,18 +196,14 @@ namespace Cymatic
         public async UniTask StopStreaming()
         {
             if (!_isStreaming) return;
-            
+            var endedId = _currentSessionId;
             _isStreaming = false;
-            _currentSessionId = null;
-            
             _webRTCStreamer.StopStreaming();
             _inputManager.StopProcessing();
             _performanceManager.StopMonitoring();
-            
-            // Unload scene
             await _sceneLoader.UnloadScene();
-            
-            await _eventBridge.SendEvent(_currentSessionId, "stream_ended", new { });
+            await _eventBridge.SendEvent(endedId, "stream_ended", new { });
+            _currentSessionId = null;
             Debug.Log("[RenderServer] Streaming stopped");
         }
         
