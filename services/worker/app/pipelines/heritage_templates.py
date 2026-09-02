@@ -329,7 +329,7 @@ def create_heritage_spec_from_template(
             ))
     
     # Create paths based on layout
-    if layout == "axial":
+    if layout == "axial" or layout == "courtyard_sequence":
         for i in range(len(nav_points) - 1):
             nav_paths.append(NavigationPath(
                 from_point=nav_points[i].id,
