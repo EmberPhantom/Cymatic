@@ -209,9 +209,9 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
         val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         val magnetic = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
         
-        if (accelerometer != null) sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_FASTEST)
-        if (gyroscope != null) sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_FASTEST)
-        if (magnetic != null) sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_FASTEST)
+        if (accelerometer != null) sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+        if (gyroscope != null) sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME)
+        if (magnetic != null) sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_GAME)
     }
     
     private fun startStreamingSession() {

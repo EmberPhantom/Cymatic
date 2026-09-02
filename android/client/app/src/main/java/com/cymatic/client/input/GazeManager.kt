@@ -33,19 +33,16 @@ class GazeManager(private val context: Context) {
         screenHeight = displayMetrics.heightPixels
     }
     
-    fun update(gazeDirection: FloatArray) {
+    fun update(gazeDirection: FloatArray, dt: Float = 1f/60f) {
         this.gazeDirection = gazeDirection.copyOf()
-        
-        // Project gaze to screen coordinates
         projectToScreen()
-        
-        // Update dwell
         if (currentTarget != null) {
-            dwellTimer += 1f / 60f // Assume 60Hz update
+            dwellTimer += dt
         } else {
             dwellTimer = 0f
         }
     }
+    fun update(gazeDirection: FloatArray) = update(gazeDirection, 1f/60f)
     
     private fun projectToScreen() {
         // Convert gaze direction (normalized) to screen coordinates

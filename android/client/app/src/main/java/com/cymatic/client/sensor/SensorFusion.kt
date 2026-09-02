@@ -68,16 +68,17 @@ class SensorFusion(private val context: Context) : SensorEventListener {
     }
     
     private fun registerSensors() {
-        // Use game rotation vector if available (no magnetic interference)
+        // Use game rotation vector if available (no magnetic interference) - SENSOR_DELAY_GAME (50Hz) for thermal headroom
         if (gameRotationVector != null) {
-            sensorManager.registerListener(this, gameRotationVector, SensorManager.SENSOR_DELAY_FASTEST)
-        } else if (rotationVector != null) {
-            sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_FASTEST)
+            sensorManager.registerListener(this, gameRotationVector, SensorManager.SENSOR_DELAY_GAME)
+            // gameRotationVector already fuses accel+gyro, only magnetometer needed for heading
+            if (magnetic != null) sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_GAME)
+        } else {
+            if (rotationVector != null) sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME)
+            if (magnetic != null) sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_GAME)
         }
-        
-        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_FASTEST)
-        sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_FASTEST)
-        sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_FASTEST)
         
         // Initialize Kalman filters
         orientationKF = KalmanFilterQuaternion()
