@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from app.core.config import get_settings
@@ -65,7 +65,9 @@ async def health_check():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(x_api_key: str = Header(None)):
+    if settings.ADMIN_API_KEY and x_api_key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid admin API key")
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

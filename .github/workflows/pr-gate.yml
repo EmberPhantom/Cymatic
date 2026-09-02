@@ -190,7 +190,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ matrix.working_dir }}/.venv
-          key: ${{ runner.os }}-${{ matrix.service }}-venv-${{ hashFiles(matrix.working_dir + '/requirements.txt') }}
+          key: ${{ runner.os }}-${{ matrix.service }}-venv-${{ hashFiles(format('{0}/requirements.txt', matrix.working_dir)) }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.service }}-venv-
       - name: Install dependencies
@@ -204,6 +204,8 @@ jobs:
         run: .venv/bin/pip-audit -r requirements.txt
       - run: .venv/bin/ruff check app/
       - run: .venv/bin/mypy app/
+      - name: Generate OpenAPI spec
+        run: .venv/bin/python -c "from app.main import app; import json, pathlib; pathlib.Path('openapi.json').write_text(json.dumps(app.openapi(), indent=2)); print('openapi.json generated '+str(len(json.dumps(app.openapi()))))"
       - name: Test ${{ matrix.service }}
         env:
           JWT_SECRET_KEY: ${{ matrix.test_env_jwt }}
@@ -316,7 +318,7 @@ jobs:
       - name: Start frontend
         run: |
           npm run start &
-          sleep 10
+          npx --yes wait-on http://127.0.0.1:3000 --timeout 60000
       - name: Run E2E tests
         env:
           CI: "true"
@@ -340,7 +342,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Build API image
-        run: docker build -t cymatic/api:latest ./services/api
+        run: docker build -f services/api/Dockerfile -t cymatic/api:latest .
       - name: Lint Dockerfiles
         uses: hadolint/hadolint-action@v3.1.0
         with:
@@ -358,9 +360,9 @@ jobs:
         with:
           dockerfile: apps/web/Dockerfile
       - name: Build Worker image
-        run: docker build -t cymatic/worker:latest ./services/worker
+        run: docker build -f services/worker/Dockerfile -t cymatic/worker:latest .
       - name: Build LLM Router image
-        run: docker build -t cymatic/llm-router:latest ./services/llm-router
+        run: docker build -f services/llm-router/Dockerfile -t cymatic/llm-router:latest .
       - name: Build Frontend image
         run: docker build -t cymatic/web:latest ./apps/web
       - name: Verify images

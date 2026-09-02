@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_API: str = "1000/minute"
     RATE_LIMIT_LLM: str = "50/minute"
 
+    ADMIN_API_KEY: str = ""
+
     # CORS
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
