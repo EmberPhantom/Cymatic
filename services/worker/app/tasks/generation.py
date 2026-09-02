@@ -125,11 +125,11 @@ async def generate_spec_task(payload: dict) -> dict:
         )
         next_version = result.scalar_one()
         
-        # Create spec record
+        # Create spec record (serialize with alias for TS/frontend compatibility)
         db_spec = SimulationSpec(
             project_id=project_id,
             version=next_version,
-            payload_json=spec.model_dump(),
+            payload_json=spec.model_dump(by_alias=True),
             status=SpecStatus.VALID,
         )
         db.add(db_spec)

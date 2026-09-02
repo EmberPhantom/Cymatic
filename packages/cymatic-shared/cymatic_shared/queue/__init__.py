@@ -87,7 +87,7 @@ class JobQueue:
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
         job_json = job.model_dump_json()
 
-        await self.client.zadd(queue_key, {job_json: -job.priority.value})
+        await self.client.zadd(queue_key, {job_json: job.priority.value})
         await self.client.hset(
             f"job:{job.id}",
             mapping={"data": job_json, "status": job.status.value, "queue": queue_name},
@@ -132,7 +132,7 @@ class JobQueue:
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
 
         lua_script = """
-        local job = redis.call('ZPOPMAX', KEYS[1])
+        local job = redis.call('ZPOPMIN', KEYS[1])
         if job then
             return job[1]
         end
@@ -210,8 +210,11 @@ class JobQueue:
 
         if job.status == JobStatus.RETRY:
             delay = min(2 ** job.retry_count * 5, 300)
-            await asyncio.sleep(delay)
-            await self.enqueue(job, queue_name or job.type)
+            # Non-blocking delayed requeue
+            async def _delayed_requeue():
+                await asyncio.sleep(delay)
+                await self.enqueue(job, queue_name or job.type)
+            asyncio.create_task(_delayed_requeue())
 
     async def get_queue_stats(self, queue_name: str = "generation") -> dict:
         await self.connect()

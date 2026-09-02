@@ -27,6 +27,7 @@ class Asset(Base):
     __tablename__ = "assets"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     filename = Column(String(255), nullable=False)
     storage_key = Column(String(512), nullable=False)
@@ -36,4 +37,5 @@ class Asset(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
+    organization = relationship("Organization")
     project = relationship("Project", back_populates="assets")

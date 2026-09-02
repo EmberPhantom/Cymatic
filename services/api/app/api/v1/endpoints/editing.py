@@ -8,12 +8,19 @@ from app.db.session import get_db
 from app.models.project import Project, ProjectStatus
 from app.models.simulation_spec import SimulationSpec, SpecStatus
 from app.models.user import User, UserRole
+from app.core.config import get_settings
 from app.core.queue import job_queue, Job, JobPriority, JobStatus
 import structlog
 
 logger = structlog.get_logger()
+settings = get_settings()
 
 router = APIRouter()
+
+
+def _ensure_manual_editing():
+    if not settings.ENABLE_MANUAL_EDITING:
+        raise HTTPException(status_code=403, detail="Manual editing is disabled by feature flag")
 
 
 class EditOperation(BaseModel):
@@ -49,6 +56,7 @@ async def edit_spec(
     db: AsyncSession = Depends(get_db),
 ):
     """Apply edit operations to a simulation specification"""
+    _ensure_manual_editing()
     
     # Verify project access
     result = await db.execute(
@@ -170,6 +178,7 @@ async def patch_entity(
     db: AsyncSession = Depends(get_db),
 ):
     """Patch a single entity in the spec"""
+    _ensure_manual_editing()
     
     result = await db.execute(
         select(SimulationSpec).where(

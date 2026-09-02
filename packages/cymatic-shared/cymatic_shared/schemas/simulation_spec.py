@@ -76,7 +76,7 @@ class NavigationPoint(BaseModel):
 
 class NavigationPath(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    from_point: str = Field(alias="from")
+    from_point: str = Field(alias="from", serialization_alias="from")
     to: str
     type: NavigationPathType = "walk"
     waypoints: Optional[List[List[float]]] = None
@@ -87,6 +87,11 @@ class NavigationPath(BaseModel):
         if isinstance(data, dict):
             if "to" not in data and data.get("to_point") is not None:
                 data["to"] = data["to_point"]
+            if "from" not in data and data.get("from_point") is not None and "from_point" in data:
+                # already has from_point as field name, keep
+                pass
+            if "from_point" in data and "from" not in data:
+                data["from"] = data.pop("from_point")
         return data
 
 
