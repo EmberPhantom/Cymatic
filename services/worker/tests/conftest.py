@@ -24,7 +24,7 @@ from cymatic_shared.utils import to_async_db_url
 # Environment defaults — must be set BEFORE importing any app module
 # ---------------------------------------------------------------------------
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-testing-only-32charslong")
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://cymatic:cymatic@localhost:5432/cymatic_test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://cymatic:cymatic@localhost:5432/cymatic_worker_test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("S3_ENDPOINT", "http://localhost:9000")
 os.environ.setdefault("S3_ACCESS_KEY", "minioadmin")
@@ -188,19 +188,17 @@ def _dispatch_llm(messages, task_type="copilot_chat", **kwargs):
 
 @pytest.fixture(autouse=True)
 def mock_llm_client():
-    """Mock call_llm_json at all three consumer namespaces.
+    """Mock call_llm_json at consumer namespaces.
 
     Patch targets:
       - cymatic_shared.agents.intake_agent.call_llm_json
       - cymatic_shared.agents.clarification_agent.call_llm_json
-      - app.agents.architect_agent.call_llm_json
     """
     mock = AsyncMock(side_effect=_dispatch_llm)
 
     patches = [
         patch("cymatic_shared.agents.intake_agent.call_llm_json", mock),
         patch("cymatic_shared.agents.clarification_agent.call_llm_json", mock),
-        patch("app.agents.architect_agent.call_llm_json", mock),
     ]
 
     for p in patches:
