@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     ADMIN_API_KEY: str = ""
     RATE_LIMIT_API: str = "1000/minute"
+    WORKER_JOB_TIMEOUT_SECONDS: int = 300
     CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     model_config = SettingsConfigDict(

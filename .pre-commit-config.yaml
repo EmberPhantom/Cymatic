@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(services|apps|packages)/.*\.py$
+      - id: ruff-format
+        files: ^(services|apps|packages)/.*\.py$
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        files: ^(services|apps|packages)/.*\.py$
+        args: [--ignore-missing-imports]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+  - repo: local
+    hooks:
+      - id: check-schema-sync
+        name: Check schema sync (staged)
+        entry: python scripts/check_schema_sync.py
+        language: system
+        pass_filenames: false
+        files: ^schemas/.*\.py$
