@@ -75,7 +75,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         createPeerConnection()
         
         // Connect signaling
-        signalingClient = SignalingClient(signalingUrl)
+        signalingClient = SignalingClient(signalingUrl, { currentSessionId }, onError)
         signalingClient?.setCallbacks(
             onOffer = { sdp ->
                 handleOffer(sdp)
@@ -340,7 +340,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     )
     
     // Signaling client inner class
-    private class SignalingClient(private val url: String) {
+    private class SignalingClient(private val url: String, private val sessionProvider: () -> String?, private val errorHandler: ((String)->Unit)?) {
         private var webSocket: okhttp3.WebSocket? = null
         private val client = okhttp3.OkHttpClient()
         
@@ -351,15 +351,17 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         var onEndSession: (() -> Unit)? = null
         var onConnected: ((String) -> Unit)? = null
         var onDisconnected: ((String) -> Unit)? = null
+        var onError: ((String) -> Unit)? = errorHandler
         
         fun connect() {
             val request = okhttp3.Request.Builder().url(url).build()
             val listener = object : okhttp3.WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: okhttp3.Response) {
                     Log.d("Signaling", "WebSocket connected")
+                    this@SignalingClient.webSocket = webSocket
                     // Send register
                     webSocket.send("""{"type":"register","payload":{"server_id":"android-client","type":"android_client"}}""")
-                    onConnected?.invoke(currentSessionId!!)
+                    sessionProvider()?.let { onConnected?.invoke(it) }
                 }
                 
                 override fun onMessage(webSocket: okhttp3.WebSocket, text: String) {
@@ -377,7 +379,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 }
             }
             
-            client.newWebSocket(request, listener)
+            this.webSocket = client.newWebSocket(request, listener)
         }
         
         private fun parseAndHandleMessage(text: String) {

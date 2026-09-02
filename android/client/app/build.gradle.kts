@@ -92,6 +92,8 @@ dependencies {
     kapt("androidx.room:room-compiler:2.6.1")
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.1")
+    // Hand Tracking
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
     // Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
     // DI
