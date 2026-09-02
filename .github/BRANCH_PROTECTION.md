@@ -8,7 +8,7 @@ Configure these settings in the GitHub repository because they cannot be enforce
 - Require at least one approving review and require CODEOWNERS review for owned paths.
 - Dismiss stale approvals when new commits are pushed.
 - Require all conversations to be resolved.
-- Require these status checks: `Frontend Unit & Build`, `API Unit & Test`, `Worker Unit & Test`, `LLM Router Unit & Test`, `Shared Schema Validation`, `CYMATIC Deep Integration / integration`, and `CYMATIC Security / scan`.
+- Require these status checks: `Frontend Unit & Build`, `Python Tests (api)`, `Python Tests (worker)`, `Python Tests (router)`, `Shared Schema Validation`, `Docker Build Verification`, `Frontend E2E Tests`, `Unified Test Report`, `CYMATIC Deep Integration / integration`, and `CYMATIC Security / scan`.
 - Require branches to be up to date before merging.
 - Disable force-pushes and branch deletion.
 - Enable automatic deletion of head branches after merge.

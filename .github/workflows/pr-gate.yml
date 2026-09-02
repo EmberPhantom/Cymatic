@@ -368,6 +368,16 @@ jobs:
       - name: Verify images
         run: docker images cymatic/*
 
+  pre-commit:
+    name: Pre-commit Hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pre-commit && pre-commit run --all-files --show-diff-on-failure || (echo "::warning::pre-commit failed, run 'pre-commit run --all-files' locally"; exit 1)
+
   test-report:
     name: Unified Test Report
     runs-on: ubuntu-latest

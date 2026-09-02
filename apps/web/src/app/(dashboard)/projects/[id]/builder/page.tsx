@@ -39,6 +39,7 @@ export default function BuilderPage() {
   const [clarifyResult, setClarifyResult] = useState<any>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
+  const [jobStartedAt, setJobStartedAt] = useState<number | null>(null)
   const [generationStage, setGenerationStage] = useState<"spec" | "validation" | "scene" | "publish">("spec")
   const [workflowError, setWorkflowError] = useState<string | null>(null)
 
@@ -51,11 +52,22 @@ export default function BuilderPage() {
 
   const jobStatus = useJobStatus(currentJobId, !!currentJobId)
 
+  // Track job start time for timeout
+  useEffect(() => {
+    if (currentJobId && !jobStartedAt) setJobStartedAt(Date.now())
+    if (!currentJobId) setJobStartedAt(null)
+  }, [currentJobId])
+
   // Mutation objects are intentionally excluded: changing them would restart the active job.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const status = jobStatus.data?.status
-    if (!currentJobId || !status || ["queued", "running", "retry"].includes(status)) return
+    if (jobStartedAt && Date.now() - jobStartedAt > 5 * 60 * 1000) {
+      setWorkflowError("Job timed out after 5 minutes. Please retry.")
+      setCurrentJobId(null)
+      return
+    }
+    if (!currentJobId || !status || ["queued", "running", "retry", "validating_spec", "generating_scene"].includes(status)) return
     if (status === "failed" || status === "cancelled") {
       setWorkflowError(jobStatus.data?.error || "The workflow step failed. Please retry.")
       setCurrentJobId(null)
