@@ -45,13 +45,13 @@ class SpecValidator:
 
     DOMAIN_REQUIREMENTS = {
         "real_estate": {
-            "required_entity_types": ["room", "navigation_point"],
+            "required_entity_types": ["room"],
             "min_rooms": 1,
             "max_rooms": 20,
             "required_navigation_points": 1,
         },
         "heritage": {
-            "required_entity_types": ["poi", "navigation_point"],
+            "required_entity_types": ["poi"],
             "min_pois": 1,
             "max_pois": 50,
             "required_navigation_points": 1,

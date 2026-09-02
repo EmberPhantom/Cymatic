@@ -109,12 +109,21 @@ class SceneComposerAgent:
             nav_points.append(nav_point)
         
         # Position other entities (lights, decorations) relative to rooms
-        for entity in others:
+        for idx, entity in enumerate(others):
             if entity.type == "light":
-                # Place lights above room centers
                 if nav_points:
                     center = nav_points[len(nav_points)//2]
                     entity.position = [center.position[0], 5, center.position[2]]
+            elif entity.type in ("furniture", "decoration", "light"):
+                if nav_points:
+                    base = nav_points[idx % len(nav_points)]
+                    # offset slightly inside room
+                    entity.position = [base.position[0] + 1.0, 0.5, base.position[2] + 1.0]
+                else:
+                    entity.position = [float(idx * 2), 0.5, 0.0]
+            elif entity.position == [0, 0, 0]:
+                # distribute remaining types in grid near origin
+                entity.position = [float((idx % 3) * 2), 0, float((idx // 3) * 2)]
             positioned_entities.append(entity)
         
         # Create navigation paths (linear flow through rooms)
@@ -181,9 +190,14 @@ class SceneComposerAgent:
         nav_points.insert(0, center_nav)
         
         # Position other entities
-        for entity in others:
+        for idx, entity in enumerate(others):
             if entity.type == "light":
                 entity.position = [center_x, 10, center_z]
+            elif entity.type in ("furniture", "decoration"):
+                angle = (2 * math.pi * idx) / max(len(others), 1)
+                entity.position = [center_x + 3*math.cos(angle), 0.5, center_z + 3*math.sin(angle)]
+            elif entity.position == [0, 0, 0]:
+                entity.position = [float((idx % 3) * 2), 0, float((idx // 3) * 2)]
             positioned_entities.append(entity)
         
         # Create radial paths (center to each POI)
