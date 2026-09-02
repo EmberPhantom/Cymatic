@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     WORKER_QUEUES: str = "generation,spec,asset,analytics"
 
     ADMIN_API_KEY: str = ""
+    RATE_LIMIT_API: str = "1000/minute"
     CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     model_config = SettingsConfigDict(

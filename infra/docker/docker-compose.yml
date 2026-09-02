@@ -136,6 +136,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      llm-router:
+        condition: service_healthy
     environment:
       API_INTERNAL_URL: http://api:8000
     healthcheck:

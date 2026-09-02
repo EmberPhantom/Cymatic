@@ -13,6 +13,8 @@ from app.routing.engine import routing_engine
 from app.routing.usage import usage_tracker, UsageLog
 from app.routing.cache import llm_cache
 import structlog
+from fastapi.responses import PlainTextResponse
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -61,6 +63,11 @@ async def health_check():
         "service": "llm-router",
         "providers": {name: provider.enabled for name, provider in routing_engine.providers.items()},
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/")

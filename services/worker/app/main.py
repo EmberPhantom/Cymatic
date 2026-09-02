@@ -8,6 +8,8 @@ from app.core.config import get_settings
 from app.core.queue import job_queue, process_job, JOB_HANDLERS
 from app.db.session import init_db, close_db
 import structlog
+from fastapi.responses import PlainTextResponse
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -115,6 +117,11 @@ async def health_check():
         "running": running,
         "registered_handlers": list(JOB_HANDLERS.keys()),
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/")

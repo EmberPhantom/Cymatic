@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     ENABLE_MANUAL_EDITING: bool = False
     ENABLE_MULTIPLAYER: bool = False
 
+    # Rate Limiting (requests per minute)
+    RATE_LIMIT_AUTH: str = "100/minute"
+    RATE_LIMIT_API: str = "1000/minute"
+    RATE_LIMIT_LLM: str = "50/minute"
+
     # CORS
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 

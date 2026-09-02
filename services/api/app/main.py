@@ -1,12 +1,25 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from app.core.config import get_settings
 from app.core.middleware import TenantScopingMiddleware, AuditLoggingMiddleware, RequestContextMiddleware, CorrelationIdMiddleware
 from app.db.session import init_db, close_db
 from app.api.v1.router import api_router
+import structlog, logging, os
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Counter, Histogram
 
 settings = get_settings()
+
+# Structured logging init
+if settings.LOG_FORMAT == "json":
+    structlog.configure(
+        processors=[structlog.processors.JSONRenderer()],
+        wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, settings.LOG_LEVEL.upper(), 20)),
+    )
+
+REQUEST_COUNT = Counter("http_requests_total", "Total requests", ["method", "path", "status"])
+REQUEST_LATENCY = Histogram("http_request_duration_seconds", "Request latency", ["method", "path"])
 
 
 @asynccontextmanager
@@ -49,6 +62,11 @@ app.include_router(api_router, prefix="/v1")
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "version": settings.APP_VERSION}
+
+
+@app.get("/metrics")
+async def metrics():
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/")
