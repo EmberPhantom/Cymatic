@@ -76,7 +76,7 @@ export default function BuilderPage() {
           setCurrentJobId(null)
           setStep("publish")
         } else if (generationStage === "publish" && active) {
-          router.replace(`/dashboard/projects/${projectId}/stream`)
+          router.replace(`/projects/${projectId}/stream`)
         }
       } catch (error: any) {
         if (active) {
@@ -289,7 +289,7 @@ export default function BuilderPage() {
               <p className="text-muted-foreground mt-2">Your walkthrough has been generated and is ready to stream.</p>
             </div>
             <div className="flex gap-2 justify-center">
-              <Button variant="outline" onClick={() => router.push(`/dashboard/projects/${projectId}`)}>
+              <Button variant="outline" onClick={() => router.push(`/projects/${projectId}`)}>
                 Back to Project
               </Button>
               <Button onClick={handlePublish} disabled={publish.isPending || !!currentJobId}>

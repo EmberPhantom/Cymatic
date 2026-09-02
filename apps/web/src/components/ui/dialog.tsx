@@ -10,14 +10,25 @@ interface DialogProps {
 }
 
 function Dialog({ open, onOpenChange, children }: DialogProps) {
-  if (!open) return null
+  const trigger = React.Children.toArray(children).find((c: any) => c?.type?.displayName === "DialogTrigger" || (c as any)?.props?.__isTrigger)
+  const content = React.Children.toArray(children).filter((c: any) => c?.type?.displayName !== "DialogTrigger")
+  // Fallback: separate trigger and content by type
+  const triggers: React.ReactNode[] = []
+  const contents: React.ReactNode[] = []
+  React.Children.forEach(children, (child: any) => {
+    if (child?.type === DialogTrigger) triggers.push(child)
+    else contents.push(child)
+  })
   return (
-    <div className="fixed inset-0 z-50">
-      <div className="fixed inset-0 bg-black/80" onClick={() => onOpenChange?.(false)} />
-      <div className="fixed inset-0 flex items-center justify-center p-4">
-        {children}
-      </div>
-    </div>
+    <>
+      {triggers}
+      {open && (
+        <div className="fixed inset-0 z-50">
+          <div className="fixed inset-0 bg-black/80" onClick={() => onOpenChange?.(false)} />
+          <div className="fixed inset-0 flex items-center justify-center p-4">{contents}</div>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -48,7 +59,9 @@ function DialogDescription({ className, ...props }: React.HTMLAttributes<HTMLPar
 }
 
 function DialogTrigger({ asChild, children, ...props }: { asChild?: boolean } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button {...props}>{children}</button>
+  const Comp: any = asChild ? "span" : "button"
+  return <Comp {...props}>{children}</Comp>
 }
+DialogTrigger.displayName = "DialogTrigger"
 
 export { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger }

@@ -25,7 +25,7 @@ export default function DashboardPage() {
       const project = await createProject.mutateAsync({ name, domain })
       setShowNewProject(false)
       setName("")
-      router.push(`/dashboard/projects/${project.id}/builder`)
+      router.push(`/projects/${project.id}/builder`)
     } catch {
       // The mutation error is rendered below.
     }
@@ -95,7 +95,7 @@ export default function DashboardPage() {
       ) : projects && projects.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {projects.map((project) => (
-            <Link key={project.id} href={`/dashboard/projects/${project.id}`}>
+            <Link key={project.id} href={`/projects/${project.id}`}>
               <Card className="hover:shadow-md transition-shadow cursor-pointer h-full">
                 <CardHeader>
                   <CardTitle className="text-lg">{project.name}</CardTitle>

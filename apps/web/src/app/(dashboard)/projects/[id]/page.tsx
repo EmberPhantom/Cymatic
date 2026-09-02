@@ -21,7 +21,7 @@ export default function ProjectDetailPage() {
           <h2 className="text-2xl font-bold">Project Details</h2>
           <p className="text-muted-foreground">ID: {projectId}</p>
         </div>
-        <Link href={`/dashboard/projects/${projectId}/builder`}>
+        <Link href={`/projects/${projectId}/builder`}>
           <Button>Open Builder</Button>
         </Link>
       </div>
@@ -29,7 +29,7 @@ export default function ProjectDetailPage() {
         {tabs.map((tab) => (
           <Link
             key={tab.href}
-            href={`/dashboard/projects/${projectId}/${tab.href}`}
+            href={`/projects/${projectId}/${tab.href}`}
             className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground border-b-2 border-transparent hover:border-primary transition-colors"
           >
             {tab.label}

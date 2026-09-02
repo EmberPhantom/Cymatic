@@ -41,7 +41,7 @@ export default function RegisterPage() {
         password: data.password,
       })
       // Auto-login after registration
-      const { data: session } = await api.post("/auth/login", new URLSearchParams({
+      const { data: session } = await api.post("/api/auth/login", new URLSearchParams({
         username: data.email,
         password: data.password,
       }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } })
