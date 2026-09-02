@@ -104,6 +104,12 @@ namespace Cymatic
             _stereoRig.Configure(ipd, renderWidth, renderHeight);
             _webRTCStreamer.Configure(renderWidth, renderHeight, targetFPS, minBitrate, maxBitrate);
             _performanceManager.Configure(targetFPS, adaptiveQuality);
+            _performanceManager.OnQualityChanged += (idx) => {
+                // Link adaptive quality to WebRTC bitrate (5-30 Mbps range)
+                var bitrates = new int[]{30000000, 20000000, 10000000, 5000000, 2500000};
+                var br = bitrates[Mathf.Clamp(idx, 0, bitrates.Length-1)];
+                try { _webRTCStreamer.SetBitrate(br); } catch {}
+            };
             _eventBridge.Configure(backendUrl, renderServerId);
             var signalingHost = "localhost";
             try { signalingHost = new System.Uri(backendUrl).Host; } catch {}

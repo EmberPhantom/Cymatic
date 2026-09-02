@@ -267,16 +267,36 @@ namespace Cymatic
             // The encoder reads from the combined texture
         }
         
+        public void SetBitrate(int bitrate)
+        {
+            _maxBitrate = bitrate;
+            try {
+                var transceiver = _peerConnection?.GetTransceivers().Count > 0 ? _peerConnection.GetTransceivers()[0] : null;
+                if (transceiver != null) {
+                    var sender = transceiver.Sender;
+                    var pars = sender.GetParameters();
+                    if (pars.Encodings.Count > 0) {
+                        pars.Encodings[0].MaxBitrate = (uint)bitrate;
+                        sender.SetParameters(pars);
+                    }
+                }
+            } catch {}
+        }
+
         // Create combined texture for encoder input
         private RenderTexture GetSideBySideTexture()
         {
             var combined = RenderTexture.GetTemporary(_width * 2, _height, 24, RenderTextureFormat.ARGB32);
-            
-            // Blit left eye to left half
-            Graphics.Blit(_leftEyeTexture, combined, new Rect(0, 0, 0.5f, 1));
-            // Blit right eye to right half
-            Graphics.Blit(_rightEyeTexture, combined, new Rect(0.5f, 0, 0.5f, 1));
-            
+            var mat = new Material(Shader.Find("Unlit/Texture"));
+            mat.SetTexture("_MainTex", _leftEyeTexture);
+            // Blit with viewport rects via GL
+            Graphics.SetRenderTarget(combined);
+            GL.PushMatrix(); GL.LoadOrtho();
+            Graphics.DrawTexture(new Rect(0, 0, 0.5f, 1), _leftEyeTexture, mat);
+            Graphics.DrawTexture(new Rect(0.5f, 0, 0.5f, 1), _rightEyeTexture, mat);
+            GL.PopMatrix();
+            Graphics.SetRenderTarget(null);
+            UnityEngine.Object.DestroyImmediate(mat);
             return combined;
         }
         

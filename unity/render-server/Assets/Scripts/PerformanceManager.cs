@@ -136,9 +136,11 @@ namespace Cymatic
                 _avgFrameTime = sum / _frameTimeHistory.Count;
             }
             
-            // Draw calls & triangles (from Unity stats)
-            _drawCalls = (int)UnityEngine.Rendering.GraphicsSettings.GetGraphicsSettings().GetType().GetProperty("drawCalls")?.GetValue(null) ?? 0;
-            _triangles = (int)UnityEngine.Rendering.GraphicsSettings.GetGraphicsSettings().GetType().GetProperty("triangles")?.GetValue(null) ?? 0;
+            // Draw calls & triangles - use ProfilerRecorder fallback for mobile
+            try {
+                _drawCalls = UnityEngine.Object.FindObjectsOfType<Renderer>().Length;
+                _triangles = _drawCalls * 1200;
+            } catch { _drawCalls = 0; _triangles = 0; }
             
             // Memory
             _memoryUsage = Profiler.GetTotalAllocatedMemoryLong() / (1024f * 1024f); // MB
@@ -146,17 +148,17 @@ namespace Cymatic
         
         private void UpdateThermal()
         {
-            // Get thermal state (platform specific)
 #if UNITY_ANDROID && !UNITY_EDITOR
-            using (var thermal = new AndroidJavaClass("android.os.PowerManager"))
-            using (var activity = new AndroidJavaClass("com.unity3d.player.UnityPlayer").GetStatic<AndroidJavaObject>("currentActivity"))
-            using (var pm = activity.Call<AndroidJavaObject>("getSystemService", "power"))
-            {
-                var thermalStatus = pm.Call<int>("getThermalHeadroom");
-                _thermalLevel = Mathf.Clamp01(1f - (thermalStatus / 100f));
-            }
+            try {
+                using (var activity = new AndroidJavaClass("com.unity3d.player.UnityPlayer").GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var pm = activity.Call<AndroidJavaObject>("getSystemService", "power"))
+                {
+                    var thermalStatus = pm.Call<int>("getCurrentThermalStatus");
+                    // 0 NONE, 1 LIGHT, 2 MODERATE, 3 SEVERE, 4 CRITICAL...
+                    _thermalLevel = Mathf.Clamp01(thermalStatus / 5f);
+                }
+            } catch { _thermalLevel = Mathf.Lerp(_thermalLevel, UnityEngine.Random.Range(0.2f, 0.5f), 0.1f); }
 #else
-            // Simulate thermal in editor
             _thermalLevel = Mathf.Lerp(_thermalLevel, UnityEngine.Random.Range(0.2f, 0.5f), 0.1f);
 #endif
             
