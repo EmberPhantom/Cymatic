@@ -7,7 +7,17 @@ import com.google.gson.reflect.TypeToken
 
 class PreferencesManager(private val context: Context) {
 
-    private val prefs: SharedPreferences = context.getSharedPreferences("cymatic_prefs", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = try {
+        androidx.security.crypto.EncryptedSharedPreferences.create(
+            "cymatic_prefs_enc",
+            androidx.security.crypto.MasterKey.Builder(context).setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM).build(),
+            context,
+            androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    } catch (_: Exception) {
+        context.getSharedPreferences("cymatic_prefs", Context.MODE_PRIVATE)
+    }
     private val gson = Gson()
     
     // Keys

@@ -94,6 +94,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.1")
     // Hand Tracking
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
+    // Security
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
     // DI

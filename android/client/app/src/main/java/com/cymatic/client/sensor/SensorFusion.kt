@@ -361,12 +361,9 @@ class KalmanFilterPosition3D {
         }
         
         // Prediction step
-        // State transition: x = F * x + B * u
-        // Position: p = p + v * dt + 0.5 * a * dt^2
-        // Velocity: v = v + a * dt
         for (i in 0..2) {
             position[i] = position[i] + velocity[i] * dtf + 0.5f * acceleration[i] * dtf * dtf
-            velocity[i] = velocity[i] + acceleration[i] * dtf
+            velocity[i] = (velocity[i] + acceleration[i] * dtf) * 0.98f // damp to limit drift (no position measurement)
         }
         
         // Covariance prediction: P = F * P * F^T + Q

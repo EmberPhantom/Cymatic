@@ -283,12 +283,23 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     
     private fun startStatsCollection() {
         statsJob = statsExecutor.scheduleAtFixedRate({
-            peerConnection?.getStats(object : StatsObserver {
-                override fun onComplete(report: StatsReport) {
-                    val stats = parseStats(report)
+            try {
+                peerConnection?.getStats { report ->
+                    val stats = parseStatsNew(report)
                     onStats?.invoke(stats)
                 }
-            })
+            } catch (_: Exception) {
+                // fallback for older API
+                try {
+                    @Suppress("DEPRECATION")
+                    peerConnection?.getStats(object : StatsObserver {
+                        @Suppress("DEPRECATION") override fun onComplete(report: StatsReport) {
+                            val stats = parseStats(report)
+                            onStats?.invoke(stats)
+                        }
+                    })
+                } catch (_: Exception) {}
+            }
         }, 0, 1, java.util.concurrent.TimeUnit.SECONDS)
     }
     
@@ -297,37 +308,44 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         statsJob = null
     }
     
+    @Suppress("DEPRECATION")
     private fun parseStats(report: StatsReport): StreamStats {
         var fps = 0
         var latencyMs = 0
         var bitrateKbps = 0
-        var thermalLevel = 0.0
         var packetsLost = 0
         var packetsReceived = 0
-        
         for (stat in report) {
             when (stat.type) {
                 StatsReport.Type.INBOUND_RTP -> {
-                    stat.getValue("framesPerSecond")?.let { fps = it as Int }
-                    stat.getValue("roundTripTime")?.let { latencyMs = (it * 1000).toInt() }
-                    stat.getValue("bitrate")?.let { bitrateKbps = (it / 1000).toInt() }
-                    stat.getValue("packetsLost")?.let { packetsLost = it as Int }
-                    stat.getValue("packetsReceived")?.let { packetsReceived = it as Int }
+                    (stat.getValue("framesPerSecond") as? Number)?.let { fps = it.toInt() }
+                    (stat.getValue("roundTripTime") as? Number)?.let { latencyMs = (it.toDouble() * 1000).toInt() }
+                    (stat.getValue("bitrate") as? Number)?.let { bitrateKbps = (it.toInt() / 1000) }
+                    (stat.getValue("packetsLost") as? Number)?.let { packetsLost = it.toInt() }
+                    (stat.getValue("packetsReceived") as? Number)?.let { packetsReceived = it.toInt() }
                 }
                 StatsReport.Type.REMOTE_INBOUND_RTP -> {
-                    stat.getValue("roundTripTime")?.let { latencyMs = (it * 1000).toInt() }
+                    (stat.getValue("roundTripTime") as? Number)?.let { latencyMs = (it.toDouble() * 1000).toInt() }
                 }
             }
         }
-        
-        return StreamStats(
-            fps = fps,
-            latencyMs = latencyMs,
-            bitrateKbps = bitrateKbps,
-            thermalLevel = 0.0, // Would come from device
-            packetsLost = packetsLost,
-            packetsReceived = packetsReceived
-        )
+        return StreamStats(fps, latencyMs, bitrateKbps, 0.0, packetsLost, packetsReceived)
+    }
+
+    private fun parseStatsNew(report: RTCStatsReport): StreamStats {
+        var fps = 0; var latencyMs = 0; var bitrateKbps = 0; var packetsLost = 0; var packetsReceived = 0
+        for ((_, v) in report.statsMap) {
+            val type = v.type
+            val members = v.members
+            if (type == "inbound-rtp") {
+                (members["framesPerSecond"] as? Number)?.let { fps = it.toInt() }
+                (members["roundTripTime"] as? Number)?.let { latencyMs = (it.toDouble()*1000).toInt() }
+                (members["packetsLost"] as? Number)?.let { packetsLost = it.toInt() }
+                (members["packetsReceived"] as? Number)?.let { packetsReceived = it.toInt() }
+                (members["bytesReceived"] as? Number)?.let { bitrateKbps = (it.toLong()/1000).toInt() }
+            }
+        }
+        return StreamStats(fps, latencyMs, bitrateKbps, 0.0, packetsLost, packetsReceived)
     }
     
     data class StreamStats(
