@@ -1,6 +1,8 @@
 package com.cymatic.client.network
 
+import com.cymatic.client.BuildConfig
 import com.cymatic.client.network.model.*
+import com.cymatic.client.util.PreferencesManager
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
@@ -23,18 +25,21 @@ object ApiClient {
     private val gson = GsonBuilder()
         .setLenient()
         .create()
-    
+
+    private var prefs: PreferencesManager? = null
+    fun initPrefs(p: PreferencesManager) { prefs = p }
+
     private val okHttpClient = OkHttpClient.Builder()
-        .addInterceptor(HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY))
+        .addInterceptor(HttpLoggingInterceptor().apply { level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE })
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .addInterceptor { chain ->
-            val request = chain.request().newBuilder()
+            val builder = chain.request().newBuilder()
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "application/json")
-                .build()
-            chain.proceed(request)
+            prefs?.accessToken?.let { token -> builder.addHeader("Authorization", "Bearer $token") }
+            chain.proceed(builder.build())
         }
         .build()
     
@@ -44,7 +49,8 @@ object ApiClient {
         .addConverterFactory(GsonConverterFactory.create(gson))
         .build()
     
-    val apiService: ApiService = retrofit.create(ApiService::class.java)
+    var apiService: ApiService = retrofit.create(ApiService::class.java)
+        private set
     
     fun configure(serverUrl: String) {
         val url = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
@@ -54,6 +60,7 @@ object ApiClient {
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
+        apiService = retrofit.create(ApiService::class.java)
     }
 }
 

@@ -1,6 +1,7 @@
 package com.cymatic.client
 
 import android.app.Application
+import android.util.Log
 import com.cymatic.client.network.ApiClient
 import com.cymatic.client.util.PreferencesManager
 import dagger.hilt.android.HiltAndroidApp
@@ -21,6 +22,7 @@ class CymaticApplication : Application() {
         
         // Configure API client with saved server URL
         val prefs = PreferencesManager(this)
+        ApiClient.initPrefs(prefs)
         ApiClient.configure(prefs.apiUrl)
     }
     

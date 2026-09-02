@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using UnityEngine;
+using Newtonsoft.Json;
 
 namespace Cymatic
 {
@@ -49,7 +50,7 @@ namespace Cymatic
             if (!_isProcessing) return;
             try
             {
-                var packet = JsonUtility.FromJson<InputPacket>(json);
+                var packet = JsonConvert.DeserializeObject<InputPacket>(json);
                 if (packet != null)
                 {
                     _packetQueue.Enqueue(packet);

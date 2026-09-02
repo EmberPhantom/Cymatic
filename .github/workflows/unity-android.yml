@@ -77,20 +77,16 @@ jobs:
           ndk-version: r26c
           emulator: false
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('android/client/**/*.gradle*', 'android/client/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          gradle-version: 8.2
+          cache-read-only: false
 
       - name: Build Android Debug APK
         run: |
           cd android/client
-          ./gradlew assembleDebug --no-daemon
+          gradle assembleDebug --no-daemon
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
@@ -102,7 +98,7 @@ jobs:
       - name: Run Android Unit Tests
         run: |
           cd android/client
-          ./gradlew testDebugUnitTest --no-daemon
+          gradle testDebugUnitTest --no-daemon
 
       - name: Upload Test Results
         if: always()
