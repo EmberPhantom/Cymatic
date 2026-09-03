@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
-from app.core.queue import job_queue, process_job, JOB_HANDLERS
+from app.core.queue import job_queue, process_job, JOB_HANDLERS, Job
 from app.db.session import init_db, close_db
 import structlog
 from fastapi.responses import PlainTextResponse
@@ -46,12 +46,46 @@ async def worker_loop():
                 job = await job_queue.dequeue(queue_name, worker_id)
                 if job:
                     logger.info("processing_job", worker_id=worker_id, job_id=job.id, type=job.type)
+
+                    async def _heartbeat(j: Job):
+                        while True:
+                            await asyncio.sleep(job_queue.LOCK_TTL // 2)
+                            try:
+                                if j.lock_token:
+                                    await job_queue.renew_job_lock(j.id, j.lock_token)
+                            except Exception:
+                                break
+
+                    heartbeat_task = asyncio.create_task(_heartbeat(job))
                     try:
-                        result = await process_job(job)
+                        result = await asyncio.wait_for(process_job(job), timeout=settings.WORKER_JOB_TIMEOUT_SECONDS)
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
                         await job_queue.complete_job(job, result)
+                    except asyncio.TimeoutError as e:
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
+                        logger.error("job_timeout", worker_id=worker_id, job_id=job.id)
+                        await job_queue.fail_job(job, f"Job timeout after {settings.WORKER_JOB_TIMEOUT_SECONDS}s", queue_name=queue_name)
                     except asyncio.CancelledError:
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
                         raise
                     except Exception as e:
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
                         logger.error("job_failed", worker_id=worker_id, job_id=job.id, error=str(e))
                         await job_queue.fail_job(job, str(e), queue_name=queue_name)
 

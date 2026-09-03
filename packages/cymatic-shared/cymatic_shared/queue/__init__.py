@@ -127,6 +127,25 @@ class JobQueue:
         result = await self.client.eval(lua_script, 1, lock_key, lock_token)
         return result == 1
 
+    async def renew_job_lock(self, job_id: str, lock_token: str, ttl: int = None) -> bool:
+        ttl = ttl or self.LOCK_TTL
+        lock_key = f"job:lock:{job_id}"
+        lua_script = """
+        if redis.call("GET", KEYS[1]) == ARGV[1] then
+            return redis.call("EXPIRE", KEYS[1], ARGV[2])
+        else
+            return 0
+        end
+        """
+        result = await self.client.eval(lua_script, 1, lock_key, lock_token, str(ttl))
+        if result == 1:
+            await self.client.hset(
+                f"job:{job_id}",
+                mapping={"lock_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()},
+            )
+            return True
+        return False
+
     async def dequeue(self, queue_name: str = "generation", worker_id: str = None) -> Optional[Job]:
         await self.connect()
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
