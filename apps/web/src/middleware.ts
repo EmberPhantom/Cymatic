@@ -11,10 +11,20 @@ export function middleware(request: NextRequest) {
   // Allow auth pages without token
   if (isAuthPage) {
     if (token) {
-      const next = request.nextUrl.searchParams.get("next")
-      return NextResponse.redirect(new URL(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard", request.url))
+      const rawNext = request.nextUrl.searchParams.get("next")
+      let next = "/dashboard"
+      try {
+        const decoded = rawNext ? decodeURIComponent(rawNext) : null
+        if (decoded && decoded.startsWith("/") && !decoded.startsWith("//") && !decoded.includes("\\") && decoded.length < 500) next = decoded
+      } catch {}
+      return NextResponse.redirect(new URL(next, request.url))
     }
-    return NextResponse.next()
+    const res = NextResponse.next()
+    res.headers.set("X-Frame-Options", "DENY")
+    res.headers.set("X-Content-Type-Options", "nosniff")
+    res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
+    res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return res
   }
 
   // Protect dashboard
@@ -24,7 +34,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  return NextResponse.next()
+  const res = NextResponse.next()
+  res.headers.set("X-Frame-Options", "DENY")
+  res.headers.set("X-Content-Type-Options", "nosniff")
+  res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
+  res.headers.set("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()")
+  return res
 }
 
 export const config = {

@@ -14,28 +14,26 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       token: null,
       isAuthenticated: false,
       authReady: false,
       setAuth: (user, token = null) => {
-        if (typeof window !== "undefined" && token) {
-          (window as any).__authToken = token
-        }
-        set({ user, token, isAuthenticated: true, authReady: true })
+        // token kept in memory, not persisted; cookie is source of truth
+        const prevToken = get().token
+        set({ user, token: token ?? prevToken, isAuthenticated: true, authReady: true })
       },
       setAuthReady: (authReady) => {
         set({ authReady })
       },
       logout: () => {
-        if (typeof window !== "undefined") (window as any).__authToken = null
         set({ user: null, token: null, isAuthenticated: false, authReady: true })
       },
     }),
     {
       name: "auth-storage",
-      partialize: (state) => ({ user: state.user, token: state.token, isAuthenticated: state.isAuthenticated }),
+      partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }),
     }
   )
 )
