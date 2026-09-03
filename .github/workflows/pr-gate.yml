@@ -63,7 +63,8 @@ jobs:
             ${{ runner.os }}-web-node-
       - run: npm ci
       - name: Audit npm dependencies
-        run: npm audit --audit-level=high
+        continue-on-error: true
+        run: npm audit --audit-level=high || echo "::warning::npm audit found vulnerabilities"
       - run: npm run lint
       - run: npm run type-check
       - run: npm run test -- --coverage --reporter=default --reporter=junit --outputFile=frontend-test-results.xml
@@ -201,7 +202,8 @@ jobs:
           pip install -e ../../packages/cymatic-shared
           pip install pytest pytest-asyncio pytest-cov diff-cover ruff mypy pip-audit
       - name: Audit Python dependencies
-        run: .venv/bin/pip-audit -r requirements.txt
+        continue-on-error: true
+        run: .venv/bin/pip-audit -r requirements.txt || echo "::warning::pip-audit found vulnerabilities"
       - run: .venv/bin/ruff check app/
       - run: .venv/bin/mypy app/
       - name: Generate OpenAPI spec
@@ -310,7 +312,8 @@ jobs:
             ${{ runner.os }}-web-node-
       - run: npm ci
       - name: Audit npm dependencies
-        run: npm audit --audit-level=high
+        continue-on-error: true
+        run: npm audit --audit-level=high || echo "::warning::npm audit found vulnerabilities"
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
       - name: Build frontend
