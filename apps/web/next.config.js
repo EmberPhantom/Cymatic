@@ -3,15 +3,14 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   images: {
-    domains: ['localhost'],
-    remotePatterns: [
-      {
-        protocol: 'http',
-        hostname: 'localhost',
-        port: '9000',
-        pathname: '/cymatic/**',
-      },
-    ],
+    remotePatterns: (() => {
+      try {
+        const url = new URL(process.env.NEXT_PUBLIC_MINIO_URL || 'http://localhost:9000');
+        return [{ protocol: url.protocol.replace(':',''), hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? '443' : '80'), pathname: '/**' }];
+      } catch {
+        return [{ protocol: 'http', hostname: 'localhost', port: '9000', pathname: '/**' }];
+      }
+    })(),
   },
   async rewrites() {
     const apiBase = process.env.API_INTERNAL_URL
