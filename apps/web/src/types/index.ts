@@ -109,3 +109,19 @@ export interface Asset {
 }
 
 export type Domain = "real_estate" | "heritage"
+
+export type ProjectStatus = "draft" | "spec_generating" | "spec_ready" | "scene_generating" | "scene_ready" | "published" | "failed"
+export type SpecStatus = "draft" | "validating" | "valid" | "invalid" | "superseded"
+export type JobStatusType = "queued" | "running" | "retry" | "validating_spec" | "generating_scene" | "completed" | "failed" | "cancelled"
+
+export interface Paginated<T> {
+  items: T[]
+  total: number
+  skip: number
+  limit: number
+}
+
+export interface ApiError {
+  detail: string | { loc: string[]; msg: string; type: string }[]
+  status?: number
+}
