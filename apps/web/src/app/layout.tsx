@@ -1,11 +1,18 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
+import { Inter } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
+
+const inter = Inter({ subsets: ['latin'], display: 'swap' });
 
 export const metadata: Metadata = {
   title: 'CYMATIC - AI Simulation Builder',
   description: 'No-code AI simulation generation platform for real estate and heritage walkthroughs',
+  openGraph: { title: 'CYMATIC', description: 'AI simulation builder for real estate and heritage', type: 'website' },
+  metadataBase: new URL(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'),
 };
+
+export const viewport: Viewport = { themeColor: '#2563eb', width: 'device-width', initialScale: 1 };
 
 export default function RootLayout({
   children,
@@ -13,8 +20,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="antialiased">
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${inter.className} antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>
