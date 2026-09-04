@@ -1,4 +1,5 @@
 """Project model"""
+
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, Text
@@ -25,10 +26,23 @@ class Project(Base):
     category = Column(String(50), nullable=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(Enum(ProjectStatus, values_callable=lambda x: [e.value for e in x]), default=ProjectStatus.DRAFT, nullable=False)
+    status = Column(
+        Enum(ProjectStatus, values_callable=lambda x: [e.value for e in x]),
+        default=ProjectStatus.DRAFT,
+        nullable=False,
+    )
     description = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
     organization = relationship("Organization", back_populates="projects")
     owner = relationship("User", back_populates="projects")

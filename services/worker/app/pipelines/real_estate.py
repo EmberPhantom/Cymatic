@@ -281,7 +281,7 @@ class RealEstatePipeline:
                 if hasattr(stage_result, 'domain_check') and stage_result.domain_check:
                     stage_outputs["domain_expert"] = stage_result.domain_check.model_dump()
                 if hasattr(stage_result, 'assets') and stage_result.assets:
-                    stage_outputs["asset_selection"] = stage_result.assets.manifest.model_dump()
+                    stage_outputs["asset_selection"] = stage_result.assets.model_dump()
                 if hasattr(stage_result, 'validation') and stage_result.validation:
                     stage_outputs["validation"] = stage_result.validation.model_dump()
                 if hasattr(stage_result, 'scene_package') and stage_result.scene_package:

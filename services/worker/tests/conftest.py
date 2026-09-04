@@ -5,6 +5,7 @@ Provides:
   - Redis + MinIO environment config
   - LLM client mocking for test isolation
 """
+import asyncio
 import json as _json
 import os
 import sys
@@ -78,10 +79,22 @@ app.dependency_overrides[get_db] = override_get_db
 @pytest_asyncio.fixture(scope="session")
 async def setup_db():
     """Apply Alembic migrations only. No create_all fallback."""
+    # Wait for PostgreSQL to be ready (mirrors api conftest)
+    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "")
+    for attempt in range(30):
+        try:
+            import asyncpg
+            conn = await asyncpg.connect(sync_url)
+            await conn.close()
+            break
+        except Exception:
+            if attempt == 29:
+                raise RuntimeError("PostgreSQL not ready after 30s")
+            await asyncio.sleep(1)
+
     alembic_dir = os.path.join(os.path.dirname(__file__), '..')
     alembic_cfg = Config(os.path.join(alembic_dir, "alembic.ini"))
     # Use sync URL for alembic
-    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "")
     alembic_cfg.set_main_option("sqlalchemy.url", sync_url)
     command.upgrade(alembic_cfg, "head")
     yield
@@ -185,23 +198,40 @@ def _dispatch_llm(messages, task_type="copilot_chat", **kwargs):
     return {}
 
 
+async def _async_dispatch_llm(messages, task_type="copilot_chat", **kwargs):
+    """Async wrapper for _dispatch_llm so AsyncMock awaits correctly."""
+    return _dispatch_llm(messages, task_type=task_type, **kwargs)
+
+
 @pytest.fixture(autouse=True)
 def mock_llm_client():
-    """Mock call_llm_json at consumer namespaces.
+    """Mock call_llm_json at all consumer namespaces.
 
-    Patch targets:
-      - cymatic_shared.agents.intake_agent.call_llm_json
-      - cymatic_shared.agents.clarification_agent.call_llm_json
+    Patch targets cover:
+      - cymatic_shared primary client and agent re-exports
+      - worker app core and architect consumers
+      - services.worker.* alternate import path (PYTHONPATH . ../../)
     """
-    mock = AsyncMock(side_effect=_dispatch_llm)
+    mock = AsyncMock(side_effect=_async_dispatch_llm)
 
-    patches = [
-        patch("cymatic_shared.agents.intake_agent.call_llm_json", mock),
-        patch("cymatic_shared.agents.clarification_agent.call_llm_json", mock),
+    patch_targets = [
+        "cymatic_shared.agents.llm_client.call_llm_json",
+        "cymatic_shared.agents.intake_agent.call_llm_json",
+        "cymatic_shared.agents.clarification_agent.call_llm_json",
+        "app.core.llm_client.call_llm_json",
+        "app.agents.architect_agent.call_llm_json",
+        "services.worker.app.core.llm_client.call_llm_json",
+        "services.worker.app.agents.architect_agent.call_llm_json",
     ]
 
-    for p in patches:
-        p.start()
+    patches = []
+    for target in patch_targets:
+        try:
+            p = patch(target, mock)
+            p.start()
+            patches.append(p)
+        except ModuleNotFoundError:
+            continue
 
     yield mock
 

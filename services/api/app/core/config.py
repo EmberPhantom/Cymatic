@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"
 
     # API
     API_HOST: str = "0.0.0.0"
@@ -69,7 +70,7 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
-    @field_validator('JWT_SECRET_KEY')
+    @field_validator("JWT_SECRET_KEY")
     @classmethod
     def validate_jwt_secret(cls, v: str) -> str:
         if v == "your-super-secret-jwt-key-change-in-production":
@@ -78,7 +79,7 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
         return v
 
-    @field_validator('ENVIRONMENT')
+    @field_validator("ENVIRONMENT")
     @classmethod
     def validate_environment(cls, v: str) -> str:
         if v not in ("development", "staging", "production"):

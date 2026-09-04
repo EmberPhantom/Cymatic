@@ -35,6 +35,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         else setAuthError("Unable to load your session. Please retry.")
       })
     return () => { active = false; controller.abort() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // run once, not on pathname
 
   if (!authReady) {

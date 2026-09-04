@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from jose import jwt, JWTError
+from jose import JWTError
 from app.core.config import get_settings
 from app.core.security import decode_token
 from app.db.session import get_db
@@ -25,14 +25,18 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Get current authenticated user from JWT token."""
-    token = credentials.credentials if credentials else request.cookies.get("cymatic_access_token")
+    token = (
+        credentials.credentials
+        if credentials
+        else request.cookies.get("cymatic_access_token")
+    )
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     try:
         payload = decode_token(token)
         if payload.get("type") not in ("access", None):
@@ -44,7 +48,7 @@ async def get_current_user(
         user_id: str = payload.get("sub")
         if user_id is None:
             raise AuthError("Invalid token payload")
-    except (JWTError, ValueError) as e:
+    except (JWTError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
@@ -53,6 +57,7 @@ async def get_current_user(
 
     # Check token revocation
     from app.core.security import is_token_revoked
+
     if await is_token_revoked(token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -62,25 +67,25 @@ async def get_current_user(
 
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",
         )
-    
+
     # Populate request state for audit middleware
     request.state.user_id = user.id
     request.state.organization_id = user.organization_id
     request.state.user_role = user.role
-    
+
     return user
 
 
@@ -93,6 +98,7 @@ async def get_current_active_user(
 
 def require_roles(*allowed_roles: UserRole):
     """Dependency factory for role-based access control."""
+
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in allowed_roles:
             raise HTTPException(
@@ -100,6 +106,7 @@ def require_roles(*allowed_roles: UserRole):
                 detail=f"Insufficient permissions. Required: {[r.value for r in allowed_roles]}",
             )
         return current_user
+
     return role_checker
 
 
@@ -107,7 +114,9 @@ def require_roles(*allowed_roles: UserRole):
 require_owner = require_roles(UserRole.OWNER)
 require_admin = require_roles(UserRole.OWNER, UserRole.ADMIN)
 require_creator = require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.CREATOR)
-require_viewer = require_roles(UserRole.OWNER, UserRole.ADMIN, UserRole.CREATOR, UserRole.VIEWER, UserRole.AUDITOR)
+require_viewer = require_roles(
+    UserRole.OWNER, UserRole.ADMIN, UserRole.CREATOR, UserRole.VIEWER, UserRole.AUDITOR
+)
 
 
 async def get_organization_id(
@@ -119,6 +128,7 @@ async def get_organization_id(
 
 class TenantContext:
     """Request-scoped tenant context."""
+
     def __init__(self, organization_id: int, user_id: int, user_role: UserRole):
         self.organization_id = organization_id
         self.user_id = user_id

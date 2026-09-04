@@ -1,4 +1,5 @@
 """Redis sliding-window rate limiter."""
+
 import time
 from typing import Optional
 import redis.asyncio as redis
@@ -21,7 +22,9 @@ def _get_redis() -> Optional[redis.Redis]:
 
 def parse_limit(limit: str) -> tuple[int, int]:
     count, period = limit.split("/")
-    period_seconds = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}[period.strip()]
+    period_seconds = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}[
+        period.strip()
+    ]
     return int(count), period_seconds
 
 
@@ -46,13 +49,22 @@ async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
 
 
 async def rate_limit_dependency(request: Request, limit: str):
-    key = f"{request.client.host}:{request.url.path}" if request.client else request.url.path
+    key = (
+        f"{request.client.host}:{request.url.path}"
+        if request.client
+        else request.url.path
+    )
     limited, retry_after = await is_rate_limited(key, limit)
     if limited:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(retry_after)})
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def rate_limit(limit: str):
     async def _dep(request: Request):
         await rate_limit_dependency(request, limit)
+
     return _dep

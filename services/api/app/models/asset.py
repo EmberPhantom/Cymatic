@@ -1,4 +1,5 @@
 """Asset model"""
+
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, JSON
@@ -31,11 +32,26 @@ class Asset(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     filename = Column(String(255), nullable=False)
     storage_key = Column(String(512), nullable=False)
-    type = Column(Enum(AssetType, values_callable=lambda x: [e.value for e in x]), nullable=False)
-    status = Column(Enum(AssetStatus, values_callable=lambda x: [e.value for e in x]), default=AssetStatus.UPLOADED, nullable=False)
+    type = Column(
+        Enum(AssetType, values_callable=lambda x: [e.value for e in x]), nullable=False
+    )
+    status = Column(
+        Enum(AssetStatus, values_callable=lambda x: [e.value for e in x]),
+        default=AssetStatus.UPLOADED,
+        nullable=False,
+    )
     metadata_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
     organization = relationship("Organization")
     project = relationship("Project", back_populates="assets")

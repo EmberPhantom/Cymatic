@@ -3,9 +3,10 @@ from datetime import datetime, timezone
 from app.core.queue import register_job_handler, Job, JobPriority, JobStatus
 from app.db.session import AsyncSessionLocal
 from cymatic_shared.models import Project, ProjectStatus
-from cymatic_shared.models import SimulationSpec, SpecStatus
+from cymatic_shared.models import SimulationSpec as SimulationSpecModel, SpecStatus
 from cymatic_shared.models import Asset, AssetStatus
 from cymatic_shared.models import ScenePackage as ScenePackageModel
+from cymatic_shared.schemas.simulation_spec import SimulationSpec as SimulationSpecSchema
 from app.agents.scene_package import generate_scene_package, ScenePackage, scene_package_to_json
 from app.services.minio_client import get_minio_client
 from sqlalchemy import select, func
@@ -119,14 +120,14 @@ async def generate_spec_task(payload: dict) -> dict:
         # Get next version atomically using subquery with FOR UPDATE
         # This ensures atomic version assignment even under concurrent load
         result = await db.execute(
-            select(func.coalesce(func.max(SimulationSpec.version), 0) + 1)
-            .where(SimulationSpec.project_id == project_id)
+            select(func.coalesce(func.max(SimulationSpecModel.version), 0) + 1)
+            .where(SimulationSpecModel.project_id == project_id)
             .with_for_update()  # Lock the version assignment
         )
         next_version = result.scalar_one()
         
         # Create spec record (serialize with alias for TS/frontend compatibility)
-        db_spec = SimulationSpec(
+        db_spec = SimulationSpecModel(
             project_id=project_id,
             version=next_version,
             payload_json=spec.model_dump(by_alias=True),
@@ -176,7 +177,7 @@ async def validate_spec_task(payload: dict) -> dict:
     logger.info("validate_spec_started", spec_id=spec_id)
     
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(SimulationSpec).where(SimulationSpec.id == spec_id))
+        result = await db.execute(select(SimulationSpecModel).where(SimulationSpecModel.id == spec_id))
         spec = result.scalar_one_or_none()
         if not spec:
             raise ValueError(f"Spec {spec_id} not found")
@@ -209,7 +210,7 @@ async def generate_scene_task(payload: dict) -> dict:
         project_result = await db.execute(select(Project).where(Project.id == project_id))
         project = project_result.scalar_one_or_none()
         
-        spec_result = await db.execute(select(SimulationSpec).where(SimulationSpec.id == spec_id))
+        spec_result = await db.execute(select(SimulationSpecModel).where(SimulationSpecModel.id == spec_id))
         spec = spec_result.scalar_one_or_none()
         
         if not project or not spec or spec.project_id != project_id:
@@ -249,16 +250,22 @@ async def generate_scene_task(payload: dict) -> dict:
         from app.agents.scene_package import generate_scene_package
         from app.agents.asset_agent import select_assets
         
-        # Select assets first
+        # Select assets first - ensure entities are proper Entity objects
+        raw_entities = spec.payload_json.get("entities", [])
+        try:
+            from cymatic_shared.schemas.simulation_spec import Entity as EntitySchema
+            spec_entities = [EntitySchema(**e) if isinstance(e, dict) else e for e in raw_entities]
+        except Exception:
+            spec_entities = raw_entities
         asset_result = select_assets(
-            spec_entities=spec.payload_json.get("entities", []),
+            spec_entities=spec_entities,
             domain=project.domain,
             performance_budget=spec.payload_json.get("performance_budget", {})
         )
         
         # Generate scene package
         scene_package = generate_scene_package(
-            spec=SimulationSpec(**spec.payload_json),
+            spec=SimulationSpecSchema(**spec.payload_json),
             spec_version=spec.version,
             asset_manifest=asset_result.manifest.model_dump() if asset_result else {}
         )
@@ -365,7 +372,7 @@ async def publish_scene_task(payload: dict) -> dict:
             )
 
         spec_result = await db.execute(
-            select(SimulationSpec).where(SimulationSpec.id == scene_pkg.spec_id)
+            select(SimulationSpecModel).where(SimulationSpecModel.id == scene_pkg.spec_id)
         )
         spec = spec_result.scalar_one_or_none()
         if not spec or spec.status not in (SpecStatus.VALID,):

@@ -1,8 +1,16 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    WebSocket,
+    WebSocketDisconnect,
+    Query,
+)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List, Dict, Set, Any, Literal
+from typing import Optional, Dict, Set, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import json
@@ -10,12 +18,12 @@ import httpx
 import structlog
 from jose import JWTError
 from app.core.config import get_settings
-from app.core.dependencies import get_current_user, require_viewer
+from app.core.dependencies import require_viewer
 from app.core.security import decode_token, is_token_revoked
 from app.db.session import get_db, AsyncSessionLocal
 from app.models.stream_session import StreamSession, StreamSessionStatus
 from app.models.project import Project
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.models.runtime_event import RuntimeEvent
 
 router = APIRouter()
@@ -73,7 +81,11 @@ class VoiceTranscript(BaseModel):
     confidence: Optional[float] = None
 
 
-@router.post("/sessions", response_model=StreamSessionResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sessions",
+    response_model=StreamSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_stream_session(
     session_data: StreamSessionCreate,
     current_user: User = Depends(require_viewer),
@@ -82,7 +94,7 @@ async def create_stream_session(
     result = await db.execute(
         select(Project).where(
             Project.id == session_data.project_id,
-            Project.organization_id == current_user.organization_id
+            Project.organization_id == current_user.organization_id,
         )
     )
     project = result.scalar_one_or_none()
@@ -90,7 +102,9 @@ async def create_stream_session(
         raise HTTPException(status_code=404, detail="Project not found")
 
     if project.status != "published":
-        raise HTTPException(status_code=400, detail="Project must be published to stream")
+        raise HTTPException(
+            status_code=400, detail="Project must be published to stream"
+        )
 
     session = StreamSession(
         project_id=session_data.project_id,
@@ -115,7 +129,11 @@ async def create_stream_session(
     except httpx.ConnectError:
         session.status = StreamSessionStatus.FAILED
         await db.commit()
-        logger.warning("render_server_unavailable", session_id=session.id, url=settings.RENDER_SERVER_URL)
+        logger.warning(
+            "render_server_unavailable",
+            session_id=session.id,
+            url=settings.RENDER_SERVER_URL,
+        )
     except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
         session.status = StreamSessionStatus.FAILED
         await db.commit()
@@ -133,8 +151,7 @@ async def get_stream_session(
 ):
     result = await db.execute(
         select(StreamSession).where(
-            StreamSession.id == session_id,
-            StreamSession.user_id == current_user.id
+            StreamSession.id == session_id, StreamSession.user_id == current_user.id
         )
     )
     session = result.scalar_one_or_none()
@@ -152,8 +169,7 @@ async def handle_offer(
 ):
     result = await db.execute(
         select(StreamSession).where(
-            StreamSession.id == session_id,
-            StreamSession.user_id == current_user.id
+            StreamSession.id == session_id, StreamSession.user_id == current_user.id
         )
     )
     session = result.scalar_one_or_none()
@@ -171,13 +187,19 @@ async def handle_offer(
             session.status = StreamSessionStatus.ACTIVE
             session.started_at = datetime.now(timezone.utc)
             await db.commit()
-            return {"status": "offer_forwarded", "session_id": session_id, "answer": answer_data}
+            return {
+                "status": "offer_forwarded",
+                "session_id": session_id,
+                "answer": answer_data,
+            }
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="Render server unavailable")
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Render server timeout")
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"Render server error: {e.response.status_code}")
+        raise HTTPException(
+            status_code=502, detail=f"Render server error: {e.response.status_code}"
+        )
     except OSError as e:
         logger.error("offer_forward_failed", session_id=session_id, error=str(e))
         raise HTTPException(status_code=500, detail="Failed to forward offer")
@@ -192,8 +214,7 @@ async def handle_answer(
 ):
     result = await db.execute(
         select(StreamSession).where(
-            StreamSession.id == session_id,
-            StreamSession.user_id == current_user.id
+            StreamSession.id == session_id, StreamSession.user_id == current_user.id
         )
     )
     session = result.scalar_one_or_none()
@@ -213,7 +234,9 @@ async def handle_answer(
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Render server timeout")
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"Render server error: {e.response.status_code}")
+        raise HTTPException(
+            status_code=502, detail=f"Render server error: {e.response.status_code}"
+        )
     except OSError as e:
         logger.error("answer_forward_failed", session_id=session_id, error=str(e))
         raise HTTPException(status_code=500, detail="Failed to forward answer")
@@ -225,13 +248,18 @@ async def end_stream_session(
     current_user: User = Depends(require_viewer),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.scalar(select(StreamSession).where(
-        StreamSession.id == session_id,
-        StreamSession.user_id == current_user.id,
-    ))
+    session = await db.scalar(
+        select(StreamSession).where(
+            StreamSession.id == session_id,
+            StreamSession.user_id == current_user.id,
+        )
+    )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.status not in (StreamSessionStatus.DISCONNECTED, StreamSessionStatus.FAILED):
+    if session.status not in (
+        StreamSessionStatus.DISCONNECTED,
+        StreamSessionStatus.FAILED,
+    ):
         session.status = StreamSessionStatus.DISCONNECTED
         session.ended_at = datetime.now(timezone.utc)
         await db.commit()
@@ -248,8 +276,7 @@ async def handle_candidate(
 ):
     result = await db.execute(
         select(StreamSession).where(
-            StreamSession.id == session_id,
-            StreamSession.user_id == current_user.id
+            StreamSession.id == session_id, StreamSession.user_id == current_user.id
         )
     )
     session = result.scalar_one_or_none()
@@ -260,10 +287,16 @@ async def handle_candidate(
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
                 f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/candidate",
-                json={"candidate": candidate.candidate, "sdp_mid": candidate.sdp_mid, "sdp_mline_index": candidate.sdp_mline_index},
+                json={
+                    "candidate": candidate.candidate,
+                    "sdp_mid": candidate.sdp_mid,
+                    "sdp_mline_index": candidate.sdp_mline_index,
+                },
             )
     except httpx.ConnectError:
-        logger.warning("candidate_forward_failed_render_unavailable", session_id=session_id)
+        logger.warning(
+            "candidate_forward_failed_render_unavailable", session_id=session_id
+        )
     except httpx.TimeoutException:
         logger.warning("candidate_forward_timeout", session_id=session_id)
     except (httpx.HTTPStatusError, OSError) as e:
@@ -281,8 +314,7 @@ async def handle_input(
 ):
     result = await db.execute(
         select(StreamSession).where(
-            StreamSession.id == session_id,
-            StreamSession.user_id == current_user.id
+            StreamSession.id == session_id, StreamSession.user_id == current_user.id
         )
     )
     session = result.scalar_one_or_none()
@@ -301,7 +333,11 @@ async def handle_input(
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
                 f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/input",
-                json={"input_type": input_packet.input_type, "payload": input_packet.payload, "timestamp": input_packet.timestamp},
+                json={
+                    "input_type": input_packet.input_type,
+                    "payload": input_packet.payload,
+                    "timestamp": input_packet.timestamp,
+                },
             )
     except httpx.ConnectError:
         logger.warning("input_forward_failed_render_unavailable", session_id=session_id)
@@ -322,8 +358,7 @@ async def copilot_message(
 ):
     result = await db.execute(
         select(StreamSession).where(
-            StreamSession.id == session_id,
-            StreamSession.user_id == current_user.id
+            StreamSession.id == session_id, StreamSession.user_id == current_user.id
         )
     )
     session = result.scalar_one_or_none()
@@ -331,6 +366,7 @@ async def copilot_message(
         raise HTTPException(status_code=404, detail="Session not found")
 
     from app.models.agent_action import AgentAction
+
     agent_action = AgentAction(
         session_id=session_id,
         action_type="copilot_message",
@@ -351,20 +387,42 @@ async def copilot_message(
             )
             resp.raise_for_status()
             data = resp.json()
-            response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            return {"response": response_text, "actions": [], "provider": data.get("provider", "unknown")}
+            response_text = (
+                data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            )
+            return {
+                "response": response_text,
+                "actions": [],
+                "provider": data.get("provider", "unknown"),
+            }
     except httpx.ConnectError:
         logger.warning("copilot_llm_unavailable", session_id=session_id)
-        return JSONResponse(status_code=503, content={"response": "Service temporarily unavailable.", "actions": []})
+        return JSONResponse(
+            status_code=503,
+            content={"response": "Service temporarily unavailable.", "actions": []},
+        )
     except httpx.TimeoutException:
         logger.warning("copilot_llm_timeout", session_id=session_id)
-        return JSONResponse(status_code=504, content={"response": "Service temporarily unavailable.", "actions": []})
+        return JSONResponse(
+            status_code=504,
+            content={"response": "Service temporarily unavailable.", "actions": []},
+        )
     except httpx.HTTPStatusError as e:
-        logger.warning("copilot_llm_http_error", session_id=session_id, status=e.response.status_code)
-        return JSONResponse(status_code=502, content={"response": "Service temporarily unavailable.", "actions": []})
+        logger.warning(
+            "copilot_llm_http_error",
+            session_id=session_id,
+            status=e.response.status_code,
+        )
+        return JSONResponse(
+            status_code=502,
+            content={"response": "Service temporarily unavailable.", "actions": []},
+        )
     except (ValueError, OSError) as e:
         logger.error("copilot_llm_failed", session_id=session_id, error=str(e))
-        return JSONResponse(status_code=500, content={"response": "Service temporarily unavailable.", "actions": []})
+        return JSONResponse(
+            status_code=500,
+            content={"response": "Service temporarily unavailable.", "actions": []},
+        )
 
 
 @router.post("/sessions/{session_id}/voice/transcript")
@@ -376,8 +434,7 @@ async def voice_transcript(
 ):
     result = await db.execute(
         select(StreamSession).where(
-            StreamSession.id == session_id,
-            StreamSession.user_id == current_user.id
+            StreamSession.id == session_id, StreamSession.user_id == current_user.id
         )
     )
     session = result.scalar_one_or_none()
@@ -385,6 +442,7 @@ async def voice_transcript(
         raise HTTPException(status_code=404, detail="Session not found")
 
     from app.models.voice_session import VoiceSession
+
     voice_session = VoiceSession(
         session_id=session_id,
         transcript=transcript.transcript,
@@ -404,28 +462,58 @@ async def voice_transcript(
             )
             resp.raise_for_status()
             data = resp.json()
-            response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            response_text = (
+                data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            )
             voice_session.response_text = response_text
             await db.commit()
             return {"response": response_text, "tts_audio_url": None}
     except httpx.ConnectError:
         logger.warning("voice_llm_unavailable", session_id=session_id)
-        return JSONResponse(status_code=503, content={"response": "I didn't catch that. Could you repeat?", "tts_audio_url": None})
+        return JSONResponse(
+            status_code=503,
+            content={
+                "response": "I didn't catch that. Could you repeat?",
+                "tts_audio_url": None,
+            },
+        )
     except httpx.TimeoutException:
         logger.warning("voice_llm_timeout", session_id=session_id)
-        return JSONResponse(status_code=504, content={"response": "I didn't catch that. Could you repeat?", "tts_audio_url": None})
+        return JSONResponse(
+            status_code=504,
+            content={
+                "response": "I didn't catch that. Could you repeat?",
+                "tts_audio_url": None,
+            },
+        )
     except httpx.HTTPStatusError as e:
-        logger.warning("voice_llm_http_error", session_id=session_id, status=e.response.status_code)
-        return JSONResponse(status_code=502, content={"response": "I didn't catch that. Could you repeat?", "tts_audio_url": None})
+        logger.warning(
+            "voice_llm_http_error", session_id=session_id, status=e.response.status_code
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "response": "I didn't catch that. Could you repeat?",
+                "tts_audio_url": None,
+            },
+        )
     except (ValueError, OSError) as e:
         logger.error("voice_llm_failed", session_id=session_id, error=str(e))
-        return JSONResponse(status_code=500, content={"response": "I didn't catch that. Could you repeat?", "tts_audio_url": None})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "response": "I didn't catch that. Could you repeat?",
+                "tts_audio_url": None,
+            },
+        )
 
 
 # WebSocket signaling for WebRTC
 
+
 class SignalingManager:
     """Manages WebSocket connections for WebRTC signaling."""
+
     def __init__(self):
         self.active_connections: Dict[str, Set[WebSocket]] = {}
         self.session_participants: Dict[str, Dict[str, WebSocket]] = {}
@@ -440,7 +528,9 @@ class SignalingManager:
             self.session_participants[session_id] = {}
         self.session_participants[session_id][client_type] = websocket
 
-        logger.info("signaling.connected", session_id=session_id, client_type=client_type)
+        logger.info(
+            "signaling.connected", session_id=session_id, client_type=client_type
+        )
 
     def disconnect(self, websocket: WebSocket, session_id: str):
         if session_id in self.active_connections:
@@ -449,7 +539,11 @@ class SignalingManager:
                 del self.active_connections[session_id]
 
         if session_id in self.session_participants:
-            to_remove = [k for k, v in self.session_participants[session_id].items() if v == websocket]
+            to_remove = [
+                k
+                for k, v in self.session_participants[session_id].items()
+                if v == websocket
+            ]
             for k in to_remove:
                 del self.session_participants[session_id][k]
             if not self.session_participants[session_id]:
@@ -473,10 +567,17 @@ class SignalingManager:
                 except (WebSocketDisconnect, OSError):
                     pass
 
+
 signaling_manager = SignalingManager()
 
+
 @router.websocket("/ws/{session_id}")
-async def websocket_signaling(websocket: WebSocket, session_id: str, token: str = Query(...), type: Literal["android", "render_server", "unknown"] = Query("unknown")):
+async def websocket_signaling(
+    websocket: WebSocket,
+    session_id: str,
+    token: str = Query(...),
+    type: Literal["android", "render_server", "unknown"] = Query("unknown"),
+):
     """WebSocket endpoint for WebRTC signaling between render server and Android client."""
     # Validate session_id is numeric
     try:
@@ -528,7 +629,9 @@ async def websocket_signaling(websocket: WebSocket, session_id: str, token: str 
             return
 
         # Verify user's org matches session's project's org
-        project_result = await db.execute(select(Project).where(Project.id == session.project_id))
+        project_result = await db.execute(
+            select(Project).where(Project.id == session.project_id)
+        )
         project = project_result.scalar_one_or_none()
         if project and project.organization_id != user.organization_id:
             await websocket.close(code=4003, reason="Forbidden")
@@ -549,10 +652,15 @@ async def websocket_signaling(websocket: WebSocket, session_id: str, token: str 
             payload = data.get("payload", {})
 
             if msg_type == "register":
-                await websocket.send_json({
-                    "type": "registered",
-                    "payload": {"session_id": session_id, "client_type": client_type}
-                })
+                await websocket.send_json(
+                    {
+                        "type": "registered",
+                        "payload": {
+                            "session_id": session_id,
+                            "client_type": client_type,
+                        },
+                    }
+                )
 
             elif msg_type == "offer":
                 await signaling_manager.send_to_other(session_id, websocket, data)
@@ -564,13 +672,17 @@ async def websocket_signaling(websocket: WebSocket, session_id: str, token: str 
                 await signaling_manager.send_to_other(session_id, websocket, data)
 
             elif msg_type == "input":
-                await signaling_manager.send_to_client(session_id, "render_server", data)
+                await signaling_manager.send_to_client(
+                    session_id, "render_server", data
+                )
 
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong", "id": data.get("id", "")})
 
     except WebSocketDisconnect:
-        logger.info("signaling.disconnected", session_id=session_id, client_type=client_type)
+        logger.info(
+            "signaling.disconnected", session_id=session_id, client_type=client_type
+        )
     except (WebSocketDisconnect, OSError) as e:
         logger.error("signaling.error", session_id=session_id, error=str(e))
     finally:

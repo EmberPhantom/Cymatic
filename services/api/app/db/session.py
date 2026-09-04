@@ -1,7 +1,8 @@
 """API database session management."""
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
-from cymatic_shared.db import Base
+from cymatic_shared.db import Base  # re-export for Alembic and tests  # noqa: F401
 from cymatic_shared.utils import to_async_db_url
 from app.core.config import get_settings
 

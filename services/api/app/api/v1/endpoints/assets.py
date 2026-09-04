@@ -6,12 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import asyncio
 from datetime import timedelta
-from app.core.dependencies import get_current_user, require_creator, require_admin, require_viewer
+from app.core.dependencies import require_creator, require_admin, require_viewer
 from app.db.session import get_db
 from app.models.asset import Asset, AssetType, AssetStatus
 from app.models.project import Project
-from app.models.user import User, UserRole
-from app.services.minio_client import get_minio_client, get_asset_storage_key, get_asset_presigned_download_url
+from app.models.user import User
+from app.services.minio_client import (
+    get_minio_client,
+    get_asset_storage_key,
+    get_asset_presigned_download_url,
+)
 
 router = APIRouter()
 
@@ -58,31 +62,28 @@ async def init_upload(
         asset_type = AssetType(upload_data.type)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid asset type")
-    
+
     if upload_data.project_id:
         result = await db.execute(
             select(Project).where(
                 Project.id == upload_data.project_id,
-                Project.organization_id == current_user.organization_id
+                Project.organization_id == current_user.organization_id,
             )
         )
         project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
-    
+
     # Generate storage key
     storage_key = get_asset_storage_key(
-        current_user.organization_id,
-        upload_data.project_id,
-        upload_data.filename
+        current_user.organization_id, upload_data.project_id, upload_data.filename
     )
-    
+
     # Get presigned upload URL
     upload_url = get_minio_client().get_presigned_put_url(
-        storage_key,
-        expires=timedelta(hours=1)
+        storage_key, expires=timedelta(hours=1)
     )
-    
+
     # Create asset record
     asset = Asset(
         organization_id=current_user.organization_id,
@@ -98,7 +99,7 @@ async def init_upload(
     db.add(asset)
     await db.commit()
     await db.refresh(asset)
-    
+
     return AssetUploadInitResponse(
         upload_url=upload_url,
         asset_id=asset.id,
@@ -116,31 +117,34 @@ async def complete_upload(
     result = await db.execute(
         select(Asset).where(
             Asset.id == complete_data.asset_id,
-            Asset.organization_id == current_user.organization_id
+            Asset.organization_id == current_user.organization_id,
         )
     )
     asset = result.scalar_one_or_none()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
-    
+
     # Verify object exists in MinIO
     if not get_minio_client().object_exists(asset.storage_key):
         raise HTTPException(status_code=400, detail="Object not found in storage")
-    
+
     # Get object info
     info = get_minio_client().get_object_info(asset.storage_key)
-    asset.metadata_json.update({
-        "size": info["size"],
-        "etag": info["etag"],
-        "content_type": info["content_type"],
-    })
-    
+    asset.metadata_json.update(
+        {
+            "size": info["size"],
+            "etag": info["etag"],
+            "content_type": info["content_type"],
+        }
+    )
+
     asset.status = AssetStatus.READY
     await db.commit()
     await db.refresh(asset)
-    
+
     # Queue asset processing (thumbnails, LODs, etc.)
-    from app.core.queue import job_queue, Job, JobPriority, JobStatus
+    from app.core.queue import job_queue, Job, JobPriority
+
     job = Job(
         id=f"asset_{asset.id}_{int(asyncio.get_event_loop().time())}",
         type="process_asset",
@@ -148,7 +152,7 @@ async def complete_upload(
         priority=JobPriority.NORMAL,
     )
     await job_queue.enqueue(job, "asset")
-    
+
     return asset
 
 
@@ -162,7 +166,7 @@ async def list_assets(
     limit: int = 100,
 ):
     query = select(Asset).where(Asset.organization_id == current_user.organization_id)
-    
+
     if project_id:
         query = query.where(Asset.project_id == project_id)
     if type:
@@ -171,7 +175,7 @@ async def list_assets(
             query = query.where(Asset.type == asset_type)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid asset type")
-    
+
     query = query.offset(skip).limit(limit).order_by(Asset.created_at.desc())
     result = await db.execute(query)
     return result.scalars().all()
@@ -183,10 +187,12 @@ async def list_project_assets(
     current_user: User = Depends(require_viewer),
     db: AsyncSession = Depends(get_db),
 ):
-    project = await db.scalar(select(Project).where(
-        Project.id == project_id,
-        Project.organization_id == current_user.organization_id,
-    ))
+    project = await db.scalar(
+        select(Project).where(
+            Project.id == project_id,
+            Project.organization_id == current_user.organization_id,
+        )
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     result = await db.execute(
@@ -208,8 +214,7 @@ async def get_asset(
 ):
     result = await db.execute(
         select(Asset).where(
-            Asset.id == asset_id,
-            Asset.organization_id == current_user.organization_id
+            Asset.id == asset_id, Asset.organization_id == current_user.organization_id
         )
     )
     asset = result.scalar_one_or_none()
@@ -228,14 +233,13 @@ async def get_download_url(
     """Get presigned download URL for asset"""
     result = await db.execute(
         select(Asset).where(
-            Asset.id == asset_id,
-            Asset.organization_id == current_user.organization_id
+            Asset.id == asset_id, Asset.organization_id == current_user.organization_id
         )
     )
     asset = result.scalar_one_or_none()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
-    
+
     url = get_asset_presigned_download_url(asset.storage_key, expires_hours)
     return {"download_url": url, "expires_hours": expires_hours}
 
@@ -248,16 +252,15 @@ async def delete_asset(
 ):
     result = await db.execute(
         select(Asset).where(
-            Asset.id == asset_id,
-            Asset.organization_id == current_user.organization_id
+            Asset.id == asset_id, Asset.organization_id == current_user.organization_id
         )
     )
     asset = result.scalar_one_or_none()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
-    
+
     # Delete from MinIO
     get_minio_client().delete_object(asset.storage_key)
-    
+
     await db.delete(asset)
     await db.commit()

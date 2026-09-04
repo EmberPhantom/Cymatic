@@ -1,7 +1,7 @@
 """Scene Package Generator - Creates Unity-compatible scene packages from SimulationSpec"""
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from cymatic_shared.schemas.simulation_spec import SimulationSpec, Entity, NavigationSpec
+from cymatic_shared.schemas.simulation_spec import SimulationSpec, Entity, NavigationSpec, NavigationPoint, NavigationPath
 import structlog
 import json
 import uuid
@@ -152,7 +152,7 @@ class ScenePackageGenerator:
         
         # Convert navigation
         nav_points = [
-            NavigationPointData(
+            NavigationPoint(
                 id=p.id,
                 name=p.name,
                 position=p.position,
@@ -163,9 +163,9 @@ class ScenePackageGenerator:
         ]
         
         nav_paths = [
-            NavigationPathData(
+            NavigationPath(
                 from_point=p.from_point,
-                to_point=p.to,
+                to=p.to,
                 type=p.type,
                 waypoints=p.waypoints or []
             )

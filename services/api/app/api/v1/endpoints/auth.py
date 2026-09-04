@@ -5,7 +5,15 @@ from typing import Optional
 from datetime import timedelta
 from jose import JWTError
 from app.core.config import get_settings
-from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash, decode_token, revoke_token, is_token_revoked
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    verify_password,
+    get_password_hash,
+    decode_token,
+    revoke_token,
+    is_token_revoked,
+)
 from app.core.dependencies import get_current_user, security
 from app.core.rate_limit import rate_limit
 from app.db.session import get_db
@@ -61,7 +69,9 @@ class OrganizationResponse(BaseModel):
     plan: str
 
 
-@router.post("/login", response_model=Token, dependencies=[Depends(rate_limit("100/minute"))])
+@router.post(
+    "/login", response_model=Token, dependencies=[Depends(rate_limit("100/minute"))]
+)
 async def login(
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -96,13 +106,36 @@ async def login(
     return Token(access_token=access_token, refresh_token=refresh_token)
 
 
-def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+def _set_auth_cookies(
+    response: Response, access_token: str, refresh_token: str
+) -> None:
     secure = settings.ENVIRONMENT == "production"
-    response.set_cookie("cymatic_access_token", access_token, httponly=True, secure=secure, samesite="lax", max_age=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60, path="/")
-    response.set_cookie("cymatic_refresh_token", refresh_token, httponly=True, secure=secure, samesite="lax", max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400, path="/v1/auth")
+    response.set_cookie(
+        "cymatic_access_token",
+        access_token,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+    response.set_cookie(
+        "cymatic_refresh_token",
+        refresh_token,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path="/v1/auth",
+    )
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit("100/minute"))])
+@router.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("100/minute"))],
+)
 async def register(
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db),
@@ -150,7 +183,9 @@ async def refresh_token(
 ):
     token = refresh_request.token or http_request.cookies.get("cymatic_refresh_token")
     if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is required")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is required"
+        )
     try:
         payload = decode_token(token)
     except (JWTError, ValueError):
@@ -222,7 +257,12 @@ async def logout(
 ):
     """Revoke the current access token."""
     from app.core.security import revoke_token
-    token = credentials.credentials if credentials else request.cookies.get("cymatic_access_token")
+
+    token = (
+        credentials.credentials
+        if credentials
+        else request.cookies.get("cymatic_access_token")
+    )
     if token:
         await revoke_token(token)
     response.delete_cookie("cymatic_access_token", path="/")

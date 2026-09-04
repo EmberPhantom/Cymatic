@@ -2,7 +2,7 @@
 from typing import Optional, Dict
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, PrivateAttr, ConfigDict
 from threading import Lock
 import structlog
 
@@ -19,6 +19,7 @@ class CircuitState(str, Enum):
 
 class CircuitBreaker(BaseModel):
     """Circuit breaker for provider fault tolerance."""
+    model_config = ConfigDict(validate_assignment=True)
     provider: ProviderName
     state: CircuitState = CircuitState.CLOSED
     failure_count: int = 0
@@ -93,34 +94,44 @@ _circuit_breakers: Dict[ProviderName, CircuitBreaker] = {}
 _lock = Lock()
 
 
-def get_circuit_breaker(provider: str) -> CircuitBreaker:
+def _normalize_provider(provider) -> ProviderName:
+    if isinstance(provider, ProviderName):
+        return provider
+    try:
+        return ProviderName(provider)
+    except Exception:
+        return provider
+
+
+def get_circuit_breaker(provider) -> CircuitBreaker:
     """Get or create circuit breaker for provider."""
     global _circuit_breakers
+    provider = _normalize_provider(provider)
     with _lock:
         if provider not in _circuit_breakers:
             _circuit_breakers[provider] = CircuitBreaker(provider=provider)
         return _circuit_breakers[provider]
 
 
-def record_provider_success(provider: str):
+def record_provider_success(provider):
     """Record successful request for provider."""
     cb = get_circuit_breaker(provider)
     cb.record_success()
 
 
-def record_provider_failure(provider: str):
+def record_provider_failure(provider):
     """Record failed request for provider."""
     cb = get_circuit_breaker(provider)
     cb.record_failure()
 
 
-def can_execute_provider(provider: str) -> bool:
+def can_execute_provider(provider) -> bool:
     """Check if provider can execute request."""
     cb = get_circuit_breaker(provider)
     return cb.can_execute()
 
 
-def get_circuit_breaker_status(provider: str) -> dict:
+def get_circuit_breaker_status(provider) -> dict:
     """Get circuit breaker status for provider."""
     cb = get_circuit_breaker(provider)
     return {
@@ -133,4 +144,4 @@ def get_circuit_breaker_status(provider: str) -> dict:
 
 def get_all_circuit_breaker_status() -> Dict[str, dict]:
     """Get status of all circuit breakers."""
-    return {provider: get_circuit_breaker_status(provider) for provider in ["groq", "openrouter", "nvidia_nim", "openai", "sarvam"]}
+    return {p.value: get_circuit_breaker_status(p) for p in ProviderName}

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.core.dependencies import get_current_user, require_creator, require_admin
 from app.db.session import get_db
 from app.models.project import Project, ProjectStatus
-from app.models.user import User, UserRole
+from app.models.user import User
 
 router = APIRouter()
 
@@ -60,7 +60,8 @@ async def list_projects(
     result = await db.execute(
         select(Project)
         .where(Project.organization_id == current_user.organization_id)
-        .offset(skip).limit(limit)
+        .offset(skip)
+        .limit(limit)
         .order_by(Project.created_at.desc())
     )
     return result.scalars().all()
@@ -74,8 +75,10 @@ async def create_project(
 ):
     valid_domains = ["real_estate", "heritage"]
     if project_data.domain not in valid_domains:
-        raise HTTPException(status_code=400, detail=f"Invalid domain. Must be one of: {valid_domains}")
-    
+        raise HTTPException(
+            status_code=400, detail=f"Invalid domain. Must be one of: {valid_domains}"
+        )
+
     project = Project(
         name=project_data.name,
         domain=project_data.domain,
@@ -99,7 +102,7 @@ async def get_project(
     result = await db.execute(
         select(Project).where(
             Project.id == project_id,
-            Project.organization_id == current_user.organization_id
+            Project.organization_id == current_user.organization_id,
         )
     )
     project = result.scalar_one_or_none()
@@ -118,19 +121,22 @@ async def update_project(
     result = await db.execute(
         select(Project).where(
             Project.id == project_id,
-            Project.organization_id == current_user.organization_id
+            Project.organization_id == current_user.organization_id,
         )
     )
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     if project_update.name is not None:
         project.name = project_update.name
     if project_update.domain is not None:
         valid_domains = ["real_estate", "heritage"]
         if project_update.domain not in valid_domains:
-            raise HTTPException(status_code=400, detail=f"Invalid domain. Must be one of: {valid_domains}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid domain. Must be one of: {valid_domains}",
+            )
         project.domain = project_update.domain
     if project_update.category is not None:
         project.category = project_update.category
@@ -147,7 +153,7 @@ async def update_project(
                 detail=f"Cannot transition from '{current_status.value}' to '{new_status.value}'",
             )
         project.status = new_status
-    
+
     await db.commit()
     await db.refresh(project)
     return project
@@ -162,12 +168,12 @@ async def delete_project(
     result = await db.execute(
         select(Project).where(
             Project.id == project_id,
-            Project.organization_id == current_user.organization_id
+            Project.organization_id == current_user.organization_id,
         )
     )
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     await db.delete(project)
     await db.commit()

@@ -1,14 +1,13 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from app.core.dependencies import get_current_user, require_admin, require_owner, require_viewer
+from app.core.dependencies import require_owner, require_viewer
 from app.db.session import get_db
 from app.models.credit_ledger import CreditLedger
-from app.models.organization import Organization
-from app.models.user import User, UserRole
+from app.models.user import User
 
 router = APIRouter()
 
@@ -55,8 +54,9 @@ async def get_credit_balance(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(func.sum(CreditLedger.amount))
-        .where(CreditLedger.organization_id == current_user.organization_id)
+        select(func.sum(CreditLedger.amount)).where(
+            CreditLedger.organization_id == current_user.organization_id
+        )
     )
     balance = result.scalar() or 0
     return CreditBalance(balance=balance)
@@ -73,16 +73,18 @@ async def get_credit_usage(
     query = select(CreditLedger).where(
         CreditLedger.organization_id == current_user.organization_id
     )
-    
+
     if event_type:
         query = query.where(CreditLedger.event_type == event_type)
-    
+
     query = query.order_by(CreditLedger.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
 
 
-@router.post("/adjust", response_model=CreditBalance, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/adjust", response_model=CreditBalance, status_code=status.HTTP_201_CREATED
+)
 async def adjust_credits(
     adjustment: CreditAdjustment,
     current_user: User = Depends(require_owner),
@@ -99,11 +101,12 @@ async def adjust_credits(
     ledger.metadata_json = {"reason": adjustment.reason, "adjusted_by": current_user.id}
     db.add(ledger)
     await db.commit()
-    
+
     # Return new balance
     result = await db.execute(
-        select(func.sum(CreditLedger.amount))
-        .where(CreditLedger.organization_id == current_user.organization_id)
+        select(func.sum(CreditLedger.amount)).where(
+            CreditLedger.organization_id == current_user.organization_id
+        )
     )
     balance = result.scalar() or 0
     return CreditBalance(balance=balance)
@@ -128,14 +131,15 @@ async def deduct_credits(
     """Deduct credits from organization balance. Returns True if successful."""
     # Check current balance
     result = await db.execute(
-        select(func.sum(CreditLedger.amount))
-        .where(CreditLedger.organization_id == organization_id)
+        select(func.sum(CreditLedger.amount)).where(
+            CreditLedger.organization_id == organization_id
+        )
     )
     balance = result.scalar() or 0
-    
+
     if balance < amount:
         return False
-    
+
     ledger = CreditLedger(
         organization_id=organization_id,
         event_type=event_type,

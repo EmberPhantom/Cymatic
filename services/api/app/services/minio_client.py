@@ -1,5 +1,5 @@
 """MinIO / S3-compatible object storage client with connection pooling"""
-import os
+
 import io
 from datetime import timedelta
 from typing import Optional, BinaryIO, List
@@ -16,11 +16,11 @@ settings = get_settings()
 
 class MinIOClient:
     """Wrapper for MinIO client with CYMATIC-specific methods and connection pooling."""
-    
+
     # Class-level connection pool for reuse across instances
     _pool_manager: Optional[PoolManager] = None
     _pool_lock = Lock()
-    
+
     def __init__(self, pool_size: int = 10, max_retries: int = 3):
         # Create connection pool if not exists
         with self._pool_lock:
@@ -31,7 +31,7 @@ class MinIOClient:
                     retries=max_retries,
                     timeout=30.0,
                 )
-        
+
         self.client = Minio(
             settings.S3_ENDPOINT.replace("http://", "").replace("https://", ""),
             access_key=settings.S3_ACCESS_KEY,
@@ -42,7 +42,7 @@ class MinIOClient:
         )
         self.bucket_name = settings.S3_BUCKET_NAME
         self._ensure_bucket()
-    
+
     @classmethod
     def close_pool(cls):
         """Close the connection pool (call on shutdown)."""
@@ -50,7 +50,7 @@ class MinIOClient:
             if cls._pool_manager:
                 cls._pool_manager.clear()
                 cls._pool_manager = None
-    
+
     def _ensure_bucket(self):
         """Create bucket if it doesn't exist."""
         try:
@@ -58,9 +58,11 @@ class MinIOClient:
                 self.client.make_bucket(self.bucket_name, location=settings.S3_REGION)
                 logger.info("bucket_created", bucket=self.bucket_name)
         except S3Error as e:
-            logger.error("bucket_creation_failed", bucket=self.bucket_name, error=str(e))
+            logger.error(
+                "bucket_creation_failed", bucket=self.bucket_name, error=str(e)
+            )
             raise
-    
+
     def upload_file(
         self,
         object_name: str,
@@ -82,7 +84,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("file_upload_failed", object=object_name, error=str(e))
             raise
-    
+
     def upload_data(
         self,
         object_name: str,
@@ -106,7 +108,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("data_upload_failed", object=object_name, error=str(e))
             raise
-    
+
     def upload_stream(
         self,
         object_name: str,
@@ -130,7 +132,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("stream_upload_failed", object=object_name, error=str(e))
             raise
-    
+
     def download_file(self, object_name: str, file_path: str) -> str:
         """Download object to local file."""
         try:
@@ -140,7 +142,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("file_download_failed", object=object_name, error=str(e))
             raise
-    
+
     def download_data(self, object_name: str) -> bytes:
         """Download object as bytes."""
         try:
@@ -152,7 +154,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("data_download_failed", object=object_name, error=str(e))
             raise
-    
+
     def get_presigned_url(
         self,
         object_name: str,
@@ -171,7 +173,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("presigned_url_failed", object=object_name, error=str(e))
             raise
-    
+
     def get_presigned_put_url(
         self,
         object_name: str,
@@ -189,7 +191,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("presigned_put_url_failed", object=object_name, error=str(e))
             raise
-    
+
     def delete_object(self, object_name: str) -> bool:
         """Delete an object."""
         try:
@@ -199,7 +201,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("object_delete_failed", object=object_name, error=str(e))
             return False
-    
+
     def delete_objects(self, object_names: List[str]) -> int:
         """Delete multiple objects."""
         deleted = 0
@@ -207,7 +209,7 @@ class MinIOClient:
             if self.delete_object(name):
                 deleted += 1
         return deleted
-    
+
     def object_exists(self, object_name: str) -> bool:
         """Check if object exists."""
         try:
@@ -215,7 +217,7 @@ class MinIOClient:
             return True
         except S3Error:
             return False
-    
+
     def get_object_info(self, object_name: str) -> dict:
         """Get object metadata."""
         try:
@@ -231,7 +233,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("object_info_failed", object=object_name, error=str(e))
             raise
-    
+
     def list_objects(
         self,
         prefix: str = "",
@@ -256,7 +258,7 @@ class MinIOClient:
         except S3Error as e:
             logger.error("list_objects_failed", prefix=prefix, error=str(e))
             raise
-    
+
     def copy_object(
         self,
         source_object: str,
@@ -274,7 +276,12 @@ class MinIOClient:
             logger.info("object_copied", source=source_object, dest=dest_object)
             return dest_object
         except S3Error as e:
-            logger.error("object_copy_failed", source=source_object, dest=dest_object, error=str(e))
+            logger.error(
+                "object_copy_failed",
+                source=source_object,
+                dest=dest_object,
+                error=str(e),
+            )
             raise
 
 
@@ -290,25 +297,35 @@ def get_minio_client() -> MinIOClient:
 
 
 # Helper functions for common operations
-def get_asset_storage_key(organization_id: int, project_id: int | None, filename: str) -> str:
+def get_asset_storage_key(
+    organization_id: int, project_id: int | None, filename: str
+) -> str:
     """Generate standardized storage key for assets."""
     if project_id:
         return f"orgs/{organization_id}/projects/{project_id}/assets/{filename}"
     return f"orgs/{organization_id}/assets/{filename}"
 
 
-def get_scene_package_key(organization_id: int, project_id: int, spec_id: int, version: int) -> str:
+def get_scene_package_key(
+    organization_id: int, project_id: int, spec_id: int, version: int
+) -> str:
     """Generate storage key for scene packages."""
     return f"orgs/{organization_id}/projects/{project_id}/scenes/spec_{spec_id}_v{version}.cymatic"
 
 
-def get_asset_presigned_upload_url(organization_id: int, project_id: int | None, filename: str, expires_hours: int = 1) -> tuple[str, str]:
+def get_asset_presigned_upload_url(
+    organization_id: int, project_id: int | None, filename: str, expires_hours: int = 1
+) -> tuple[str, str]:
     """Get presigned upload URL and storage key for an asset."""
     storage_key = get_asset_storage_key(organization_id, project_id, filename)
-    url = get_minio_client().get_presigned_put_url(storage_key, expires=timedelta(hours=expires_hours))
+    url = get_minio_client().get_presigned_put_url(
+        storage_key, expires=timedelta(hours=expires_hours)
+    )
     return url, storage_key
 
 
 def get_asset_presigned_download_url(storage_key: str, expires_hours: int = 1) -> str:
     """Get presigned download URL for an asset."""
-    return get_minio_client().get_presigned_url(storage_key, expires=timedelta(hours=expires_hours))
+    return get_minio_client().get_presigned_url(
+        storage_key, expires=timedelta(hours=expires_hours)
+    )

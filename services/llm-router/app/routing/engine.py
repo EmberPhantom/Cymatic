@@ -429,10 +429,6 @@ class RoutingEngine:
     
     def get_provider_status(self) -> Dict[ProviderName, ProviderStatus]:
         return self.status
-    
-    def get_circuit_breaker_status(self) -> Dict[str, dict]:
-        from app.routing.circuit_breaker import get_all_circuit_breaker_status
-        return get_all_circuit_breaker_status()
 
 
 # Global routing engine
