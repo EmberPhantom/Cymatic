@@ -146,9 +146,9 @@ migrate:
 
 # Docker
 docker-build:
-	docker build -t cymatic/api:latest ./services/api
-	docker build -t cymatic/worker:latest ./services/worker
-	docker build -t cymatic/llm-router:latest ./services/llm-router
+	docker build -f services/api/Dockerfile -t cymatic/api:latest .
+	docker build -f services/worker/Dockerfile -t cymatic/worker:latest .
+	docker build -f services/llm-router/Dockerfile -t cymatic/llm-router:latest .
 	docker build -t cymatic/web:latest ./apps/web
 
 docker-up:

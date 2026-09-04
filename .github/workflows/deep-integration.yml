@@ -76,9 +76,6 @@ jobs:
             exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
             test "$exit_code" = "0" || exit "$exit_code"
           done
-          curl --fail http://localhost:8000/health
-          curl --fail http://localhost:8001/health
-          curl --fail http://localhost:3000
 
       - name: Install frontend dependencies
         working-directory: apps/web

@@ -57,7 +57,7 @@ jobs:
           MINIO_ROOT_PASSWORD: minioadmin
         ports: ["9000:9000"]
         options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-cmd "wget --spider -q http://localhost:9000/minio/health/live || exit 1"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -95,7 +95,7 @@ jobs:
           S3_ENDPOINT: http://localhost:9000
         run: |
           source services/api/.venv/bin/activate
-          .venv/bin/pytest services/api/tests/ -v --benchmark-only --benchmark-json=services/api/benchmark-results.json \
+          services/api/.venv/bin/pytest services/api/tests/ -v --benchmark-only --benchmark-json=services/api/benchmark-results.json \
             --benchmark-min-rounds=10 --benchmark-warmup=true
 
       - name: Upload Benchmark Results
@@ -179,13 +179,13 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build API image
-        run: docker build -t cymatic/api:benchmark ./services/api
+        run: docker build -f services/api/Dockerfile -t cymatic/api:benchmark .
 
       - name: Build Worker image
-        run: docker build -t cymatic/worker:benchmark ./services/worker
+        run: docker build -f services/worker/Dockerfile -t cymatic/worker:benchmark .
 
       - name: Build LLM Router image
-        run: docker build -t cymatic/llm-router:benchmark ./services/llm-router
+        run: docker build -f services/llm-router/Dockerfile -t cymatic/llm-router:benchmark .
 
       - name: Build Frontend image
         run: docker build -t cymatic/web:benchmark ./apps/web
