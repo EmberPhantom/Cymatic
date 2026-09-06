@@ -375,8 +375,8 @@ jobs:
     name: Pre-commit Hooks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install pre-commit && pre-commit run --all-files --show-diff-on-failure || (echo "::warning::pre-commit failed, run 'pre-commit run --all-files' locally"; exit 1)
