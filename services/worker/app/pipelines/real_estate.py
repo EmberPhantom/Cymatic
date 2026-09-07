@@ -1,20 +1,21 @@
 """Real Estate Generation Pipeline - Orchestrates all agents for spec generation with checkpointing"""
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from pydantic import BaseModel
-from cymatic_shared.schemas.simulation_spec import SimulationSpec, Entity
-from app.agents.intake_agent import process_intake, IntakeResult
-from app.agents.clarification_agent import process_clarification_answers, ClarificationResult
-from app.agents.research_agent import research_generation, ResearchResult
-from app.agents.domain_expert_agent import check_domain_compliance, DomainCheckResult
-from app.agents.architect_agent import create_simulation_spec, ArchitectResult
-from app.agents.asset_agent import select_assets, AssetAgentResult
-from app.agents.composer_agent import compose_scene, ComposerResult
-from app.agents.validation_agent import validate_simulation_spec, ValidationAgentResult
-from app.agents.scene_package import generate_scene_package, ScenePackage
-from app.core.queue import Job, JobPriority, JobStatus
-from app.pipelines.checkpoint import PipelineCheckpointManager, PipelineCheckpoint
+
+from cymatic_shared.schemas.simulation_spec import SimulationSpec
+from app.agents.asset_agent import AssetAgentResult, select_assets
+from app.agents.architect_agent import ArchitectResult, create_simulation_spec
+from app.agents.clarification_agent import ClarificationResult, process_clarification_answers
+from app.agents.composer_agent import ComposerResult, compose_scene
+from app.agents.domain_expert_agent import DomainCheckResult, check_domain_compliance
+from app.agents.intake_agent import IntakeResult, process_intake
+from app.agents.research_agent import ResearchResult, research_generation
+from app.agents.scene_package import ScenePackage
+from app.agents.validation_agent import ValidationAgentResult, validate_simulation_spec
+from app.core.queue import Job, JobStatus
+from app.pipelines.checkpoint import PipelineCheckpoint, PipelineCheckpointManager
 import structlog
-import asyncio
 
 logger = structlog.get_logger()
 
@@ -22,23 +23,23 @@ logger = structlog.get_logger()
 class PipelineInput(BaseModel):
     project_id: int
     prompt: str
-    context: Dict[str, Any] = {}
-    clarification_answers: Dict[str, str] = {}
+    context: dict[str, Any] = {}
+    clarification_answers: dict[str, str] = {}
 
 
 class PipelineResult(BaseModel):
-    spec: Optional[SimulationSpec] = None
-    scene_package: Optional[ScenePackage] = None
-    intake: Optional[IntakeResult] = None
-    clarification: Optional[ClarificationResult] = None
-    research: Optional[ResearchResult] = None
-    domain_check: Optional[DomainCheckResult] = None
-    architect: Optional[ArchitectResult] = None
-    composer: Optional[ComposerResult] = None
-    assets: Optional[AssetAgentResult] = None
-    validation: Optional[ValidationAgentResult] = None
+    spec: SimulationSpec | None = None
+    scene_package: ScenePackage | None = None
+    intake: IntakeResult | None = None
+    clarification: ClarificationResult | None = None
+    research: ResearchResult | None = None
+    domain_check: DomainCheckResult | None = None
+    architect: ArchitectResult | None = None
+    composer: ComposerResult | None = None
+    assets: AssetAgentResult | None = None
+    validation: ValidationAgentResult | None = None
     status: str = "pending"
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class RealEstatePipeline:
@@ -59,7 +60,7 @@ class RealEstatePipeline:
     def __init__(self):
         self.checkpoint_manager = PipelineCheckpointManager()
     
-    def _load_stage_outputs(self, stage_outputs: Dict[str, Any], result: 'PipelineResult'):
+    def _load_stage_outputs(self, stage_outputs: dict[str, Any], result: 'PipelineResult'):
         """Load stage outputs into result object."""
         if "intake" in stage_outputs:
             from app.agents.intake_agent import IntakeResult
@@ -84,32 +85,31 @@ class RealEstatePipeline:
         if "scene_package" in stage_outputs:
             result.scene_package = ScenePackage(**stage_outputs["scene_package"])
     
-    async def _run_stage(self, stage: str, stage_index: int, input_data: PipelineInput, 
-                         stage_outputs: Dict[str, Any], job: Job = None) -> 'PipelineResult':
+    async def _run_stage(  # noqa: PLR0912
+        self,
+        stage: str,
+        stage_index: int,
+        input_data: PipelineInput,
+        stage_outputs: dict[str, Any],
+        job: Job | None = None,
+    ) -> 'PipelineResult':
         """Execute a single pipeline stage."""
-        from app.agents.intake_agent import process_intake
         from app.agents.clarification_agent import process_clarification_answers
-        from app.agents.research_agent import research_generation
-        from app.agents.architect_agent import create_simulation_spec
-        from app.agents.asset_agent import select_assets
-        from app.agents.composer_agent import compose_scene
-        from app.agents.validation_agent import validate_simulation_spec
-        from app.agents.scene_package import generate_scene_package
-        from app.agents.domain_expert_agent import check_domain_compliance
-        
+        from app.agents.intake_agent import process_intake
+
         result = PipelineResult()
         # Hydrate outputs from prior stages (or a restored checkpoint) so
         # downstream stages can reference intake/architect/etc.
         self._load_stage_outputs(stage_outputs or {}, result)
-        
+
         if job:
             job.status = JobStatus.RUNNING
-        
+
         try:
             if stage == "intake":
                 logger.info("pipeline_stage_start", stage="intake", project_id=input_data.project_id)
                 result.intake = await process_intake(input_data.prompt, input_data.context)
-                
+
             elif stage == "clarification":
                 if not input_data.clarification_answers:
                     # No clarification answers provided, skip to next stage
@@ -117,23 +117,27 @@ class RealEstatePipeline:
                         questions=[],
                         updated_fields={},
                         ready_for_generation=True,
-                        completion_percentage=1.0
+                        completion_percentage=1.0,
                     )
                 else:
+                    if result.intake is None:
+                        raise ValueError("Intake result missing for clarification stage")
                     logger.info("pipeline_stage_start", stage="clarification", project_id=input_data.project_id)
                     result.clarification = await process_clarification_answers(
                         result.intake.detected_domain,
                         result.intake.extracted_entities,
-                        input_data.clarification_answers
+                        input_data.clarification_answers,
                     )
-                    
+
                     if not result.clarification.ready_for_generation:
                         return PipelineResult(
                             status="awaiting_clarification",
-                            error="Awaiting clarification"
+                            error="Awaiting clarification",
                         )
-                
+
             elif stage == "research":
+                if result.intake is None:
+                    raise ValueError("Intake result missing for research stage")
                 logger.info("pipeline_stage_start", stage="research", project_id=input_data.project_id)
                 style = result.intake.extracted_entities.get("style", "modern")
                 research_reqs = {
@@ -144,10 +148,12 @@ class RealEstatePipeline:
                 result.research = research_generation(
                     result.intake.detected_domain,
                     style,
-                    research_reqs
+                    research_reqs,
                 )
-                
+
             elif stage == "architect":
+                if result.intake is None:
+                    raise ValueError("Intake result missing for architect stage")
                 logger.info("pipeline_stage_start", stage="architect", project_id=input_data.project_id)
                 clarification_data = result.clarification.updated_fields if result.clarification else {}
                 result.architect = await create_simulation_spec(
@@ -155,51 +161,63 @@ class RealEstatePipeline:
                     objective=input_data.prompt,
                     intake_data=result.intake.extracted_entities,
                     clarification_data=clarification_data,
-                    context=input_data.context
+                    context=input_data.context,
                 )
-                
+
             elif stage == "composer":
+                if result.architect is None or result.architect.spec is None:
+                    raise ValueError("Architect result missing for composer stage")
+                if result.intake is None:
+                    raise ValueError("Intake result missing for composer stage")
                 logger.info("pipeline_stage_start", stage="composer", project_id=input_data.project_id)
                 clarification_data = result.clarification.updated_fields if result.clarification else {}
                 result.composer = compose_scene(
                     entities=result.architect.spec.entities,
                     domain=result.intake.detected_domain,
-                    user_preferences=clarification_data
+                    user_preferences=clarification_data,
                 )
-                
+
                 # Update spec with composed layout
                 result.architect.spec.entities = result.composer.entities
                 result.architect.spec.navigation = result.composer.navigation
                 result.architect.spec.lighting = result.composer.lighting
-                
+
             elif stage == "domain_expert":
+                if result.architect is None or result.architect.spec is None:
+                    raise ValueError("Architect result missing for domain_expert stage")
                 logger.info("pipeline_stage_start", stage="domain_expert", project_id=input_data.project_id)
                 result.domain_check = check_domain_compliance(result.architect.spec)
-                
+
                 if not result.domain_check.valid:
                     return PipelineResult(
                         status="domain_validation_failed",
-                        error="Domain compliance check failed"
+                        error="Domain compliance check failed",
                     )
-                
+
             elif stage == "asset_selection":
+                if result.architect is None or result.architect.spec is None:
+                    raise ValueError("Architect result missing for asset_selection stage")
+                if result.intake is None:
+                    raise ValueError("Intake result missing for asset_selection stage")
                 logger.info("pipeline_stage_start", stage="asset_selection", project_id=input_data.project_id)
                 result.assets = select_assets(
                     spec_entities=result.architect.spec.entities,
                     domain=result.intake.detected_domain,
-                    performance_budget=result.architect.spec.performance_budget.model_dump()
+                    performance_budget=result.architect.spec.performance_budget.model_dump(),
                 )
-                
+
             elif stage == "validation":
+                if result.architect is None or result.architect.spec is None:
+                    raise ValueError("Architect result missing for validation stage")
                 logger.info("pipeline_stage_start", stage="validation", project_id=input_data.project_id)
                 result.validation = validate_simulation_spec(result.architect.spec.model_dump())
-                
+
                 if not result.validation.valid:
                     return PipelineResult(
                         status="validation_failed",
-                        error="Final validation failed"
+                        error="Final validation failed",
                     )
-                
+
             return PipelineResult(
                 spec=result.architect.spec if result.architect else None,
                 scene_package=None,
@@ -211,14 +229,14 @@ class RealEstatePipeline:
                 composer=result.composer,
                 assets=result.assets,
                 validation=result.validation,
-                status="completed"
+                status="completed",
             )
-            
+
         except (ValueError, KeyError) as e:
             logger.error("pipeline_stage_failed", stage=stage, project_id=input_data.project_id, error=str(e))
             raise
     
-    async def run(self, input_data: PipelineInput, job: Job = None) -> PipelineResult:
+    async def run(self, input_data: PipelineInput, job: Job | None = None) -> PipelineResult:
         """Execute the full pipeline with checkpointing."""
         result = PipelineResult()
         
@@ -315,26 +333,26 @@ class RealEstatePipeline:
         
         return result
     
-    async def run_intake_only(self, prompt: str, context: Dict[str, Any] = None) -> IntakeResult:
+    async def run_intake_only(self, prompt: str, context: dict[str, Any] | None = None) -> IntakeResult:
         """Run only the intake stage."""
         return await process_intake(prompt, context or {})
-    
+
     async def run_clarification(
         self,
         domain: str,
-        current_answers: Dict[str, Any],
-        new_answers: Dict[str, str]
+        current_answers: dict[str, Any],
+        new_answers: dict[str, str],
     ) -> ClarificationResult:
         """Run only the clarification stage."""
         return await process_clarification_answers(domain, current_answers, new_answers)
-    
+
     async def run_from_clarification(
         self,
         project_id: int,
         prompt: str,
         intake_data: IntakeResult,
         clarification_data: ClarificationResult,
-        context: Dict[str, Any] = None
+        context: dict[str, Any] | None = None,
     ) -> PipelineResult:
         """Run pipeline from clarification stage onwards."""
         input_data = PipelineInput(
@@ -357,8 +375,8 @@ real_estate_pipeline = RealEstatePipeline()
 async def generate_real_estate_spec(
     project_id: int,
     prompt: str,
-    context: Dict[str, Any] = None,
-    clarification_answers: Dict[str, str] = None
+    context: dict[str, Any] | None = None,
+    clarification_answers: dict[str, str] | None = None,
 ) -> PipelineResult:
     """Convenience function for real estate spec generation."""
     input_data = PipelineInput(

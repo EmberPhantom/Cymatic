@@ -1,15 +1,17 @@
 """Redis sliding-window rate limiter."""
 import time
-from typing import Optional
+from collections.abc import Awaitable, Callable
+
 import redis.asyncio as redis
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
+
 from app.core.config import get_settings
 
 settings = get_settings()
-_redis: Optional[redis.Redis] = None
+_redis: redis.Redis | None = None
 
 
-def _get_redis() -> Optional[redis.Redis]:
+def _get_redis() -> redis.Redis | None:
     global _redis
     if _redis is None:
         try:
@@ -34,25 +36,30 @@ async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
     now = int(time.time())
     window_key = f"rl:{key}:{now // window}"
     try:
-        current = await r.incr(window_key)
+        current: int = int(await r.incr(window_key))
         if current == 1:
             await r.expire(window_key, window)
         if current > count:
             ttl = await r.ttl(window_key)
-            return True, max(ttl, 1)
+            ttl_int = int(ttl) if isinstance(ttl, int) else 1
+            return True, max(ttl_int, 1)
     except Exception:
         return False, 0
     return False, 0
 
 
-async def rate_limit_dependency(request: Request, limit: str):
-    key = f"{request.client.host}:{request.url.path}" if request.client else request.url.path
+async def rate_limit_dependency(request: Request, limit: str) -> None:
+    host = request.client.host if request.client else "unknown"
+    key = f"{host}:{request.url.path}"
     limited, retry_after = await is_rate_limited(key, limit)
     if limited:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(retry_after)})
+        raise HTTPException(
+            status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(retry_after)}
+        )
 
 
-def rate_limit(limit: str):
-    async def _dep(request: Request):
+def rate_limit(limit: str) -> Callable[[Request], Awaitable[None]]:
+    async def _dep(request: Request) -> None:
         await rate_limit_dependency(request, limit)
+
     return _dep

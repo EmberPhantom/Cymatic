@@ -2,8 +2,9 @@
 
 import io
 from datetime import timedelta
-from typing import Optional, BinaryIO, List
+from typing import BinaryIO
 from minio import Minio
+from minio.commonconfig import CopySource
 from minio.error import S3Error
 from app.core.config import get_settings
 import structlog
@@ -18,7 +19,7 @@ class MinIOClient:
     """Wrapper for MinIO client with CYMATIC-specific methods and connection pooling."""
 
     # Class-level connection pool for reuse across instances
-    _pool_manager: Optional[PoolManager] = None
+    _pool_manager: PoolManager | None = None
     _pool_lock = Lock()
 
     def __init__(self, pool_size: int = 10, max_retries: int = 3):
@@ -67,8 +68,8 @@ class MinIOClient:
         self,
         object_name: str,
         file_path: str,
-        content_type: str = None,
-        metadata: dict = None,
+        content_type: str | None = None,
+        metadata: dict | None = None,
     ) -> str:
         """Upload a file from local path."""
         try:
@@ -76,8 +77,8 @@ class MinIOClient:
                 self.bucket_name,
                 object_name,
                 file_path,
-                content_type=content_type,
-                metadata=metadata or {},
+                content_type=content_type or "application/octet-stream",
+                metadata=metadata,
             )
             logger.info("file_uploaded", object=object_name, bucket=self.bucket_name)
             return object_name
@@ -90,7 +91,7 @@ class MinIOClient:
         object_name: str,
         data: bytes,
         content_type: str = "application/octet-stream",
-        metadata: dict = None,
+        metadata: dict | None = None,
     ) -> str:
         """Upload raw bytes data."""
         try:
@@ -101,7 +102,7 @@ class MinIOClient:
                 data_stream,
                 length=len(data),
                 content_type=content_type,
-                metadata=metadata or {},
+                metadata=metadata,
             )
             logger.info("data_uploaded", object=object_name, size=len(data))
             return object_name
@@ -115,7 +116,7 @@ class MinIOClient:
         stream: BinaryIO,
         length: int,
         content_type: str = "application/octet-stream",
-        metadata: dict = None,
+        metadata: dict | None = None,
     ) -> str:
         """Upload from a file-like stream."""
         try:
@@ -125,7 +126,7 @@ class MinIOClient:
                 stream,
                 length=length,
                 content_type=content_type,
-                metadata=metadata or {},
+                metadata=metadata,
             )
             logger.info("stream_uploaded", object=object_name, size=length)
             return object_name
@@ -202,7 +203,7 @@ class MinIOClient:
             logger.error("object_delete_failed", object=object_name, error=str(e))
             return False
 
-    def delete_objects(self, object_names: List[str]) -> int:
+    def delete_objects(self, object_names: list[str]) -> int:
         """Delete multiple objects."""
         deleted = 0
         for name in object_names:
@@ -238,7 +239,7 @@ class MinIOClient:
         self,
         prefix: str = "",
         recursive: bool = True,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """List objects with optional prefix."""
         try:
             objects = self.client.list_objects(
@@ -263,14 +264,14 @@ class MinIOClient:
         self,
         source_object: str,
         dest_object: str,
-        metadata: dict = None,
+        metadata: dict | None = None,
     ) -> str:
         """Copy object within bucket."""
         try:
             self.client.copy_object(
                 self.bucket_name,
                 dest_object,
-                f"/{self.bucket_name}/{source_object}",
+                CopySource(self.bucket_name, source_object),
                 metadata=metadata,
             )
             logger.info("object_copied", source=source_object, dest=dest_object)
@@ -286,7 +287,7 @@ class MinIOClient:
 
 
 # Global MinIO client instance (lazy-loaded)
-_minio_client_instance: Optional["MinIOClient"] = None
+_minio_client_instance: "MinIOClient | None" = None
 
 
 def get_minio_client() -> MinIOClient:

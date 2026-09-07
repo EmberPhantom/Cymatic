@@ -1,27 +1,29 @@
 """Scene Composer Agent - Proposes spatial layout, navigation points, lighting presets"""
-from typing import Dict, Any, List, Optional, Tuple
-from pydantic import BaseModel
-from cymatic_shared.schemas.simulation_spec import (
-    Entity, NavigationSpec, NavigationPoint, NavigationPath, LightingSpec
-)
 import math
+from typing import Any
+
+from pydantic import BaseModel
+
+from cymatic_shared.schemas.simulation_spec import (
+    Entity, LightingSpec, NavigationPath, NavigationPoint, NavigationSpec
+)
 import structlog
 
 logger = structlog.get_logger()
 
 
 class ComposerInput(BaseModel):
-    entities: List[Entity]
+    entities: list[Entity]
     domain: str
-    user_preferences: Dict[str, Any] = {}
-    constraints: Dict[str, Any] = {}
+    user_preferences: dict[str, Any] = {}
+    constraints: dict[str, Any] = {}
 
 
 class ComposerResult(BaseModel):
-    entities: List[Entity]  # Updated with positions
+    entities: list[Entity]  # Updated with positions
     navigation: NavigationSpec
     lighting: LightingSpec
-    layout_notes: List[str] = []
+    layout_notes: list[str] = []
 
 
 class SceneComposerAgent:
@@ -33,7 +35,7 @@ class SceneComposerAgent:
         "heritage": "radial_courtyard",
     }
     
-    def compose(self, input_data: ComposerInput) -> ComposerResult:
+    def compose(self, input_data: ComposerInput) -> ComposerResult:  # noqa: ARG002
         """Compose scene layout."""
         strategy = self.LAYOUT_STRATEGIES.get(input_data.domain, "grid_flow")
         
@@ -70,7 +72,7 @@ class SceneComposerAgent:
             layout_notes=notes
         )
     
-    def _grid_flow_layout(self, input_data: ComposerInput) -> Tuple[List[Entity], List[NavigationPoint], List[NavigationPath]]:
+    def _grid_flow_layout(self, input_data: ComposerInput) -> tuple[list[Entity], list[NavigationPoint], list[NavigationPath]]:
         """Grid-based layout for real estate (rooms in flow)."""
         entities = input_data.entities
         rooms = [e for e in entities if e.type == "room"]
@@ -144,7 +146,7 @@ class SceneComposerAgent:
         
         return positioned_entities, nav_points, paths
     
-    def _radial_courtyard_layout(self, input_data: ComposerInput) -> Tuple[List[Entity], List[NavigationPoint], List[NavigationPath]]:
+    def _radial_courtyard_layout(self, input_data: ComposerInput) -> tuple[list[Entity], list[NavigationPoint], list[NavigationPath]]:
         """Radial layout for heritage (courtyard with surrounding POIs)."""
         entities = input_data.entities
         pois = [e for e in entities if e.type == "poi"]
@@ -227,7 +229,7 @@ class SceneComposerAgent:
         
         return positioned_entities, nav_points, paths
     
-    def _create_lighting(self, domain: str, preferences: Dict[str, Any]) -> LightingSpec:
+    def _create_lighting(self, domain: str, preferences: dict[str, Any]) -> LightingSpec:
         """Create lighting specification."""
         lighting_pref = preferences.get("lighting_preference", "warm")
         
@@ -254,10 +256,10 @@ composer_agent = SceneComposerAgent()
 
 
 def compose_scene(
-    entities: List[Entity],
+    entities: list[Entity],
     domain: str,
-    user_preferences: Dict[str, Any] = None,
-    constraints: Dict[str, Any] = None
+    user_preferences: dict[str, Any] | None = None,
+    constraints: dict[str, Any] | None = None,
 ) -> ComposerResult:
     """Convenience function for scene composition."""
     input_data = ComposerInput(

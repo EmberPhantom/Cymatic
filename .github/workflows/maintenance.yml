@@ -28,7 +28,7 @@ jobs:
       MAINTENANCE_DRY_RUN: ${{ inputs.dry_run || 'true' }}
     steps:
       - name: Close superseded Dependabot PRs
-        uses: actions/github-script@v9
+        uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -48,9 +48,15 @@ jobs:
             const groups = new Map();
 
             for (const pr of dependabot) {
-              const match = pr.title.match(/^Bump (.+?) from /);
-              if (!match) continue;
-              const key = match[1].toLowerCase();
+              let key = null;
+              let m = pr.title.match(/^Bump the (.+?) group/i);
+              if (m) {
+                key = m[1].toLowerCase().split(' ')[0]; // npm-dependencies, github-actions, router-python-dependencies
+              } else {
+                m = pr.title.match(/^Bump (.+?) from /);
+                if (m) key = m[1].toLowerCase();
+              }
+              if (!key) continue;
               if (!groups.has(key)) groups.set(key, []);
               groups.get(key).push(pr);
             }
@@ -86,7 +92,7 @@ jobs:
       MAINTENANCE_DRY_RUN: ${{ inputs.dry_run || 'true' }}
     steps:
       - name: Mark inactive pull requests
-        uses: actions/github-script@v9
+        uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;

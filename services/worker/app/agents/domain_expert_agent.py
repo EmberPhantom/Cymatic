@@ -1,6 +1,8 @@
 """Domain Expert Agent - Applies real estate/heritage rules, checks spatial plausibility"""
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from pydantic import BaseModel
+
 from cymatic_shared.schemas.simulation_spec import Entity, SimulationSpec
 import structlog
 
@@ -9,16 +11,16 @@ logger = structlog.get_logger()
 
 class DomainCheckResult(BaseModel):
     valid: bool
-    issues: List[Dict[str, Any]] = []
-    suggestions: List[str] = []
+    issues: list[dict[str, Any]] = []
+    suggestions: list[str] = []
     compliance_score: float = 1.0
 
 
 class DomainExpertAgent:
     """Applies domain-specific rules and checks plausibility."""
-    
+
     # Real Estate Rules (dimensions in METERS - matches SimulationSpec units)
-    REAL_ESTATE_RULES = {
+    REAL_ESTATE_RULES: dict[str, Any] = {
         "min_room_dimensions": {
             "bedroom": {"width": 2.1, "depth": 2.7, "height": 2.4},
             "bathroom": {"width": 1.5, "depth": 2.1, "height": 2.4},
@@ -55,7 +57,7 @@ class DomainExpertAgent:
     }
     
     # Heritage Rules
-    HERITAGE_RULES = {
+    HERITAGE_RULES: dict[str, Any] = {
         "temple": {
             "orientation": "east_facing_preferred",
             "mandatory_elements": ["garbhagriha", "mandapa", "pradakshina"],

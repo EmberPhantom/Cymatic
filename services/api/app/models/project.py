@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, Text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from cymatic_shared.db import Base
 
 
@@ -26,7 +26,7 @@ class Project(Base):
     category = Column(String(50), nullable=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(
+    status: Mapped[ProjectStatus] = mapped_column(
         Enum(ProjectStatus, values_callable=lambda x: [e.value for e in x]),
         default=ProjectStatus.DRAFT,
         nullable=False,

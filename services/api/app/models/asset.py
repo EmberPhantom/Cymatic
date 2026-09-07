@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, JSON
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from cymatic_shared.db import Base
 
 
@@ -32,10 +32,10 @@ class Asset(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     filename = Column(String(255), nullable=False)
     storage_key = Column(String(512), nullable=False)
-    type = Column(
+    type: Mapped[AssetType] = mapped_column(
         Enum(AssetType, values_callable=lambda x: [e.value for e in x]), nullable=False
     )
-    status = Column(
+    status: Mapped[AssetStatus] = mapped_column(
         Enum(AssetStatus, values_callable=lambda x: [e.value for e in x]),
         default=AssetStatus.UPLOADED,
         nullable=False,

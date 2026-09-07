@@ -168,7 +168,7 @@ services:
     depends_on:
       test-migrate:
         condition: service_completed_successfully
-      postgres:
+      test-postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -178,7 +178,7 @@ services:
         condition: service_completed_successfully
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/cymatic_test
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_test
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -194,7 +194,7 @@ services:
     depends_on:
       test-migrate-worker:
         condition: service_completed_successfully
-      postgres:
+      test-postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -206,7 +206,7 @@ services:
         condition: service_completed_successfully
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/cymatic_worker_test
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_worker_test
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -227,20 +227,37 @@ services:
       REDIS_URL: redis://redis:6379/0
     profiles: ["test"]
 
+  test-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cymatic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cymatic}
+      POSTGRES_DB: ${POSTGRES_DB:-cymatic}
+    ports:
+      - "${POSTGRES_TEST_PORT:-5433}:5432"
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cymatic}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles: ["test"]
+
   test-db:
     image: postgres:16-alpine
     depends_on:
-      postgres:
+      test-postgres:
         condition: service_healthy
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:-cymatic}
     entrypoint: ["sh", "-c"]
     command:
       - >-
-        until pg_isready -h postgres -U ${POSTGRES_USER:-cymatic}; do sleep 1; done;
-        psql -h postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        until pg_isready -h test-postgres -U ${POSTGRES_USER:-cymatic}; do sleep 1; done;
+        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
         -c "DROP DATABASE IF EXISTS cymatic_test;";
-        psql -h postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
         -c "CREATE DATABASE cymatic_test OWNER ${POSTGRES_USER:-cymatic};"
     profiles: ["test"]
 
@@ -256,23 +273,23 @@ services:
         condition: service_completed_successfully
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/cymatic_test
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_test
     profiles: ["test"]
 
   test-db-worker:
     image: postgres:16-alpine
     depends_on:
-      postgres:
+      test-postgres:
         condition: service_healthy
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:-cymatic}
     entrypoint: ["sh", "-c"]
     command:
       - >-
-        until pg_isready -h postgres -U ${POSTGRES_USER:-cymatic}; do sleep 1; done;
-        psql -h postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        until pg_isready -h test-postgres -U ${POSTGRES_USER:-cymatic}; do sleep 1; done;
+        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
         -c "DROP DATABASE IF EXISTS cymatic_worker_test;";
-        psql -h postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
         -c "CREATE DATABASE cymatic_worker_test OWNER ${POSTGRES_USER:-cymatic};"
     profiles: ["test"]
 
@@ -288,10 +305,11 @@ services:
         condition: service_completed_successfully
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/cymatic_worker_test
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_worker_test
     profiles: ["test"]
 
 volumes:
   postgres_data:
+  test_postgres_data:
   redis_data:
   minio_data:

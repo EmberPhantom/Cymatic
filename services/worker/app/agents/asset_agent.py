@@ -1,31 +1,33 @@
 """Asset Agent - Selects assets, validates mobile performance, prepares manifest"""
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from pydantic import BaseModel
-from cymatic_shared.schemas.simulation_spec import AssetReference, AssetManifest, Entity
+
+from cymatic_shared.schemas.simulation_spec import AssetManifest, AssetReference, Entity
 import structlog
 
 logger = structlog.get_logger()
 
 
 class AssetAgentInput(BaseModel):
-    spec_entities: List[Entity]
+    spec_entities: list[Entity]
     domain: str
-    performance_budget: Dict[str, Any]
-    available_assets: List[Dict[str, Any]] = []
+    performance_budget: dict[str, Any]
+    available_assets: list[dict[str, Any]] = []
 
 
 class AssetAgentResult(BaseModel):
     manifest: AssetManifest
-    selected_assets: List[AssetReference]
-    substitutions: List[Dict[str, Any]] = []  # Original -> substituted
-    warnings: List[str] = []
+    selected_assets: list[AssetReference]
+    substitutions: list[dict[str, Any]] = []  # Original -> substituted
+    warnings: list[str] = []
 
 
 class AssetAgent:
     """Selects and prepares assets for scene generation."""
-    
+
     # Asset mappings by entity type and style
-    ASSET_CATALOG = {
+    ASSET_CATALOG: dict[str, Any] = {
         "real_estate": {
             "room": {
                 "modern": {
@@ -67,7 +69,7 @@ class AssetAgent:
     }
     
     # Performance profiles
-    PERFORMANCE_PROFILES = {
+    PERFORMANCE_PROFILES: dict[str, dict[str, Any]] = {
         "low": {
             "max_triangles_per_asset": 5000,
             "texture_size": 512,
@@ -151,7 +153,7 @@ class AssetAgent:
             warnings=warnings
         )
     
-    def _get_performance_profile(self, budget: Dict[str, Any]) -> str:
+    def _get_performance_profile(self, budget: dict[str, Any]) -> str:
         """Determine performance profile from budget."""
         target_fps = budget.get("target_fps", 60)
         max_triangles = budget.get("max_triangles", 100000)
@@ -167,11 +169,11 @@ class AssetAgent:
         entity: Entity,
         domain: str,
         profile: str,
-        available: List[Dict[str, Any]]
-    ) -> List[AssetReference]:
+        available: list[dict[str, Any]],
+    ) -> list[AssetReference]:
         """Select assets for a single entity."""
-        assets = []
-        catalog = self.ASSET_CATALOG.get(domain, {})
+        assets: list[AssetReference] = []
+        catalog: dict[str, Any] = self.ASSET_CATALOG.get(domain, {})
         
         # Get entity-specific assets
         entity_type = entity.type
@@ -202,7 +204,7 @@ class AssetAgent:
         
         # Add decoration assets for rooms
         if entity_type == "room" and entity.properties.get("furnished", True):
-            decor = catalog.get("decoration", {})
+            decor: dict[str, Any] = catalog.get("decoration", {})
             for decor_type, uris in decor.items():
                 for uri in uris[:1]:  # One per decoration type
                     assets.append(self._create_asset_reference(uri, profile, required=False))
@@ -211,8 +213,8 @@ class AssetAgent:
     
     def _create_asset_reference(self, uri: str, profile: str, required: bool) -> AssetReference:
         """Create asset reference with profile-appropriate settings."""
-        profile_config = self.PERFORMANCE_PROFILES[profile]
-        
+        _ = self.PERFORMANCE_PROFILES[profile]
+
         # Estimate size and triangles based on profile
         if profile == "low":
             estimated_triangles = 3000
@@ -238,7 +240,7 @@ class AssetAgent:
             estimated_size_mb=float(estimated_size),
         )
     
-    def _find_lod_alternative(self, asset: AssetReference, profile: str) -> Optional[AssetReference]:
+    def _find_lod_alternative(self, asset: AssetReference, profile: str) -> AssetReference | None:
         """Find lower LOD version of asset."""
         if asset.fallback_uri:
             return AssetReference(
@@ -250,7 +252,7 @@ class AssetAgent:
             )
         return None
     
-    def _get_essential_assets(self, domain: str, profile: str) -> List[AssetReference]:
+    def _get_essential_assets(self, domain: str, profile: str) -> list[AssetReference]:
         """Get essential assets for any scene."""
         essential = [
             self._create_asset_reference("environments/skybox.glb", profile, True),
@@ -278,10 +280,10 @@ asset_agent = AssetAgent()
 
 
 def select_assets(
-    spec_entities: List[Entity],
+    spec_entities: list[Entity],
     domain: str,
-    performance_budget: Dict[str, Any],
-    available_assets: List[Dict[str, Any]] = None
+    performance_budget: dict[str, Any],
+    available_assets: list[dict[str, Any]] | None = None,
 ) -> AssetAgentResult:
     """Convenience function for asset selection."""
     input_data = AssetAgentInput(

@@ -1,18 +1,16 @@
 """Worker Tasks - Background job implementations using pipelines"""
 from datetime import datetime, timezone
-from app.core.queue import register_job_handler, Job, JobPriority, JobStatus
+from app.core.queue import register_job_handler
 from app.db.session import AsyncSessionLocal
 from cymatic_shared.models import Project, ProjectStatus
 from cymatic_shared.models import SimulationSpec as SimulationSpecModel, SpecStatus
 from cymatic_shared.models import Asset, AssetStatus
 from cymatic_shared.models import ScenePackage as ScenePackageModel
 from cymatic_shared.schemas.simulation_spec import SimulationSpec as SimulationSpecSchema
-from app.agents.scene_package import generate_scene_package, ScenePackage, scene_package_to_json
+from app.agents.scene_package import scene_package_to_json
 from app.services.minio_client import get_minio_client
 from sqlalchemy import select, func
 import structlog
-import asyncio
-import json
 import hashlib
 from minio.error import S3Error
 from cymatic_shared.models import GenerationRun
@@ -483,7 +481,7 @@ async def analytics_aggregation_task(payload: dict) -> dict:
         else:
             events = []
 
-        event_counts = {}
+        event_counts: dict[str, int] = {}
         total_events = len(events)
         for event in events:
             event_counts[event.event_type] = event_counts.get(event.event_type, 0) + 1

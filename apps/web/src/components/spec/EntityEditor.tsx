@@ -220,7 +220,7 @@ export function EntityEditor({ projectId, specId, entity, onClose, onSave }: Ent
             </CardHeader>
             <CardContent>
               {propertyKeys.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No properties defined. Click "Add Property" to add custom properties.</p>
+                <p className="text-sm text-muted-foreground">No properties defined. Click &quot;Add Property&quot; to add custom properties.</p>
               ) : (
                 <div className="space-y-2">
                   {propertyKeys.map((key, index) => (

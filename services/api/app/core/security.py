@@ -36,7 +36,7 @@ async def revoke_token(token: str, ttl_seconds: int = 604800) -> None:
 async def is_token_revoked(token: str) -> bool:
     """Check if a token has been revoked in Redis."""
     r = await _get_redis()
-    return await r.exists(f"{_revoked_tokens_key}:{token}")
+    return bool(await r.exists(f"{_revoked_tokens_key}:{token}"))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

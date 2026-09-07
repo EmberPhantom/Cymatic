@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional
+from typing import Any, Callable
 from enum import Enum
 from pydantic import BaseModel, Field
 import redis.asyncio as redis
@@ -34,21 +34,21 @@ class JobPriority(int, Enum):
 class Job(BaseModel):
     id: str
     type: str
-    payload: dict
+    payload: dict[str, Any]
     status: JobStatus = JobStatus.PENDING
     priority: JobPriority = JobPriority.NORMAL
-    result: Optional[dict] = None
-    error: Optional[str] = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
     retry_count: int = 0
     max_retries: int = 3
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    worker_id: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    worker_id: str | None = None
     # For distributed locking
-    lock_token: Optional[str] = None
-    lock_expires_at: Optional[datetime] = None
+    lock_token: str | None = None
+    lock_expires_at: datetime | None = None
 
 
 class JobQueue:
@@ -57,9 +57,9 @@ class JobQueue:
     # Lock TTL for running jobs (seconds)
     LOCK_TTL = 300  # 5 minutes
 
-    def __init__(self, redis_url: str = None):
+    def __init__(self, redis_url: str | None = None):
         self.redis_url = redis_url or settings.REDIS_URL
-        self._client: Optional[redis.Redis] = None
+        self._client: redis.Redis | None = None
         self._queues = {
             "generation": "queue:generation",
             "spec": "queue:spec",
@@ -114,7 +114,7 @@ class JobQueue:
         return job.id
 
     async def acquire_job_lock(
-        self, job_id: str, worker_id: str, ttl: int = None
+        self, job_id: str, worker_id: str, ttl: int | None = None
     ) -> bool:
         """Acquire distributed lock for job processing."""
         ttl = ttl or self.LOCK_TTL
@@ -155,7 +155,7 @@ class JobQueue:
         return result == 1
 
     async def renew_job_lock(
-        self, job_id: str, lock_token: str, ttl: int = None
+        self, job_id: str, lock_token: str, ttl: int | None = None
     ) -> bool:
         """Renew distributed lock for job processing."""
         ttl = ttl or self.LOCK_TTL
@@ -173,8 +173,8 @@ class JobQueue:
         return result == 1
 
     async def dequeue(
-        self, queue_name: str = "generation", worker_id: str = None
-    ) -> Optional[Job]:
+        self, queue_name: str = "generation", worker_id: str | None = None
+    ) -> Job | None:
         """Get highest priority job from queue with distributed locking."""
         await self.connect()
 
@@ -224,7 +224,7 @@ class JobQueue:
 
         return job
 
-    async def complete_job(self, job: Job, result: dict = None):
+    async def complete_job(self, job: Job, result: dict[str, Any] | None = None) -> None:
         """Mark job as completed and release lock."""
         await self.connect()
 
@@ -249,7 +249,7 @@ class JobQueue:
 
         logger.info("job_completed", job_id=job.id)
 
-    async def fail_job(self, job: Job, error: str):
+    async def fail_job(self, job: Job, error: str) -> None:
         """Mark job as failed, handle retries with lock release."""
         await self.connect()
 
@@ -345,23 +345,25 @@ class JobQueue:
             if not lock_token:
                 continue
 
-            job_id = key.split(":")[-1]
+            key_str: str = key if isinstance(key, str) else key.decode("utf-8")
+            job_id = key_str.split(":")[-1]
             job_data = await self.client.hget(f"job:{job_id}", "data")
             if not job_data:
-                await self.client.delete(key)
+                await self.client.delete(key_str)
                 cleaned += 1
                 continue
 
             job = Job(**json.loads(job_data))
             if job.lock_expires_at and datetime.now(timezone.utc) > job.lock_expires_at:
                 # Lock expired, release it
-                await self.release_job_lock(job_id, lock_token)
+                token_str: str = lock_token if isinstance(lock_token, str) else lock_token.decode("utf-8")
+                await self.release_job_lock(job_id, token_str)
                 cleaned += 1
                 logger.warning("cleaned_stale_lock", job_id=job_id)
 
         return cleaned
 
-    async def get_job_status(self, job_id: str) -> Optional[Job]:
+    async def get_job_status(self, job_id: str) -> Job | None:
         """Get job status by ID."""
         await self.connect()
 
@@ -371,7 +373,7 @@ class JobQueue:
 
         return Job(**json.loads(job_data))
 
-    async def get_queue_stats(self, queue_name: str = "generation") -> dict:
+    async def get_queue_stats(self, queue_name: str = "generation") -> dict[str, Any]:
         """Get queue statistics."""
         await self.connect()
 
@@ -402,7 +404,7 @@ def register_job_handler(job_type: str):
     return decorator
 
 
-async def process_job(job: Job) -> dict:
+async def process_job(job: Job) -> dict[str, Any]:
     """Process a job using registered handlers."""
     handler = JOB_HANDLERS.get(job.type)
     if not handler:

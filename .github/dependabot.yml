@@ -4,7 +4,7 @@ updates:
     directory: /apps/web
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     labels: [dependencies, javascript]
     groups:
       npm-dependencies:
@@ -18,7 +18,7 @@ updates:
     directory: /services/api
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     labels: [dependencies, python, api]
     groups:
       api-python-dependencies:
@@ -32,7 +32,7 @@ updates:
     directory: /services/worker
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     labels: [dependencies, python, worker]
     groups:
       worker-python-dependencies:
@@ -46,7 +46,7 @@ updates:
     directory: /services/llm-router
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     labels: [dependencies, python, ai]
     groups:
       router-python-dependencies:
@@ -60,7 +60,7 @@ updates:
     directory: /infra/docker
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     labels: [dependencies, docker]
     groups:
       docker-images:
@@ -74,7 +74,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     labels: [dependencies, github-actions]
     groups:
       github-actions:

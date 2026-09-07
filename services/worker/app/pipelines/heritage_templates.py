@@ -1,11 +1,10 @@
 """Heritage Templates - Pre-built heritage walkthrough configurations"""
-from typing import Dict, Any, List
+from typing import Any
+
 from cymatic_shared.schemas.simulation_spec import (
     SimulationSpec, SpecMetadata, Entity, NavigationSpec, NavigationPoint,
     NavigationPath, LightingSpec, CopilotPolicy, PerformanceBudget
 )
-from datetime import datetime
-import uuid
 
 
 class HeritageTemplateLibrary:
@@ -145,12 +144,12 @@ class HeritageTemplateLibrary:
     }
     
     @classmethod
-    def get_template(cls, template_id: str) -> Dict[str, Any]:
+    def get_template(cls, template_id: str) -> dict[str, Any]:
         """Get template by ID"""
         return cls.TEMPLATES.get(template_id, cls.TEMPLATES["haveli_courtyard"])
-    
+
     @classmethod
-    def list_templates(cls) -> List[Dict[str, Any]]:
+    def list_templates(cls) -> list[dict[str, Any]]:
         """List all available templates"""
         return [
             {
@@ -168,7 +167,7 @@ class HeritageTemplateLibrary:
 def create_heritage_spec_from_template(
     template_id: str,
     project_name: str,
-    customizations: Dict[str, Any] = None
+    customizations: dict[str, Any] | None = None,
 ) -> "SimulationSpec":
     """Create a SimulationSpec from a heritage template"""
     template = HeritageTemplateLibrary.get_template(template_id)
@@ -178,7 +177,7 @@ def create_heritage_spec_from_template(
     site_type = custom.get("site_type", template["site_type"])
     pois = custom.get("key_pois", template["default_pois"])
     layout = template["layout"]
-    narration = template["narration_style"]
+    _narration = template["narration_style"]
     languages = custom.get("languages", template["recommended_languages"])
     
     # Generate entities
@@ -413,7 +412,7 @@ def create_heritage_spec_from_template(
     return spec
 
 
-def get_heritage_asset_catalog(site_type: str) -> Dict[str, List[str]]:
+def get_heritage_asset_catalog(site_type: str) -> dict[str, list[str]]:
     """Get asset catalog for heritage site type"""
     catalogs = {
         "temple": {

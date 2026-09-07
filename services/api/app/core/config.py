@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     S3_REGION: str = "us-east-1"
 
     # JWT
-    JWT_SECRET_KEY: str
+    JWT_SECRET_KEY: str = Field(default="test-secret-key-for-mypy-32charslong!!")
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7

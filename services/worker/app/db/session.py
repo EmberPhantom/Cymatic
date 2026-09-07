@@ -1,8 +1,11 @@
 """Worker database session management."""
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from collections.abc import AsyncGenerator
+
 from sqlalchemy import text
-from cymatic_shared.db import Base
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from cymatic_shared.utils import to_async_db_url
+
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -22,7 +25,7 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session

@@ -1,11 +1,11 @@
 """Scene Package Generator - Creates Unity-compatible scene packages from SimulationSpec"""
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field
-from cymatic_shared.schemas.simulation_spec import SimulationSpec, Entity, NavigationSpec, NavigationPoint, NavigationPath
-import structlog
-import json
-import uuid
 from datetime import datetime, timezone
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from cymatic_shared.schemas.simulation_spec import Entity, NavigationPath, NavigationPoint, NavigationSpec, SimulationSpec
+import structlog
 
 logger = structlog.get_logger()
 
@@ -25,48 +25,48 @@ class SceneEntity(BaseModel):
     id: str
     name: str
     type: str
-    position: List[float]
-    rotation: List[float] = [0, 0, 0]
-    scale: List[float] = [1, 1, 1]
-    prefab_path: Optional[str] = None
-    properties: Dict[str, Any] = {}
-    components: List[Dict[str, Any]] = Field(default_factory=list)
-    children: List["SceneEntity"] = Field(default_factory=list)
+    position: list[float]
+    rotation: list[float] = [0, 0, 0]
+    scale: list[float] = [1, 1, 1]
+    prefab_path: str | None = None
+    properties: dict[str, Any] = {}
+    components: list[dict[str, Any]] = Field(default_factory=list)
+    children: list["SceneEntity"] = Field(default_factory=list)
 
 
 class NavigationPointData(BaseModel):
     id: str
     name: str
-    position: List[float]
+    position: list[float]
     description: str = ""
-    connections: List[str] = []
+    connections: list[str] = []
 
 
 class NavigationPathData(BaseModel):
     from_point: str
     to_point: str
     type: str  # walk, teleport
-    waypoints: List[List[float]] = Field(default_factory=list)
+    waypoints: list[list[float]] = Field(default_factory=list)
 
 
 class LightingData(BaseModel):
     preset: str
     time_of_day: str
     ambient_intensity: float
-    sun_direction: List[float] = [0.5, -1, 0.3]
-    custom_lights: List[Dict[str, Any]] = Field(default_factory=list)
+    sun_direction: list[float] = [0.5, -1, 0.3]
+    custom_lights: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CopilotPolicyData(BaseModel):
     enabled: bool = True
-    languages: List[str] = ["en", "te"]
+    languages: list[str] = ["en", "te"]
     default_language: str = "en"
     personality: str = "helpful_guide"
-    allowed_actions: List[str] = [
+    allowed_actions: list[str] = [
         "highlight_object", "show_label", "move_to_point", "open_menu",
         "change_material", "pause_tour", "resume_tour", "play_audio_hint", "answer_question"
     ]
-    knowledge_base: Optional[str] = None
+    knowledge_base: str | None = None
 
 
 class PerformanceBudgetData(BaseModel):
@@ -75,26 +75,26 @@ class PerformanceBudgetData(BaseModel):
     max_draw_calls: int = 50
     texture_budget_mb: int = 100
     max_entities: int = 500
-    lod_distances: List[float] = [10.0, 25.0, 50.0]
+    lod_distances: list[float] = [10.0, 25.0, 50.0]
 
 
 class ScenePackage(BaseModel):
     """Complete scene package for Unity runtime."""
     metadata: ScenePackageMetadata
     domain: str
-    entities: List[SceneEntity]
+    entities: list[SceneEntity]
     navigation: NavigationSpec
     lighting: LightingData
     copilot_policy: CopilotPolicyData
     performance_budget: PerformanceBudgetData
-    asset_manifest: Dict[str, Any] = Field(default_factory=dict)
+    asset_manifest: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScenePackageGenerator:
     """Generates Unity-compatible scene packages from SimulationSpec."""
-    
+
     # Prefab mappings by entity type and style
-    PREFAB_MAPPINGS = {
+    PREFAB_MAPPINGS: dict[str, dict[str, Any]] = {
         "real_estate": {
             "room": {
                 "modern": "Prefabs/Rooms/ModernRoom",
@@ -121,7 +121,7 @@ class ScenePackageGenerator:
     }
     
     # Component templates
-    COMPONENT_TEMPLATES = {
+    COMPONENT_TEMPLATES: dict[str, list[dict[str, Any]]] = {
         "room": [
             {"type": "MeshFilter", "mesh": "room_mesh"},
             {"type": "MeshRenderer", "materials": ["wall_material", "floor_material"]},
@@ -144,7 +144,7 @@ class ScenePackageGenerator:
         ],
     }
     
-    def generate(self, spec: SimulationSpec, spec_version: int, asset_manifest: Dict[str, Any] = None) -> ScenePackage:
+    def generate(self, spec: SimulationSpec, spec_version: int, asset_manifest: dict[str, Any] | None = None) -> ScenePackage:
         """Generate complete scene package from SimulationSpec."""
         
         # Convert entities
@@ -231,9 +231,10 @@ class ScenePackageGenerator:
         
         # Determine prefab path
         prefab_path = self._get_prefab_path(entity, domain)
-        
+
         # Get components
-        components = self.COMPONENT_TEMPLATES.get(entity.type, []).copy()
+        base_components = self.COMPONENT_TEMPLATES.get(entity.type, [])
+        components: list[dict[str, Any]] = [c.copy() for c in base_components]
         
         # Customize components based on entity properties
         if entity.type == "navigation_point":
@@ -266,19 +267,24 @@ class ScenePackageGenerator:
             children=children
         )
     
-    def _get_prefab_path(self, entity: Entity, domain: str) -> Optional[str]:
+    def _get_prefab_path(self, entity: Entity, domain: str) -> str | None:
         """Get Unity prefab path for entity."""
-        mappings = self.PREFAB_MAPPINGS.get(domain, {})
-        
+        mappings: dict[str, Any] = self.PREFAB_MAPPINGS.get(domain, {})
+
         if entity.type in mappings:
             type_mappings = mappings[entity.type]
             if isinstance(type_mappings, dict):
                 # Style-specific
                 style = entity.properties.get("style", "modern")
-                return type_mappings.get(style, list(type_mappings.values())[0])
+                # Return style-specific prefab or first available
+                if style in type_mappings:
+                    val = type_mappings[style]
+                    return str(val) if val is not None else None
+                first = next(iter(type_mappings.values()), None)
+                return str(first) if first is not None else None
             else:
-                return type_mappings
-        
+                return str(type_mappings) if type_mappings is not None else None
+
         return None
     
     def to_json(self, package: ScenePackage) -> str:
@@ -299,7 +305,7 @@ scene_package_generator = ScenePackageGenerator()
 def generate_scene_package(
     spec: SimulationSpec,
     spec_version: int,
-    asset_manifest: Dict[str, Any] = None
+    asset_manifest: dict[str, Any] | None = None,
 ) -> ScenePackage:
     """Convenience function to generate scene package."""
     return scene_package_generator.generate(spec, spec_version, asset_manifest)

@@ -1,20 +1,28 @@
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import Any
+
 import litellm
+import structlog
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 from app.core.config import get_settings
 from app.providers.litellm_client import (
-    litellm_client, ChatCompletionRequest, EmbeddingRequest,
-    STTRequest, TTSRequest, chat_completion, embedding, stt, tts
+    ChatCompletionRequest,
+    EmbeddingRequest,
+    STTRequest,
+    TTSRequest,
+    chat_completion,
+    embedding,
+    stt,
+    tts,
 )
-from app.routing.engine import routing_engine
-from app.routing.usage import usage_tracker, UsageLog
 from app.routing.cache import llm_cache
-import structlog
-from fastapi.responses import PlainTextResponse
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from app.routing.engine import routing_engine
+from app.routing.usage import usage_tracker
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -23,7 +31,7 @@ litellm.set_verbose = settings.DEBUG
 litellm.drop_params = True
 
 
-def verify_admin_key(x_api_key: str = Header(None)):
+def verify_admin_key(x_api_key: str | None = Header(None)) -> None:
     """Simple API key check for admin endpoints."""
     if not settings.ADMIN_API_KEY:
         raise HTTPException(status_code=503, detail="Admin API key is not configured")
@@ -32,7 +40,7 @@ def verify_admin_key(x_api_key: str = Header(None)):
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await usage_tracker.connect()
     await llm_cache.connect()
     yield
@@ -57,7 +65,7 @@ app.add_middleware(
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> dict[str, Any]:
     return {
         "status": "healthy",
         "service": "llm-router",
@@ -66,59 +74,59 @@ async def health_check():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics() -> PlainTextResponse:
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/")
-async def root():
+async def root() -> dict[str, str]:
     return {"name": "CYMATIC LLM Router", "version": "0.1.0"}
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest) -> Any:
     try:
         return await chat_completion(request)
     except ValueError as e:
         logger.warning("chat_completion_bad_request", error=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except (OSError, HTTPException) as e:
         logger.error("chat_completion_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="LLM provider request failed")
+        raise HTTPException(status_code=502, detail="LLM provider request failed") from e
 
 
 @app.post("/v1/embeddings")
-async def embeddings(request: EmbeddingRequest):
+async def embeddings(request: EmbeddingRequest) -> Any:
     try:
         return await embedding(request)
     except ValueError as e:
         logger.warning("embedding_bad_request", error=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except (OSError, HTTPException) as e:
         logger.error("embedding_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="LLM provider request failed")
+        raise HTTPException(status_code=502, detail="LLM provider request failed") from e
 
 
 @app.post("/v1/audio/transcriptions")
-async def transcribe(request: STTRequest):
+async def transcribe(request: STTRequest) -> Any:
     try:
         return await stt(request)
     except (ValueError, OSError) as e:
         logger.error("stt_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="STT provider request failed")
+        raise HTTPException(status_code=502, detail="STT provider request failed") from e
 
 
 @app.post("/v1/audio/speech")
-async def speech(request: TTSRequest):
+async def speech(request: TTSRequest) -> Any:
     try:
         return await tts(request)
     except (ValueError, OSError) as e:
         logger.error("tts_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="TTS provider request failed")
+        raise HTTPException(status_code=502, detail="TTS provider request failed") from e
 
 
 @app.get("/v1/router/providers")
-async def list_providers(_admin: None = Depends(verify_admin_key)):
+async def list_providers(_admin: None = Depends(verify_admin_key)) -> dict[str, Any]:
     return {
         "providers": [
             {
@@ -136,7 +144,7 @@ async def list_providers(_admin: None = Depends(verify_admin_key)):
 
 
 @app.get("/v1/router/policies")
-async def list_policies(_admin: None = Depends(verify_admin_key)):
+async def list_policies(_admin: None = Depends(verify_admin_key)) -> dict[str, Any]:
     return {
         "policies": [
             {
@@ -152,30 +160,33 @@ async def list_policies(_admin: None = Depends(verify_admin_key)):
 
 
 @app.get("/v1/router/usage/stats")
-async def get_usage_stats(days: int = 7, _admin: None = Depends(verify_admin_key)):
+async def get_usage_stats(
+    days: int = 7, _admin: None = Depends(verify_admin_key)
+) -> dict[str, Any]:
     return await usage_tracker.get_usage_stats(days)
 
 
 @app.get("/v1/router/usage/quota/{provider}")
-async def get_quota(provider: str, _admin: None = Depends(verify_admin_key)):
+async def get_quota(provider: str, _admin: None = Depends(verify_admin_key)) -> dict[str, Any]:
     return await usage_tracker.get_quota_status(provider)
 
 
 @app.get("/v1/router/cache/stats")
-async def get_cache_stats(_admin: None = Depends(verify_admin_key)):
+async def get_cache_stats(_admin: None = Depends(verify_admin_key)) -> dict[str, Any]:
     return await llm_cache.get_stats()
 
 
 @app.post("/v1/router/cache/invalidate")
 async def invalidate_cache(
-    task_type: Optional[str] = None,
-    model: Optional[str] = None,
+    task_type: str | None = None,
+    model: str | None = None,
     _admin: None = Depends(verify_admin_key),
-):
+) -> dict[str, int]:
     count = await llm_cache.invalidate(task_type, model)
     return {"invalidated": count}
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)

@@ -283,7 +283,7 @@ async def diff_specs(
     spec2 = next(s for s in specs if s.id == other_spec_id)
 
     # Simple diff
-    diff = {
+    diff: dict[str, Any] = {
         "spec_a": {"id": spec1.id, "version": spec1.version},
         "spec_b": {"id": spec2.id, "version": spec2.version},
         "entities_added": [],
