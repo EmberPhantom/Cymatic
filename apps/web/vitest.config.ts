@@ -7,8 +7,6 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     pool: "forks",
-    minWorkers: 1,
-    maxWorkers: 1,
     fileParallelism: false,
     coverage: {
       provider: "v8",
