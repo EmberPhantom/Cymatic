@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from cymatic_shared.db import Base
 
 
@@ -21,7 +21,7 @@ class StreamSession(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(
+    status: Mapped[StreamSessionStatus] = mapped_column(
         Enum(StreamSessionStatus, values_callable=lambda x: [e.value for e in x]),
         default=StreamSessionStatus.PENDING,
         nullable=False,

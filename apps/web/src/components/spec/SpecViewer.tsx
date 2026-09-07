@@ -58,7 +58,7 @@ function formatValue(val: any, indent = 0): React.ReactNode {
       </div>
     )
   }
-  if (typeof val === "string") return <span className="text-green-600">"{val}"</span>
+  if (typeof val === "string") return <span className="text-green-600">&quot;{val}&quot;</span>
   if (typeof val === "number") return <span className="text-blue-600">{val}</span>
   if (typeof val === "boolean") return <span className="text-purple-600">{val ? "true" : "false"}</span>
   return String(val)
@@ -187,8 +187,8 @@ export function SpecViewer({ spec, onRegenerate, onBackToClarify, projectId, spe
           defaultOpen={true}
         >
           <div className="space-y-2 font-mono text-sm">
-            <div className="flex gap-2"><span className="text-muted-foreground">title:</span> <span className="text-green-600">"{metadata.title}"</span></div>
-            <div className="flex gap-2"><span className="text-muted-foreground">description:</span> <span className="text-green-600">"{metadata.description}"</span></div>
+            <div className="flex gap-2"><span className="text-muted-foreground">title:</span> <span className="text-green-600">&quot;{metadata.title}&quot;</span></div>
+            <div className="flex gap-2"><span className="text-muted-foreground">description:</span> <span className="text-green-600">&quot;{metadata.description}&quot;</span></div>
             <div className="flex gap-2"><span className="text-muted-foreground">version:</span> <span className="text-blue-600">{metadata.version}</span></div>
             <div className="flex gap-2"><span className="text-muted-foreground">author:</span> <span>{metadata.author || "—"}</span></div>
             <div className="flex gap-2"><span className="text-muted-foreground">tags:</span> <span>{(metadata.tags || []).join(", ") || "—"}</span></div>

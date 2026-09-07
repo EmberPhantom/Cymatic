@@ -1,0 +1,8 @@
+# Hadolint config for CYMATIC — allow flexible base images for local dev, enforce best practices otherwise
+ignored:
+  - DL3007  # Using latest is warned (FROM without digest) — pinned major (python:3.11-slim, node:20-alpine) is acceptable for MVP local dev
+  - DL3008  # Pin versions in apt get install — patch updates acceptable for MVP, we use --no-install-recommends + cleanup
+  - DL3059  # Multiple consecutive RUN instructions — intentional for layer caching
+
+# Optional: set severity
+failure-threshold: warning

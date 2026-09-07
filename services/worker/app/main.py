@@ -2,7 +2,9 @@
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, Header, HTTPException
+from typing import Any
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.queue import job_queue, process_job, JOB_HANDLERS, Job
@@ -65,7 +67,7 @@ async def worker_loop():
                         except asyncio.CancelledError:
                             pass
                         await job_queue.complete_job(job, result)
-                    except asyncio.TimeoutError as e:
+                    except asyncio.TimeoutError:
                         heartbeat_task.cancel()
                         try:
                             await heartbeat_task
@@ -166,14 +168,15 @@ async def root():
 @app.get("/stats")
 async def worker_stats(_admin: None = Depends(verify_admin_key)):
     """Get worker and queue statistics (admin only)."""
-    stats = {"worker_id": worker_id, "running": running, "queues": {}}
+    stats: dict[str, Any] = {"worker_id": worker_id, "running": running, "queues": {}}
+    queues = stats["queues"]
     for queue_name in settings.WORKER_QUEUES.split(","):
         queue_name = queue_name.strip()
-        stats["queues"][queue_name] = await job_queue.get_queue_stats(queue_name)
+        queues[queue_name] = await job_queue.get_queue_stats(queue_name)
     return stats
 
 
-from app.tasks import generation  # noqa: F401
+from app.tasks import generation  # noqa: F401, E402
 
 
 if __name__ == "__main__":

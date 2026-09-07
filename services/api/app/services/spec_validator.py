@@ -1,6 +1,6 @@
 """Simulation Specification Validator"""
 
-from typing import List, Dict, Any
+from typing import Any
 from pydantic import ValidationError
 from cymatic_shared.schemas.simulation_spec import SimulationSpec, NavigationPath
 import structlog
@@ -14,14 +14,14 @@ class ValidationError_detail:
         self.message = message
         self.code = code
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"field": self.field, "message": self.message, "code": self.code}
 
 
 class SpecValidationResult:
     def __init__(self):
-        self.errors: List[ValidationError_detail] = []
-        self.warnings: List[ValidationError_detail] = []
+        self.errors: list[ValidationError_detail] = []
+        self.warnings: list[ValidationError_detail] = []
 
     @property
     def valid(self) -> bool:
@@ -33,7 +33,7 @@ class SpecValidationResult:
     def add_warning(self, field: str, message: str, code: str = "warning"):
         self.warnings.append(ValidationError_detail(field, message, code))
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "valid": self.valid,
             "errors": [e.to_dict() for e in self.errors],
@@ -66,7 +66,7 @@ class SpecValidator:
         "texture_budget_warning_mb": 80,
     }
 
-    def validate(self, spec_dict: Dict[str, Any]) -> SpecValidationResult:
+    def validate(self, spec_dict: dict[str, Any]) -> SpecValidationResult:
         """Validate a specification dictionary."""
         result = SpecValidationResult()
 
@@ -104,7 +104,7 @@ class SpecValidator:
         )
         return result
 
-    def _validate_schema(self, spec_dict: Dict[str, Any], result: SpecValidationResult):
+    def _validate_schema(self, spec_dict: dict[str, Any], result: SpecValidationResult) -> None:
         """Validate required top-level fields exist."""
         required_fields = [
             "domain",
@@ -129,17 +129,18 @@ class SpecValidator:
 
     def _validate_business_rules(
         self, spec: SimulationSpec, result: SpecValidationResult
-    ):
+    ) -> None:
         """Validate domain-specific business rules."""
-        req = self.DOMAIN_REQUIREMENTS.get(spec.domain, {})
+        req: dict[str, Any] = self.DOMAIN_REQUIREMENTS.get(spec.domain, {})
 
         # Count entity types
-        entity_types = {}
+        entity_types: dict[str, int] = {}
         for entity in spec.entities:
             entity_types[entity.type] = entity_types.get(entity.type, 0) + 1
 
         # Check required entity types
-        for required_type in req.get("required_entity_types", []):
+        required_types: list[str] = req.get("required_entity_types", [])
+        for required_type in required_types:
             if required_type not in entity_types:
                 result.add_error(
                     "entities", f"Missing required entity type: {required_type}"
@@ -148,11 +149,11 @@ class SpecValidator:
         # Domain-specific counts
         if spec.domain == "real_estate":
             room_count = entity_types.get("room", 0)
-            if room_count < req.get("min_rooms", 1):
+            if room_count < int(req.get("min_rooms", 1)):
                 result.add_warning(
                     "entities", f"Less than {req['min_rooms']} rooms defined"
                 )
-            if room_count > req.get("max_rooms", 20):
+            if room_count > int(req.get("max_rooms", 20)):
                 result.add_warning(
                     "entities",
                     f"More than {req['max_rooms']} rooms may impact performance",
@@ -160,12 +161,12 @@ class SpecValidator:
 
         elif spec.domain == "heritage":
             poi_count = entity_types.get("poi", 0)
-            if poi_count < req.get("min_pois", 1):
+            if poi_count < int(req.get("min_pois", 1)):
                 result.add_error(
                     "entities",
                     f"Heritage domain requires at least {req['min_pois']} POI",
                 )
-            if poi_count > req.get("max_pois", 50):
+            if poi_count > int(req.get("max_pois", 50)):
                 result.add_warning(
                     "entities",
                     f"More than {req['max_pois']} POIs may impact performance",
@@ -173,13 +174,13 @@ class SpecValidator:
 
         # Check navigation points
         nav_points = len(spec.navigation.points)
-        if nav_points < req.get("required_navigation_points", 1):
+        if nav_points < int(req.get("required_navigation_points", 1)):
             result.add_error(
                 "navigation",
                 f"At least {req['required_navigation_points']} navigation point(s) required",
             )
 
-    def _validate_performance(self, spec: SimulationSpec, result: SpecValidationResult):
+    def _validate_performance(self, spec: SimulationSpec, result: SpecValidationResult) -> None:
         """Validate performance budget constraints."""
         budget = spec.performance_budget
 
@@ -218,7 +219,7 @@ class SpecValidator:
                 "Target FPS above 90 may not be achievable on mobile",
             )
 
-    def _validate_navigation(self, spec: SimulationSpec, result: SpecValidationResult):
+    def _validate_navigation(self, spec: SimulationSpec, result: SpecValidationResult) -> None:
         """Validate navigation graph connectivity."""
         points = {p.id: p for p in spec.navigation.points}
         paths = spec.navigation.paths
@@ -263,11 +264,11 @@ class SpecValidator:
         self._check_cycles(points, paths, result)
 
     def _check_cycles(
-        self, points: Dict, paths: List[NavigationPath], result: SpecValidationResult
-    ):
+        self, points: dict[str, Any], paths: list[NavigationPath], result: SpecValidationResult
+    ) -> None:
         """Simple cycle detection in navigation graph."""
         # Build adjacency list
-        adj = {pid: [] for pid in points}
+        adj: dict[str, list[str]] = {pid: [] for pid in points}
         for path in paths:
             adj[path.from_point].append(path.to)
 
@@ -296,7 +297,7 @@ class SpecValidator:
                     )
                     break
 
-    def _validate_entities(self, spec: SimulationSpec, result: SpecValidationResult):
+    def _validate_entities(self, spec: SimulationSpec, result: SpecValidationResult) -> None:
         """Validate entity properties."""
         entity_ids = set()
 
@@ -344,6 +345,6 @@ class SpecValidator:
 spec_validator = SpecValidator()
 
 
-def validate_spec(spec_dict: Dict[str, Any]) -> SpecValidationResult:
+def validate_spec(spec_dict: dict[str, Any]) -> SpecValidationResult:
     """Convenience function to validate a spec."""
     return spec_validator.validate(spec_dict)

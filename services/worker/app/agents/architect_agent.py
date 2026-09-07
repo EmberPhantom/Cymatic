@@ -1,14 +1,11 @@
 """Simulation Architect Agent - Creates structured Simulation Specification using LLM"""
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel
-from cymatic_shared.schemas.simulation_spec import (
-    SimulationSpec, SpecMetadata, Entity, NavigationSpec, NavigationPoint,
-    NavigationPath, LightingSpec, CopilotPolicy, PerformanceBudget
-)
-from datetime import datetime
-import uuid
-import structlog
 import json
+from typing import Any
+
+from pydantic import BaseModel
+
+from cymatic_shared.schemas.simulation_spec import SimulationSpec
+import structlog
 from app.core.llm_client import call_llm_json
 
 logger = structlog.get_logger()
@@ -17,14 +14,14 @@ logger = structlog.get_logger()
 class ArchitectInput(BaseModel):
     domain: str
     objective: str
-    intake_data: Dict[str, Any]
-    clarification_data: Dict[str, Any]
-    context: Dict[str, Any] = {}
+    intake_data: dict[str, Any]
+    clarification_data: dict[str, Any]
+    context: dict[str, Any] = {}
 
 
 class ArchitectResult(BaseModel):
     spec: SimulationSpec
-    generation_notes: List[str] = []
+    generation_notes: list[str] = []
 
 
 ARCHITECT_SYSTEM_PROMPT = """You are a Simulation Architect. Generate a complete, valid Simulation Specification JSON.
@@ -186,7 +183,7 @@ async def create_spec_fallback(input_data: ArchitectInput) -> ArchitectResult:
     return ArchitectResult(spec=spec, generation_notes=notes)
 
 
-def _build_real_estate_entities(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_real_estate_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Build basic real estate entity list from user data."""
     rooms = data.get("rooms", [])
     if not rooms:
@@ -209,7 +206,7 @@ def _build_real_estate_entities(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return entities
 
 
-def _build_heritage_entities(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_heritage_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Build basic heritage entity list from user data."""
     pois = data.get("key_pois", "")
     if isinstance(pois, str) and pois:
@@ -232,7 +229,7 @@ def _build_heritage_entities(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return entities
 
 
-def _build_real_estate_nav_points(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _build_real_estate_nav_points(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     points = []
     for ent in entities:
         if ent.get("type") == "room":
@@ -250,7 +247,7 @@ def _build_real_estate_nav_points(entities: List[Dict[str, Any]]) -> List[Dict[s
     return points
 
 
-def _build_heritage_nav_points(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _build_heritage_nav_points(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     points = []
     for ent in entities:
         if ent.get("type") == "poi":
@@ -267,7 +264,7 @@ def _build_heritage_nav_points(entities: List[Dict[str, Any]]) -> List[Dict[str,
     return points
 
 
-def _build_real_estate_nav_paths(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _build_real_estate_nav_paths(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     paths = []
     for i in range(len(points) - 1):
         paths.append({
@@ -278,7 +275,7 @@ def _build_real_estate_nav_paths(points: List[Dict[str, Any]]) -> List[Dict[str,
     return paths
 
 
-def _build_heritage_nav_paths(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _build_heritage_nav_paths(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     paths = []
     for i in range(len(points) - 1):
         paths.append({
@@ -293,9 +290,9 @@ def _build_heritage_nav_paths(points: List[Dict[str, Any]]) -> List[Dict[str, An
 async def create_simulation_spec(
     domain: str,
     objective: str,
-    intake_data: Dict[str, Any],
-    clarification_data: Dict[str, Any],
-    context: Dict[str, Any] = None
+    intake_data: dict[str, Any],
+    clarification_data: dict[str, Any],
+    context: dict[str, Any] | None = None,
 ) -> ArchitectResult:
     """Main architect function - uses LLM with fallback."""
     input_data = ArchitectInput(

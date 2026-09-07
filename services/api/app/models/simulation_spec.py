@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, Enum, ForeignKey, DateTime, JSON
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from cymatic_shared.db import Base
 
 
@@ -22,7 +22,7 @@ class SimulationSpec(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     version = Column(Integer, nullable=False, default=1)
     payload_json = Column(JSON, nullable=False)
-    status = Column(
+    status: Mapped[SpecStatus] = mapped_column(
         Enum(SpecStatus, values_callable=lambda x: [e.value for e in x]),
         default=SpecStatus.DRAFT,
         nullable=False,

@@ -1,7 +1,7 @@
 # Gitleaks configuration for CYMATIC
 # https://github.com/gitleaks/gitleaks
 
-[allowlist]
+[[allowlist]]
 description = "Allowlisted paths and patterns"
 paths = [
     "(?i)package-lock\\.json",
@@ -20,7 +20,7 @@ paths = [
     "Makefile",
 ]
 
-[allowlist]
+[[allowlist]]
 description = "Test files and fixtures"
 regexes = [
     """(?i)test.*secret.*""",
@@ -31,7 +31,7 @@ regexes = [
     """(?i)dummy.*secret.*""",
 ]
 
-[allowlist]
+[[allowlist]]
 description = "Known test constants"
 regexes = [
     """test-secret-key-for-testing-only-32charslong""",

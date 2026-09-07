@@ -1,5 +1,6 @@
 """Research Agent - Retrieves trusted references, collects style guidance, gathers asset candidates"""
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from pydantic import BaseModel
 import structlog
 
@@ -7,10 +8,10 @@ logger = structlog.get_logger()
 
 
 class ResearchResult(BaseModel):
-    style_references: List[Dict[str, Any]] = []
-    asset_candidates: List[Dict[str, Any]] = []
-    constraints_summary: Dict[str, Any] = {}
-    best_practices: List[str] = []
+    style_references: list[dict[str, Any]] = []
+    asset_candidates: list[dict[str, Any]] = []
+    constraints_summary: dict[str, Any] = {}
+    best_practices: list[str] = []
 
 
 class ResearchAgent:
@@ -98,7 +99,7 @@ class ResearchAgent:
         ]
     }
     
-    def research(self, domain: str, style: str, requirements: Dict[str, Any]) -> ResearchResult:
+    def research(self, domain: str, style: str, requirements: dict[str, Any]) -> ResearchResult:
         """Gather research materials for generation."""
         
         # Get style references
@@ -144,20 +145,20 @@ class ResearchAgent:
         logger.info("research_completed", domain=domain, style=style, refs=len(style_refs))
         return result
     
-    def get_style_guidance(self, domain: str, style: str) -> Dict[str, Any]:
+    def get_style_guidance(self, domain: str, style: str) -> dict[str, Any]:
         """Get detailed style guidance for a specific style."""
         refs = self.STYLE_REFERENCES.get(domain, {}).get(style, [])
-        
+
         if not refs:
             return {"error": f"Style '{style}' not found for domain '{domain}'"}
-        
+
         # Aggregate features
-        all_features = []
+        all_features: list[str] = []
         for ref in refs:
             all_features.extend(ref.get("features", []))
-        
+
         # Count feature frequency
-        feature_counts = {}
+        feature_counts: dict[str, int] = {}
         for f in all_features:
             feature_counts[f] = feature_counts.get(f, 0) + 1
         
@@ -177,11 +178,11 @@ class ResearchAgent:
 research_agent = ResearchAgent()
 
 
-def research_generation(domain: str, style: str, requirements: Dict[str, Any]) -> ResearchResult:
+def research_generation(domain: str, style: str, requirements: dict[str, Any]) -> ResearchResult:
     """Convenience function for research."""
     return research_agent.research(domain, style, requirements)
 
 
-def get_style_guidance(domain: str, style: str) -> Dict[str, Any]:
+def get_style_guidance(domain: str, style: str) -> dict[str, Any]:
     """Convenience function for style guidance."""
     return research_agent.get_style_guidance(domain, style)

@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.dependencies import require_viewer, require_admin
@@ -19,7 +18,7 @@ class ProjectAnalytics(BaseModel):
     total_duration_seconds: int
     avg_session_duration_seconds: float
     unique_users: int
-    events_by_type: Dict[str, int]
+    events_by_type: dict[str, int]
     completion_rate: float
 
 
@@ -27,8 +26,8 @@ class SessionAnalytics(BaseModel):
     session_id: int
     duration_seconds: int
     events_count: int
-    events_by_type: Dict[str, int]
-    navigation_path: List[str]
+    events_by_type: dict[str, int]
+    navigation_path: list[str]
     copilot_interactions: int
     voice_interactions: int
 
@@ -38,8 +37,8 @@ class OrganizationAnalytics(BaseModel):
     total_sessions: int
     total_users: int
     total_duration_seconds: int
-    projects_by_domain: Dict[str, int]
-    sessions_by_status: Dict[str, int]
+    projects_by_domain: dict[str, int]
+    sessions_by_status: dict[str, int]
 
 
 @router.get("/projects/{project_id}", response_model=ProjectAnalytics)
@@ -67,14 +66,14 @@ async def get_project_analytics(
 
     # Get events
     session_ids = [s.id for s in sessions]
-    events_by_type = {}
+    events_by_type: dict[str, int] = {}
     if session_ids:
         events_result = await db.execute(
             select(RuntimeEvent.event_type, func.count(RuntimeEvent.id))
             .where(RuntimeEvent.stream_session_id.in_(session_ids))
             .group_by(RuntimeEvent.event_type)
         )
-        events_by_type = dict(events_result.all())
+        events_by_type = {row[0]: row[1] for row in events_result.all()}
 
     total_duration = sum(
         (s.ended_at - s.started_at).total_seconds() for s in sessions if s.ended_at
@@ -118,8 +117,8 @@ async def get_session_analytics(
     )
     events = events_result.scalars().all()
 
-    events_by_type = {}
-    navigation_path = []
+    events_by_type: dict[str, int] = {}
+    navigation_path: list[str] = []
     copilot_interactions = 0
     voice_interactions = 0
 
@@ -168,7 +167,7 @@ async def get_organization_analytics(
         .where(Project.organization_id == org_id)
         .group_by(Project.domain)
     )
-    projects_by_domain = dict(domain_result.all())
+    projects_by_domain: dict[str, int] = {row[0]: row[1] for row in domain_result.all()}
 
     # Total sessions
     sessions_result = await db.execute(
@@ -185,7 +184,10 @@ async def get_organization_analytics(
         .where(Project.organization_id == org_id)
         .group_by(StreamSession.status)
     )
-    sessions_by_status = dict(status_result.all())
+    sessions_by_status: dict[str, int] = {
+        (row[0].value if hasattr(row[0], "value") else str(row[0])): int(row[1])
+        for row in status_result.all()
+    }
 
     # Total users
     users_result = await db.execute(

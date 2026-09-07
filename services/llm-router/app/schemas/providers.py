@@ -1,7 +1,8 @@
 """Provider Configuration Models"""
-from typing import Dict, List, Optional, Any, Literal
-from pydantic import BaseModel, Field
 from enum import Enum
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 
 class ProviderName(str, Enum):
@@ -47,35 +48,38 @@ class ProviderConfig(BaseModel):
     enabled: bool = True
     priority: int = 100  # Lower = higher priority
     api_key: str = ""
-    base_url: Optional[str] = None
+    base_url: str | None = None
     rate_limit_rpm: int = 60
     rate_limit_tpm: int = 100000
-    supported_tasks: List[TaskType] = []
-    supported_sensitivity: List[SensitivityLevel] = [SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL]
-    models: Dict[str, "ModelProfile"] = {}
-    metadata: Dict[str, Any] = {}
+    supported_tasks: list[TaskType] = []
+    supported_sensitivity: list[SensitivityLevel] = [
+        SensitivityLevel.PUBLIC,
+        SensitivityLevel.INTERNAL,
+    ]
+    models: dict[str, "ModelProfile"] = {}
+    metadata: dict[str, Any] = {}
 
 
 class ModelProfile(BaseModel):
     model_id: str
     provider: ProviderName
-    task_types: List[TaskType]
+    task_types: list[TaskType]
     cost_class: Literal["free", "low", "medium", "high"] = "low"
     latency_class: Literal["fast", "medium", "slow"] = "medium"
     max_tokens: int = 4096
     context_window: int = 8192
     supports_json_mode: bool = False
     supports_streaming: bool = True
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
 
 
 class RoutingPolicy(BaseModel):
     task_type: TaskType
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
     preferred_profile: str
-    fallback_profile: Optional[str] = None
-    allowed_providers: List[ProviderName] = []
-    blocked_providers: List[ProviderName] = []
+    fallback_profile: str | None = None
+    allowed_providers: list[ProviderName] = []
+    blocked_providers: list[ProviderName] = []
     max_retries: int = 2
     timeout_seconds: int = 30
     cache_ttl_seconds: int = 3600
@@ -84,14 +88,14 @@ class RoutingPolicy(BaseModel):
 class ProviderStatus(BaseModel):
     name: ProviderName
     healthy: bool = True
-    last_check: Optional[str] = None
+    last_check: str | None = None
     error_count: int = 0
     latency_ms: float = 0.0
-    rate_limit_remaining: Optional[int] = None
+    rate_limit_remaining: int | None = None
 
 
 # Default Provider Configurations
-DEFAULT_PROVIDERS = {
+DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
     ProviderName.GROQ: ProviderConfig(
         name=ProviderName.GROQ,
         enabled=True,
@@ -110,7 +114,11 @@ DEFAULT_PROVIDERS = {
             "openai/gpt-oss-20b": ModelProfile(
                 model_id="openai/gpt-oss-20b",
                 provider=ProviderName.GROQ,
-                task_types=[TaskType.INTENT_EXTRACTION, TaskType.CLARIFICATION, TaskType.COPILOT_CHAT],
+                task_types=[
+                    TaskType.INTENT_EXTRACTION,
+                    TaskType.CLARIFICATION,
+                    TaskType.COPILOT_CHAT,
+                ],
                 cost_class="free",
                 latency_class="fast",
                 max_tokens=8192,
@@ -127,7 +135,7 @@ DEFAULT_PROVIDERS = {
                 context_window=131072,
                 supports_json_mode=True,
             ),
-        }
+        },
     ),
     ProviderName.OPENROUTER: ProviderConfig(
         name=ProviderName.OPENROUTER,
@@ -166,7 +174,7 @@ DEFAULT_PROVIDERS = {
                 context_window=1000000,
                 supports_json_mode=True,
             ),
-        }
+        },
     ),
     ProviderName.NVIDIA_NIM: ProviderConfig(
         name=ProviderName.NVIDIA_NIM,
@@ -179,7 +187,11 @@ DEFAULT_PROVIDERS = {
             TaskType.VALIDATION,
             TaskType.COPILOT_CHAT,
         ],
-        supported_sensitivity=[SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL, SensitivityLevel.TENANT_SENSITIVE],
+        supported_sensitivity=[
+            SensitivityLevel.PUBLIC,
+            SensitivityLevel.INTERNAL,
+            SensitivityLevel.TENANT_SENSITIVE,
+        ],
         models={
             "nvidia/nemotron-3-ultra": ModelProfile(
                 model_id="nvidia/nemotron-3-ultra",
@@ -191,7 +203,7 @@ DEFAULT_PROVIDERS = {
                 context_window=128000,
                 supports_json_mode=True,
             ),
-        }
+        },
     ),
     ProviderName.OPENAI: ProviderConfig(
         name=ProviderName.OPENAI,
@@ -206,7 +218,11 @@ DEFAULT_PROVIDERS = {
             TaskType.COPILOT_CHAT,
             TaskType.EMBEDDING,
         ],
-        supported_sensitivity=[SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL, SensitivityLevel.TENANT_SENSITIVE],
+        supported_sensitivity=[
+            SensitivityLevel.PUBLIC,
+            SensitivityLevel.INTERNAL,
+            SensitivityLevel.TENANT_SENSITIVE,
+        ],
         models={
             "gpt-4o-mini": ModelProfile(
                 model_id="gpt-4o-mini",
@@ -237,7 +253,7 @@ DEFAULT_PROVIDERS = {
                 max_tokens=8191,
                 context_window=8191,
             ),
-        }
+        },
     ),
     ProviderName.SARVAM: ProviderConfig(
         name=ProviderName.SARVAM,
@@ -247,7 +263,11 @@ DEFAULT_PROVIDERS = {
         rate_limit_rpm=30,
         rate_limit_tpm=10000,
         supported_tasks=[TaskType.STT, TaskType.TTS],
-        supported_sensitivity=[SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL, SensitivityLevel.TENANT_SENSITIVE],
+        supported_sensitivity=[
+            SensitivityLevel.PUBLIC,
+            SensitivityLevel.INTERNAL,
+            SensitivityLevel.TENANT_SENSITIVE,
+        ],
         models={
             "saarika:v2": ModelProfile(
                 model_id="saarika:v2",
@@ -257,7 +277,9 @@ DEFAULT_PROVIDERS = {
                 latency_class="fast",
                 max_tokens=0,
                 context_window=0,
-                metadata={"languages": ["en", "hi", "ta", "te", "kn", "ml", "bn", "gu", "mr", "pa", "or"]}
+                metadata={
+                    "languages": ["en", "hi", "ta", "te", "kn", "ml", "bn", "gu", "mr", "pa", "or"]
+                },
             ),
             "bulbul:v1": ModelProfile(
                 model_id="bulbul:v1",
@@ -267,8 +289,11 @@ DEFAULT_PROVIDERS = {
                 latency_class="fast",
                 max_tokens=0,
                 context_window=0,
-                metadata={"languages": ["en", "hi", "ta", "te", "kn", "ml", "bn", "gu", "mr", "pa", "or"], "speakers": ["anushka", "manisha", "vidya", "arjun", "rahul"]}
+                metadata={
+                    "languages": ["en", "hi", "ta", "te", "kn", "ml", "bn", "gu", "mr", "pa", "or"],
+                    "speakers": ["anushka", "manisha", "vidya", "arjun", "rahul"],
+                },
             ),
-        }
+        },
     ),
 }

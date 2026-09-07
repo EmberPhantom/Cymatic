@@ -1,8 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Any
+
 from pydantic import Field
-from typing import List
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENV_FILE = str(Path(__file__).resolve().parents[3] / ".env")
 
@@ -34,7 +35,7 @@ class Settings(BaseSettings):
     DEFAULT_TTS_PROVIDER: str = "sarvam"
 
     # Provider Config (can be loaded from YAML)
-    PROVIDER_CONFIGS: dict = Field(default_factory=dict)
+    PROVIDER_CONFIGS: dict[str, Any] = Field(default_factory=dict)
 
     # Admin API key for management endpoints
     ADMIN_API_KEY: str = ""
@@ -43,7 +44,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_LLM: str = "50/minute"
 
     # CORS
-    CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,

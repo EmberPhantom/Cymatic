@@ -1,3 +1,5 @@
+import '@testing-library/jest-dom/vitest'
+
 const storage = new Map<string, string>()
 
 globalThis.localStorage = {
