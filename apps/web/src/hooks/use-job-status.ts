@@ -1,19 +1,16 @@
 import { useQuery } from "@tanstack/react-query"
 import { api } from "@/lib/api"
+import { queryKeys } from "@/lib/queryKeys"
 import type { JobStatus } from "@/types"
 
-export function useJobStatus(jobId: string | null, enabled = false) {
+export function useJobStatus(jobId: string | null, _enabled = false) {
   return useQuery<JobStatus>({
-    queryKey: ["job", jobId],
+    queryKey: jobId ? queryKeys.jobs.detail(jobId) : queryKeys.jobs.all,
     queryFn: async () => {
       const res = await api.get(`/v1/jobs/${jobId}/status`)
       return res.data
     },
-    enabled: enabled && !!jobId,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status
-      if (status === "completed" || status === "failed") return false
-      return 2000
-    },
+    enabled: !!jobId,
+    refetchInterval: ((data: any) => (data?.status === "completed" ? false : 2000)) as unknown as number | false | ((query: unknown) => number | false | undefined),
   })
 }
