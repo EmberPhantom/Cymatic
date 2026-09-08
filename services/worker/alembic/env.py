@@ -11,7 +11,7 @@ from alembic import context
 # Add the app directory to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from app.db.session import Base
+from cymatic_shared.db import Base
 from app.models import *  # noqa: F403,F401
 
 # this is the Alembic Config object

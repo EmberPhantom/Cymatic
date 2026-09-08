@@ -4,7 +4,11 @@ from typing import Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_ENV_FILE = str(Path(__file__).resolve().parents[4] / ".env")
+_CONFIG_PATH = Path(__file__).resolve()
+# The repository layout has four parents above this file; the container image
+# is rooted at /app and has fewer parents. Compose injects environment values
+# directly, so a missing container-local .env is valid.
+_ENV_FILE = str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
 
 
 class Settings(BaseSettings):

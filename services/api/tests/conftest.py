@@ -94,7 +94,9 @@ async def setup_db():
     alembic_cfg = Config(os.path.join(alembic_dir, "alembic.ini"))
     # Use sync URL for alembic
     alembic_cfg.set_main_option("sqlalchemy.url", sync_url)
-    command.upgrade(alembic_cfg, "head")
+    # Alembic's async env calls asyncio.run(), so run the synchronous command
+    # outside the event loop used by this async fixture.
+    await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

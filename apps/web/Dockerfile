@@ -34,9 +34,11 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs \
     && adduser --system --uid 1001 nextjs
 
-COPY --from=builder /app/public ./public
+# Next's standalone server is emitted under /app/app when the build context is
+# the web application. Keep public and generated assets beside server.js.
+COPY --from=builder /app/public ./app/public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./app/.next/static
 
 USER nextjs
 
@@ -48,4 +50,4 @@ ENV API_INTERNAL_URL=http://api:8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s CMD wget --spider -q http://127.0.0.1:3000 || exit 1
 
-CMD ["node", "server.js"]
+CMD ["node", "app/server.js"]

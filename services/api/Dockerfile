@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system appuser && useradd --system --gid appuser --create-home appuser --home-dir /app appuser
+    && groupadd --system appuser && useradd --system --gid appuser --create-home --home-dir /app appuser
 
 COPY --from=builder /install /usr/local
 

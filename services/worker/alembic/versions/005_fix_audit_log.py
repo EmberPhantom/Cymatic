@@ -14,29 +14,30 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add actor_id if missing (legacy user_id)
-    try:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"]: column for column in inspector.get_columns("audit_logs")}
+
+    # Add actor_id if missing (legacy user_id). Inspect before altering instead
+    # of catching errors in a transaction that has already been aborted.
+    if "actor_id" not in columns:
         op.add_column("audit_logs", sa.Column("actor_id", sa.Integer(), nullable=True))
         op.create_foreign_key("fk_audit_logs_actor_id", "audit_logs", "users", ["actor_id"], ["id"], ondelete="SET NULL")
-        op.execute("UPDATE audit_logs SET actor_id = user_id WHERE actor_id IS NULL AND user_id IS NOT NULL")
-    except Exception:
-        pass
-    try:
+        if "user_id" in columns:
+            op.execute("UPDATE audit_logs SET actor_id = user_id WHERE actor_id IS NULL AND user_id IS NOT NULL")
+
+    if "metadata_json" not in columns:
         op.add_column("audit_logs", sa.Column("metadata_json", postgresql.JSONB(astext_type=sa.Text()), server_default="{}", nullable=False))
-        op.execute("UPDATE audit_logs SET metadata_json = COALESCE(details_json, '{}') WHERE metadata_json IS NULL")
-    except Exception:
-        pass
-    # Ensure ip_address exists
-    try:
+        if "details_json" in columns:
+            op.execute("UPDATE audit_logs SET metadata_json = COALESCE(details_json, '{}') WHERE metadata_json IS NULL")
+
+    if "ip_address" not in columns:
         op.add_column("audit_logs", sa.Column("ip_address", sa.String(length=45), nullable=True))
-    except Exception:
-        pass
-    # Make organization_id not nullable if was nullable
-    try:
+
+    organization = columns.get("organization_id")
+    if organization and organization.get("nullable"):
         op.execute("UPDATE audit_logs SET organization_id = 1 WHERE organization_id IS NULL")
         op.alter_column("audit_logs", "organization_id", nullable=False)
-    except Exception:
-        pass
 
 
 def downgrade() -> None:
