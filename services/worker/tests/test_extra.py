@@ -1,7 +1,6 @@
 """Extra coverage tests for worker"""
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from app.agents.architect_agent import create_spec_fallback, ArchitectInput
 from app.agents.scene_package import generate_scene_package
@@ -28,7 +27,6 @@ async def test_heritage_pipeline_extra():
 @pytest.mark.asyncio
 async def test_architect_fallback():
     input_data = ArchitectInput(domain="real_estate", objective="Create apartment", intake_data={"style": "modern"}, clarification_data={})
-    from app.agents.architect_agent import create_spec_fallback
     result = await create_spec_fallback(input_data)
     assert result.spec.domain == "real_estate"
     assert len(result.spec.entities) > 0
@@ -63,7 +61,7 @@ def test_scene_package_generation():
 
 def test_checkpoint_save_load():
     from app.pipelines.checkpoint import PipelineCheckpointManager, PipelineCheckpoint
-    import tempfile, os
+    import tempfile
     tmpdir = tempfile.mkdtemp()
     mgr = PipelineCheckpointManager(checkpoint_dir=tmpdir)
     cp = PipelineCheckpoint(project_id=12345, stage="intake", stage_index=0, input_data={"project_id": 12345, "prompt": "test"}, stage_outputs={"intake": {"detected_domain": "real_estate"}})

@@ -1,20 +1,20 @@
 """API database session management."""
-
 from collections.abc import AsyncGenerator
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
-from cymatic_shared.db import Base  # re-export for Alembic and tests  # noqa: F401
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from cymatic_shared.db import Base, create_cymatic_engine  # re-export for Alembic and tests  # noqa: F401
 from cymatic_shared.utils import to_async_db_url
 from app.core.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(
+# Use shared helper with safe pool sizes (keep total < Postgres max_connections 100)
+# api: 5 + 10 = 15, worker: 5 + 10 = 15, total 30 + overhead < 50
+engine = create_cymatic_engine(
     to_async_db_url(settings.DATABASE_URL),
     echo=settings.DEBUG,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=getattr(settings, "DB_POOL_SIZE", 5),
+    max_overflow=getattr(settings, "DB_MAX_OVERFLOW", 10),
 )
 
 AsyncSessionLocal = async_sessionmaker(

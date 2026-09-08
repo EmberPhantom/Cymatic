@@ -2,7 +2,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from cymatic_shared.models import SpecStatus
-from cymatic_shared.schemas.simulation_spec import SimulationSpec
 
 
 VALID_SPEC_DICT = {
@@ -144,7 +143,7 @@ async def test_publish_scene_task_missing_ids():
 @pytest.mark.asyncio
 async def test_generate_scene_task_invalid_spec_status():
     from app.tasks.generation import generate_scene_task
-    from cymatic_shared.models import Project, ProjectStatus
+    from cymatic_shared.models import ProjectStatus
     mock_project = MagicMock()
     mock_project.id = 1
     mock_project.domain = "real_estate"

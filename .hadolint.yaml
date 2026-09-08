@@ -1,8 +1,16 @@
-# Hadolint config for CYMATIC — allow flexible base images for local dev, enforce best practices otherwise
-ignored:
-  - DL3007  # Using latest is warned (FROM without digest) — pinned major (python:3.11-slim, node:20-alpine) is acceptable for MVP local dev
-  - DL3008  # Pin versions in apt get install — patch updates acceptable for MVP, we use --no-install-recommends + cleanup
-  - DL3059  # Multiple consecutive RUN instructions — intentional for layer caching
-
-# Optional: set severity
+# Hadolint config for CYMATIC
+# https://github.com/hadolint/hadolint
 failure-threshold: warning
+
+ignored:
+  - DL3007  # FROM without digest — pinned major (python:3.11-slim, node:20-alpine) acceptable for MVP; use Dependabot for updates
+  - DL3008  # Pin versions in apt-get — patch updates acceptable for MVP, we use --no-install-recommends + cleanup + renovate
+  - DL3059  # Multiple consecutive RUN — intentional for layer caching and readability
+
+# Per-file overrides via inline # hadolint ignore comments preferred for specific lines
+override:
+  warning:
+    - DL3006  # Always tag base image — we pin major, digest pin via builder later
+
+# Require hadolint to check Dockerfile hadolint ignore comments
+strict-labels: false

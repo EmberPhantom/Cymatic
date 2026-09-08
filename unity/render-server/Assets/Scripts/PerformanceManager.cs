@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Profiling;
 using Cysharp.Threading.Tasks;
 
 namespace Cymatic
@@ -138,7 +139,11 @@ namespace Cymatic
             
             // Draw calls & triangles - use ProfilerRecorder fallback for mobile
             try {
+#if UNITY_2022_3_OR_NEWER
+                _drawCalls = UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None).Length;
+#else
                 _drawCalls = UnityEngine.Object.FindObjectsOfType<Renderer>().Length;
+#endif
                 _triangles = _drawCalls * 1200;
             } catch { _drawCalls = 0; _triangles = 0; }
             

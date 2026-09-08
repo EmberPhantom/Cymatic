@@ -10,6 +10,8 @@ from app.models.simulation_spec import SimulationSpec, SpecStatus
 from app.models.user import User
 from app.core.config import get_settings
 from app.core.queue import job_queue, Job, JobPriority
+import copy
+from sqlalchemy.orm.attributes import flag_modified
 import structlog
 
 logger = structlog.get_logger()
@@ -81,12 +83,29 @@ async def edit_spec(
     if not spec:
         raise HTTPException(status_code=404, detail="Spec not found")
 
-    # Apply edits to spec payload
-    payload = spec.payload_json.copy()
+    # Apply edits to spec payload (deepcopy to avoid shallow mutation)
+    payload = copy.deepcopy(spec.payload_json)
     entities = payload.get("entities", [])
     entity_map = {e["id"]: e for e in entities}
 
     for operation in request.operations:
+        # add_entity is allowed when entity_id == "new" or when not in map - handle before existence check
+        if operation.operation == "add_entity":
+            new_entity = {
+                "id": operation.params.get("id", f"entity_{len(entities)}"),
+                "type": operation.params.get("type", "entity"),
+                "name": operation.params.get("name", "New Entity"),
+                "position": copy.deepcopy(operation.params.get("position", [0, 0, 0])),
+                "rotation": copy.deepcopy(operation.params.get("rotation", [0, 0, 0])),
+                "scale": copy.deepcopy(operation.params.get("scale", [1, 1, 1])),
+                "properties": copy.deepcopy(operation.params.get("properties", {})),
+            }
+            if new_entity["id"] in entity_map:
+                new_entity["id"] = f"{new_entity['id']}_{len(entities)}"
+            entities.append(new_entity)
+            entity_map[new_entity["id"]] = new_entity
+            continue
+
         if operation.entity_id not in entity_map:
             raise HTTPException(
                 status_code=404, detail=f"Entity {operation.entity_id} not found"
@@ -96,37 +115,29 @@ async def edit_spec(
 
         if operation.operation == "move":
             if "position" in operation.params:
-                entity["position"] = operation.params["position"]
+                entity["position"] = copy.deepcopy(operation.params["position"])
         elif operation.operation == "rotate":
             if "rotation" in operation.params:
-                entity["rotation"] = operation.params["rotation"]
+                entity["rotation"] = copy.deepcopy(operation.params["rotation"])
         elif operation.operation == "scale":
             if "scale" in operation.params:
-                entity["scale"] = operation.params["scale"]
+                entity["scale"] = copy.deepcopy(operation.params["scale"])
         elif operation.operation == "change_material":
             if "material" in operation.params:
-                entity.setdefault("properties", {})["material"] = operation.params[
-                    "material"
-                ]
+                entity.setdefault("properties", {})["material"] = copy.deepcopy(
+                    operation.params["material"]
+                )
         elif operation.operation == "delete":
             entities.remove(entity)
+            # keep map consistent
+            entity_map.pop(operation.entity_id, None)
         elif operation.operation == "duplicate":
-            new_entity = entity.copy()
+            new_entity = copy.deepcopy(entity)
             new_entity["id"] = f"{entity['id']}_copy_{len(entities)}"
             if "position" in operation.params:
-                new_entity["position"] = operation.params["position"]
+                new_entity["position"] = copy.deepcopy(operation.params["position"])
             entities.append(new_entity)
-        elif operation.operation == "add_entity":
-            new_entity = {
-                "id": operation.params.get("id", f"entity_{len(entities)}"),
-                "type": operation.params.get("type", "entity"),
-                "name": operation.params.get("name", "New Entity"),
-                "position": operation.params.get("position", [0, 0, 0]),
-                "rotation": operation.params.get("rotation", [0, 0, 0]),
-                "scale": operation.params.get("scale", [1, 1, 1]),
-                "properties": operation.params.get("properties", {}),
-            }
-            entities.append(new_entity)
+            entity_map[new_entity["id"]] = new_entity
         else:
             raise HTTPException(
                 status_code=400, detail=f"Unknown operation: {operation.operation}"
@@ -139,6 +150,7 @@ async def edit_spec(
         select(SimulationSpec)
         .where(SimulationSpec.project_id == project_id)
         .order_by(SimulationSpec.version.desc())
+        .limit(1)
     )
     last_spec = result.scalar_one_or_none()
     next_version = (last_spec.version + 1) if last_spec else 1
@@ -200,7 +212,7 @@ async def patch_entity(
     if not spec:
         raise HTTPException(status_code=404, detail="Spec not found")
 
-    payload = spec.payload_json.copy()
+    payload = copy.deepcopy(spec.payload_json)
     entities = payload.get("entities", [])
     entity = next((e for e in entities if e["id"] == entity_id), None)
 
@@ -208,16 +220,17 @@ async def patch_entity(
         raise HTTPException(status_code=404, detail="Entity not found")
 
     if patch.position is not None:
-        entity["position"] = patch.position
+        entity["position"] = copy.deepcopy(patch.position)
     if patch.rotation is not None:
-        entity["rotation"] = patch.rotation
+        entity["rotation"] = copy.deepcopy(patch.rotation)
     if patch.scale is not None:
-        entity["scale"] = patch.scale
+        entity["scale"] = copy.deepcopy(patch.scale)
     if patch.properties is not None:
-        entity["properties"] = {**entity.get("properties", {}), **patch.properties}
+        entity["properties"] = {**entity.get("properties", {}), **copy.deepcopy(patch.properties)}
 
     payload["entities"] = entities
     spec.payload_json = payload
+    flag_modified(spec, "payload_json")
     spec.status = SpecStatus.DRAFT
 
     await db.commit()
@@ -233,6 +246,7 @@ async def validate_spec_edits(
     db: AsyncSession = Depends(get_db),
 ):
     """Validate a spec after edits"""
+    _ensure_manual_editing()
 
     result = await db.execute(
         select(SimulationSpec).where(

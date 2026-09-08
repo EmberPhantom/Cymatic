@@ -91,10 +91,19 @@ async def adjust_credits(
     db: AsyncSession = Depends(get_db),
 ):
     """Adjust credit balance (admin/owner only) - positive for adding, negative for deducting"""
+    # Compute balance before and after
+    result = await db.execute(
+        select(func.sum(CreditLedger.amount)).where(
+            CreditLedger.organization_id == current_user.organization_id
+        )
+    )
+    current_balance = result.scalar() or 0
     ledger = CreditLedger(
         organization_id=current_user.organization_id,
         event_type="manual_adjustment",
         amount=adjustment.amount,
+        balance_after=current_balance + adjustment.amount,
+        description=adjustment.reason,
         reference_id=adjustment.reference_id,
         reference_type=adjustment.reference_type,
     )
@@ -144,6 +153,8 @@ async def deduct_credits(
         organization_id=organization_id,
         event_type=event_type,
         amount=-amount,  # Negative for consumption
+        balance_after=balance - amount,
+        description=event_type,
         reference_id=reference_id,
         reference_type=reference_type,
     )

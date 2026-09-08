@@ -1,7 +1,7 @@
 # CYMATIC Development Makefile
 # Supports both Windows (PowerShell) and Unix shells
 
-.PHONY: help setup dev build test lint clean
+.PHONY: help setup dev build test lint clean docker-build docker-up docker-down
 
 # Default target
 help:
@@ -36,13 +36,15 @@ help:
 	@echo "  make migrate        - Run database migrations"
 	@echo ""
 	@echo "Docker:"
-	@echo "  make docker-build   - Build all Docker images"
+	@echo "  make docker-build   - Build all Docker images (per-service context)"
 	@echo "  make docker-up      - Start all services with Docker Compose"
-	@echo "  make docker-down    - Stop all Docker services"
+	@echo "  make docker-down    - Stop all Docker services (preserves volumes)"
+	@echo "  make docker-clean   - Prune unused Docker resources"
+	@echo "  make generate-openapi - Generate OpenAPI specs"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean          - Clean build artifacts"
-	@echo "  make clean-all      - Clean everything including node_modules, venvs"
+	@echo "  make clean-all      - Clean everything including node_modules, venvs (removes volumes)"
 
 # Detect OS
 ifeq ($(OS),Windows_NT)
@@ -144,20 +146,31 @@ typecheck:
 migrate:
 	cd services/api && $(VENV_BIN)/alembic upgrade head
 
-# Docker
+# Docker — per-service build contexts (shared via build-context)
 docker-build:
-	docker build -f services/api/Dockerfile -t cymatic/api:latest .
-	docker build -f services/worker/Dockerfile -t cymatic/worker:latest .
-	docker build -f services/llm-router/Dockerfile -t cymatic/llm-router:latest .
+	DOCKER_BUILDKIT=1 docker build --build-context shared=./packages/cymatic-shared -f services/api/Dockerfile -t cymatic/api:latest ./services/api
+	DOCKER_BUILDKIT=1 docker build --build-context shared=./packages/cymatic-shared -f services/worker/Dockerfile -t cymatic/worker:latest ./services/worker
+	DOCKER_BUILDKIT=1 docker build --build-context shared=./packages/cymatic-shared -f services/llm-router/Dockerfile -t cymatic/llm-router:latest ./services/llm-router
 	docker build -t cymatic/web:latest ./apps/web
 
 docker-up:
 	docker compose -f infra/docker/docker-compose.yml up -d --build
 
 docker-down:
-	docker compose -f infra/docker/docker-compose.yml down -v
+	docker compose -f infra/docker/docker-compose.yml down
 
-# Cleanup
+docker-clean:
+	@echo "Pruning Docker resources (preserves volumes)..."
+	docker container prune -f
+	docker image prune -f
+	docker network prune -f
+	docker builder prune -f --filter "until=24h"
+	docker system df
+
+generate-openapi:
+	python scripts/generate_openapi.py
+
+# Cleanup — preserve volumes by default; use clean-all to remove volumes
 clean:
 	$(RM) services/api/__pycache__ 2>nul || true
 	$(RM) services/api/.pytest_cache 2>nul || true
@@ -175,5 +188,9 @@ clean-all: clean
 	$(RM) services/worker/.venv 2>nul || true
 	$(RM) services/llm-router/.venv 2>nul || true
 	$(RM) apps/web/node_modules 2>nul || true
-	docker compose -f infra/docker/docker-compose.yml down -v --remove-orphans 2>nul || true
+	docker compose -f infra/docker/docker-compose.yml down --remove-orphans 2>nul || true
 	docker system prune -f 2>nul || true
+
+# Full volume removal — explicit, destructive
+docker-down-v:
+	docker compose -f infra/docker/docker-compose.yml down -v --remove-orphans

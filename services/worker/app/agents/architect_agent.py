@@ -2,7 +2,7 @@
 import json
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from cymatic_shared.schemas.simulation_spec import SimulationSpec
 import structlog
@@ -75,26 +75,38 @@ async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
             task_type="spec_generation",
             sensitivity="internal",
             temperature=0.3,
-            max_tokens=4000,
+            max_tokens=8000,
         )
-        
+
         # Parse and validate
         spec = SimulationSpec(**result)
-        
+
         notes = [
             f"Generated {input_data.domain} specification via LLM",
             f"Entities: {len(spec.entities)}",
             f"Navigation points: {len(spec.navigation.points)}",
             f"Performance budget: {spec.performance_budget.target_fps} FPS, {spec.performance_budget.max_triangles} triangles"
         ]
-        
+
         logger.info("architect_llm_completed", domain=input_data.domain, entities=len(spec.entities))
         return ArchitectResult(spec=spec, generation_notes=notes)
-        
-    except (ValueError, KeyError, OSError) as e:
+
+    except (ValidationError, ValueError, KeyError, OSError) as e:
         logger.error("architect_llm_failed", error=str(e))
         # Fallback to template-based
-        return await create_spec_fallback(input_data)
+        try:
+            return await create_spec_fallback(input_data)
+        except Exception as fallback_err:  # noqa: BLE001
+            logger.error("architect_fallback_failed", error=str(fallback_err))
+            raise
+    except Exception as e:  # noqa: BLE001
+        logger.error("architect_llm_failed_unexpected", error=str(e))
+        # Fallback to template-based for any unexpected error
+        try:
+            return await create_spec_fallback(input_data)
+        except Exception as fallback_err:  # noqa: BLE001
+            logger.error("architect_fallback_failed", error=str(fallback_err))
+            raise
 
 
 # Fallback implementation (template-based)
@@ -126,12 +138,12 @@ async def create_spec_fallback(input_data: ArchitectInput) -> ArchitectResult:
         entities = _build_heritage_entities(all_data)
         nav_points = _build_heritage_nav_points(entities)
         nav_paths = _build_heritage_nav_paths(nav_points)
-        default_start = "entrance"
+        default_start = nav_points[0]["id"] if nav_points else "entrance"
     else:
         entities = _build_real_estate_entities(all_data)
         nav_points = _build_real_estate_nav_points(entities)
         nav_paths = _build_real_estate_nav_paths(nav_points)
-        default_start = "front_door"
+        default_start = nav_points[0]["id"] if nav_points else "front_door"
 
     spec = SimulationSpec(
         domain=domain,
@@ -189,9 +201,25 @@ def _build_real_estate_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
     if not rooms:
         rooms = ["living_room", "kitchen", "master_bedroom", "bathroom"]
 
+    # Non-overlapping spacing: room width ~6m + corridor ~3m + buffer -> 12m
+    # Ensures no AABB overlap for even large rooms
+    room_spacing = 12.0
+    # Also add realistic size property for domain checks
+    default_sizes: dict[str, list[float]] = {
+        "living_room": [6.0, 7.0, 2.7],
+        "kitchen": [4.0, 5.0, 2.7],
+        "master_bedroom": [5.0, 5.5, 2.7],
+        "bedroom": [4.0, 4.5, 2.4],
+        "bathroom": [2.5, 3.0, 2.4],
+    }
     entities = []
     x_offset = 0.0
     for room_name in rooms:
+        # sanitize room_name (strip, lower, remove empties)
+        room_name = str(room_name).strip().lower().replace(" ", "_")
+        if not room_name:
+            continue
+        size = default_sizes.get(room_name, [4.5, 5.0, 2.7])
         entities.append({
             "id": f"room_{room_name}",
             "type": "room",
@@ -199,31 +227,52 @@ def _build_real_estate_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
             "position": {"x": x_offset, "y": 0.0, "z": 0.0},
             "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
             "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
-            "properties": {"furnished": data.get("furnished", True), "style": data.get("style", "modern")},
+            "properties": {"furnished": data.get("furnished", True), "style": data.get("style", "modern"), "size": size, "has_window": True, "has_doors": True},
             "children": [],
         })
-        x_offset += 8.0
+        x_offset += room_spacing
     return entities
 
 
 def _build_heritage_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Build basic heritage entity list from user data."""
-    pois = data.get("key_pois", "")
-    if isinstance(pois, str) and pois:
-        poi_names = [p.strip() for p in pois.split(",")]
-    else:
+    pois_raw = data.get("key_pois", data.get("pois", data.get("points_of_interest", "")))
+    poi_names: list[str] = []
+    if isinstance(pois_raw, list):
+        poi_names = [str(p).strip() for p in pois_raw if str(p).strip()]
+    elif isinstance(pois_raw, str) and pois_raw.strip():
+        # Support comma or newline separated
+        import re
+        parts = re.split(r"[,\n;]+", pois_raw)
+        poi_names = [p.strip() for p in parts if p.strip()]
+    if not poi_names:
         poi_names = ["entrance", "main_hall", "sanctuary", "courtyard"]
 
+    # Deduplicate case-insensitive while preserving order
+    seen_lower: set[str] = set()
+    deduped: list[str] = []
+    for n in poi_names:
+        low = n.lower()
+        if low not in seen_lower:
+            seen_lower.add(low)
+            deduped.append(n)
+    poi_names = deduped
+
+    # Non-overlapping spacing: 15m apart matches heritage_templates spacing
+    poi_spacing = 15.0
     entities = []
     for i, poi_name in enumerate(poi_names):
+        safe_name = poi_name.strip()
+        if not safe_name:
+            continue
         entities.append({
             "id": f"poi_{i}",
             "type": "poi",
-            "name": poi_name.title(),
-            "position": {"x": i * 10.0, "y": 0.0, "z": 0.0},
+            "name": safe_name.title(),
+            "position": {"x": i * poi_spacing, "y": 0.0, "z": 0.0},
             "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
             "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
-            "properties": {"description": poi_name, "has_narration": True},
+            "properties": {"description": safe_name, "has_narration": True, "site_type": data.get("site_type", "courtyard")},
             "children": [],
         })
     return entities

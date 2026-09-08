@@ -29,7 +29,7 @@ class Asset(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     filename = Column(String(255), nullable=False)
     storage_key = Column(String(512), nullable=False)
     type: Mapped[AssetType] = mapped_column(

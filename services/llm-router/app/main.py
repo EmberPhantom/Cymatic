@@ -1,15 +1,17 @@
+import hmac
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import litellm
 import structlog
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.core.config import get_settings
+from app.core.rate_limit import rate_limit
 from app.providers.litellm_client import (
     ChatCompletionRequest,
     EmbeddingRequest,
@@ -31,12 +33,43 @@ litellm.set_verbose = settings.DEBUG
 litellm.drop_params = True
 
 
-def verify_admin_key(x_api_key: str | None = Header(None)) -> None:
-    """Simple API key check for admin endpoints."""
+def verify_admin_key(
+    x_api_key: str | None = Header(None, alias="X-Api-Key"),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> None:
+    """Admin API key check using constant-time compare_digest."""
     if not settings.ADMIN_API_KEY:
         raise HTTPException(status_code=503, detail="Admin API key is not configured")
-    if x_api_key != settings.ADMIN_API_KEY:
+    token: str | None = None
+    if x_api_key:
+        token = x_api_key.strip()
+    elif authorization:
+        if authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+        else:
+            token = authorization.strip()
+    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
+
+
+def verify_api_key(
+    x_api_key: str | None = Header(None, alias="X-Api-Key"),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> None:
+    """Verify API key for LLM endpoints (supports X-Api-Key and Bearer)."""
+    if not settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=503, detail="API key not configured")
+    token: str | None = None
+    if x_api_key:
+        token = x_api_key.strip()
+    elif authorization:
+        auth = authorization.strip()
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+        else:
+            token = auth
+    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 @asynccontextmanager
@@ -74,7 +107,25 @@ async def health_check() -> dict[str, Any]:
 
 
 @app.get("/metrics")
-async def metrics() -> PlainTextResponse:
+async def metrics(
+    request: Request,
+    x_api_key: str | None = Header(None, alias="X-Api-Key"),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> PlainTextResponse:
+    # Guard metrics with admin key (fail-closed)
+    if not settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=503, detail="Metrics not configured")
+    token: str | None = None
+    if x_api_key:
+        token = x_api_key.strip()
+    elif authorization:
+        auth = authorization.strip()
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+        else:
+            token = auth
+    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid admin API key")
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -83,44 +134,71 @@ async def root() -> dict[str, str]:
     return {"name": "CYMATIC LLM Router", "version": "0.1.0"}
 
 
-@app.post("/v1/chat/completions")
+@app.post(
+    "/v1/chat/completions",
+    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def chat_completions(request: ChatCompletionRequest) -> Any:
     try:
         return await chat_completion(request)
     except ValueError as e:
         logger.warning("chat_completion_bad_request", error=str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e
-    except (OSError, HTTPException) as e:
+    except HTTPException as e:
+        # Pass through quota/rate limit errors
+        raise e
+    except (OSError, Exception) as e:
         logger.error("chat_completion_failed", error=str(e))
         raise HTTPException(status_code=502, detail="LLM provider request failed") from e
 
 
-@app.post("/v1/embeddings")
+@app.post(
+    "/v1/embeddings",
+    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def embeddings(request: EmbeddingRequest) -> Any:
     try:
         return await embedding(request)
     except ValueError as e:
         logger.warning("embedding_bad_request", error=str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e
-    except (OSError, HTTPException) as e:
+    except HTTPException as e:
+        raise e
+    except (OSError, Exception) as e:
         logger.error("embedding_failed", error=str(e))
         raise HTTPException(status_code=502, detail="LLM provider request failed") from e
 
 
-@app.post("/v1/audio/transcriptions")
+@app.post(
+    "/v1/audio/transcriptions",
+    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def transcribe(request: STTRequest) -> Any:
     try:
         return await stt(request)
-    except (ValueError, OSError) as e:
+    except ValueError as e:
+        logger.warning("stt_bad_request", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException as e:
+        raise e
+    except (OSError, Exception) as e:
         logger.error("stt_failed", error=str(e))
         raise HTTPException(status_code=502, detail="STT provider request failed") from e
 
 
-@app.post("/v1/audio/speech")
+@app.post(
+    "/v1/audio/speech",
+    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def speech(request: TTSRequest) -> Any:
     try:
         return await tts(request)
-    except (ValueError, OSError) as e:
+    except ValueError as e:
+        logger.warning("tts_bad_request", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException as e:
+        raise e
+    except (OSError, Exception) as e:
         logger.error("tts_failed", error=str(e))
         raise HTTPException(status_code=502, detail="TTS provider request failed") from e
 
@@ -163,6 +241,11 @@ async def list_policies(_admin: None = Depends(verify_admin_key)) -> dict[str, A
 async def get_usage_stats(
     days: int = 7, _admin: None = Depends(verify_admin_key)
 ) -> dict[str, Any]:
+    # Clamp days to match usage tracker cap
+    if days > 30:
+        days = 30
+    if days < 1:
+        days = 1
     return await usage_tracker.get_usage_stats(days)
 
 

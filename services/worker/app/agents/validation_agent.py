@@ -42,41 +42,49 @@ class ValidationAgent:
         return result
     
     def _calculate_quality_score(self, spec_dict: Dict[str, Any], schema_result: SpecValidationResult) -> float:
-        """Calculate overall spec quality score (0-1)."""
-        if not schema_result.valid:
-            return 0.0
-        
+        """Calculate overall spec quality score (0-1).
+
+        Previously returned 0.0 immediately on schema invalid, masking warnings vs errors.
+        Now computes granular score: errors weigh heavily, warnings lightly, with partial credit.
+        """
         score = 1.0
-        
-        # Deduct for warnings
+
+        # Deduct for errors and warnings without masking (HIGH: score masking)
+        # Errors are more severe than warnings
+        score -= len(schema_result.errors) * 0.2
         score -= len(schema_result.warnings) * 0.05
-        
-        # Bonus for completeness
+
+        # If invalid, cap score at 0.5 to reflect failure while preserving granularity
+        if not schema_result.valid:
+            score = min(score, 0.5)
+
+        # Bonus for completeness - attempt even if invalid, but guard parsing
         try:
             spec = SimulationSpec(**spec_dict)
-            
+
             # Entity completeness
             entity_types = set(e.type for e in spec.entities)
             if "room" in entity_types or "poi" in entity_types:
-                score += 0.1
-            
+                score += 0.05
+
             # Navigation completeness
             if len(spec.navigation.points) >= 2:
-                score += 0.1
-            if len(spec.navigation.paths) >= len(spec.navigation.points) - 1:
-                score += 0.1
-            
+                score += 0.05
+            if spec.navigation.paths and len(spec.navigation.paths) >= max(1, len(spec.navigation.points) - 1):
+                score += 0.05
+
             # Copilot policy
             if spec.copilot_policy.enabled and len(spec.copilot_policy.languages) > 1:
-                score += 0.05
-            
+                score += 0.03
+
             # Performance budget realism
             if 30 <= spec.performance_budget.target_fps <= 90:
-                score += 0.05
-            
-        except (ValueError, KeyError):
-            pass
-        
+                score += 0.02
+
+        except Exception:  # noqa: BLE001 - broad catch preserves scoring when spec parse fails
+            # Parsing failed: additional penalty but not full masking
+            score -= 0.1
+
         return max(0.0, min(1.0, score))
     
     def _generate_recommendations(self, spec_dict: Dict[str, Any], schema_result: SpecValidationResult) -> List[str]:

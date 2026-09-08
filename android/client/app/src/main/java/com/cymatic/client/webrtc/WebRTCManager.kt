@@ -20,6 +20,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     private var audioTrack: AudioTrack? = null
     private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
+    private val cachedInputManager = InputManager()
     
     private var signalingClient: SignalingClient? = null
     private var currentSessionId: String? = null
@@ -119,7 +120,12 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         
         peerConnection = factory.createPeerConnection(configuration, constraints, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {
-                signalingClient?.sendIceCandidate(currentSessionId!!, candidate.sdp, candidate.sdpMid!!, candidate.sdpMLineIndex)
+                val sid = currentSessionId ?: return
+                candidate.sdpMid?.let { mid ->
+                    signalingClient?.sendIceCandidate(sid, candidate.sdp, mid, candidate.sdpMLineIndex)
+                } ?: run {
+                    Log.w("WebRTC", "IceCandidate sdpMid null, skipping")
+                }
             }
             
             override fun onAddTrack(rtpReceiver: RtpReceiver, mediaStreams: Array<MediaStream>) {
@@ -150,7 +156,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         // Create audio track
         audioSource = factory.createAudioSource(MediaConstraints())
         audioTrack = factory.createAudioTrack("audio", audioSource)
-        peerConnection?.addTrack(audioTrack!!, listOf("stream"))
+        audioTrack?.let { track -> peerConnection?.addTrack(track, listOf("stream")) }
         
         // Video track will be created from remote stream
     }
@@ -181,7 +187,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 desc?.let { answer ->
                     peerConnection?.setLocalDescription(object : SdpObserver {
                         override fun onSetSuccess() {
-                            signalingClient?.sendAnswer(currentSessionId!!, answer.description)
+                            currentSessionId?.let { sid -> signalingClient?.sendAnswer(sid, answer.description) }
                         }
                         override fun onSetFailure(error: String) {
                             onError?.invoke("Set local answer failed: $error")
@@ -222,8 +228,8 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             position = position,
             rotation = rotation
         )
-        // Send head pose as input via signaling
-        val packet = com.cymatic.client.input.InputManager().createInputPacket(input, FloatArray(3))
+        // Send head pose as input via signaling - reuse cached singleton
+        val packet = cachedInputManager.createInputPacket(input, FloatArray(3))
         signalingClient?.sendInput(packet)
     }
     

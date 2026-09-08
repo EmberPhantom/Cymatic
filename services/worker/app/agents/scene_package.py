@@ -1,4 +1,14 @@
-"""Scene Package Generator - Creates Unity-compatible scene packages from SimulationSpec"""
+"""Scene Package Generator - Creates renderer-neutral scene packages from SimulationSpec
+
+MVP Interim Note:
+- Current generation is JSON-only (``cymatic_v1``) containing SceneEntity, navigation, lighting, copilot, budget, and asset manifest.
+- No GLB/mesh generation yet. Documentation of this interim is intentional (HIGH: 1 no GLB).
+- This keeps generation non-blocking and lightweight for mobile VR; GLB/baked assets will be added post-MVP via Unity render server.
+- Atomic file writes and deep-copy safety are enforced even though storage is via MinIO in production.
+"""
+import copy
+import os
+import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -232,9 +242,9 @@ class ScenePackageGenerator:
         # Determine prefab path
         prefab_path = self._get_prefab_path(entity, domain)
 
-        # Get components
+        # Get components - deep copy to avoid nested mutation sharing (HIGH: shallow copy)
         base_components = self.COMPONENT_TEMPLATES.get(entity.type, [])
-        components: list[dict[str, Any]] = [c.copy() for c in base_components]
+        components: list[dict[str, Any]] = copy.deepcopy(base_components)
         
         # Customize components based on entity properties
         if entity.type == "navigation_point":
@@ -274,14 +284,15 @@ class ScenePackageGenerator:
         if entity.type in mappings:
             type_mappings = mappings[entity.type]
             if isinstance(type_mappings, dict):
-                # Style-specific
+                # Style-specific - do not silently fallback to wrong style (HIGH: fallback)
                 style = entity.properties.get("style", "modern")
-                # Return style-specific prefab or first available
                 if style in type_mappings:
                     val = type_mappings[style]
                     return str(val) if val is not None else None
-                first = next(iter(type_mappings.values()), None)
-                return str(first) if first is not None else None
+                # No style match: return None to signal missing mapping rather than wrong prefab.
+                # Caller can handle fallback or leave prefab_path empty.
+                logger.debug("prefab_style_missing", entity_type=entity.type, style=style, domain=domain)
+                return None
             else:
                 return str(type_mappings) if type_mappings is not None else None
 
@@ -292,9 +303,23 @@ class ScenePackageGenerator:
         return package.model_dump_json(indent=2)
     
     def save_to_file(self, package: ScenePackage, filepath: str):
-        """Save scene package to file."""
-        with open(filepath, 'w') as f:
-            f.write(self.to_json(package))
+        """Save scene package to file atomically (non-blocking friendly)."""
+        dir_name = os.path.dirname(os.path.abspath(filepath)) or "."
+        os.makedirs(dir_name, exist_ok=True)
+        # Atomic write via temp file + replace (HIGH: save)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".tmp_scene_")
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(self.to_json(package))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, filepath)
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
         logger.info("scene_package_saved", path=filepath)
 
 

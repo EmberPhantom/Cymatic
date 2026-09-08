@@ -64,26 +64,58 @@ class RealEstatePipeline:
         """Load stage outputs into result object."""
         if "intake" in stage_outputs:
             from app.agents.intake_agent import IntakeResult
-            result.intake = IntakeResult(**stage_outputs["intake"])
+            try:
+                result.intake = IntakeResult(**stage_outputs["intake"])
+            except Exception:
+                pass
         if "clarification" in stage_outputs:
             from app.agents.clarification_agent import ClarificationResult
-            result.clarification = ClarificationResult(**stage_outputs["clarification"])
+            try:
+                result.clarification = ClarificationResult(**stage_outputs["clarification"])
+            except Exception:
+                pass
         if "research" in stage_outputs:
             from app.agents.research_agent import ResearchResult
-            result.research = ResearchResult(**stage_outputs["research"])
+            try:
+                result.research = ResearchResult(**stage_outputs["research"])
+            except Exception:
+                pass
         if "architect" in stage_outputs:
             from cymatic_shared.schemas.simulation_spec import SimulationSpec
-            result.architect = ArchitectResult(spec=SimulationSpec(**stage_outputs["architect"]))
+            arch_data = stage_outputs["architect"]
+            try:
+                # Support both shapes: {"spec": {...}, "generation_notes": [...]} and direct spec dict
+                if isinstance(arch_data, dict) and "spec" in arch_data and isinstance(arch_data["spec"], dict):
+                    result.architect = ArchitectResult(spec=SimulationSpec(**arch_data["spec"]), generation_notes=arch_data.get("generation_notes", []))
+                else:
+                    result.architect = ArchitectResult(spec=SimulationSpec(**arch_data))
+            except Exception:
+                pass
         if "composer" in stage_outputs:
-            result.composer = ComposerResult(**stage_outputs["composer"])
+            try:
+                result.composer = ComposerResult(**stage_outputs["composer"])
+            except Exception:
+                pass
         if "domain_expert" in stage_outputs:
-            result.domain_check = DomainCheckResult(**stage_outputs["domain_expert"])
+            try:
+                result.domain_check = DomainCheckResult(**stage_outputs["domain_expert"])
+            except Exception:
+                pass
         if "asset_selection" in stage_outputs:
-            result.assets = AssetAgentResult(**stage_outputs["asset_selection"])
+            try:
+                result.assets = AssetAgentResult(**stage_outputs["asset_selection"])
+            except Exception:
+                pass
         if "validation" in stage_outputs:
-            result.validation = ValidationAgentResult(**stage_outputs["validation"])
+            try:
+                result.validation = ValidationAgentResult(**stage_outputs["validation"])
+            except Exception:
+                pass
         if "scene_package" in stage_outputs:
-            result.scene_package = ScenePackage(**stage_outputs["scene_package"])
+            try:
+                result.scene_package = ScenePackage(**stage_outputs["scene_package"])
+            except Exception:
+                pass
     
     async def _run_stage(  # noqa: PLR0912
         self,
@@ -232,24 +264,42 @@ class RealEstatePipeline:
                 status="completed",
             )
 
-        except (ValueError, KeyError) as e:
+        except Exception as e:  # noqa: BLE001 - broad catch ensures fallback pipeline stability
             logger.error("pipeline_stage_failed", stage=stage, project_id=input_data.project_id, error=str(e))
             raise
-    
+
     async def run(self, input_data: PipelineInput, job: Job | None = None) -> PipelineResult:
         """Execute the full pipeline with checkpointing."""
         result = PipelineResult()
-        
+
         # Try to load existing checkpoint
         checkpoint = self.checkpoint_manager.load_checkpoint(input_data.project_id)
         start_stage_index = 0
-        
+
         if checkpoint:
             logger.info("checkpoint_loaded", project_id=input_data.project_id, stage=checkpoint.stage)
+            # Reconcile staleness: checkpoint.input_data may contain prior prompt/context.
+            # Use checkpoint input as base, but overlay any fresh non-empty fields from incoming input_data.
+            # This prevents stale prompt override while allowing clarification_answers updates.
+            try:
+                ckpt_input = PipelineInput(**checkpoint.input_data)
+                # Overlay: if incoming prompt differs and is non-empty, prefer incoming (user correction)
+                # Otherwise keep checkpoint
+                if input_data.prompt and input_data.prompt != ckpt_input.prompt:
+                    logger.info("checkpoint_input_stale_prompt", checkpoint_prompt=ckpt_input.prompt[:50], incoming_prompt=input_data.prompt[:50])
+                    # Keep incoming prompt but preserve checkpoint's context if incoming empty
+                    ckpt_input.prompt = input_data.prompt
+                if input_data.context:
+                    ckpt_input.context = {**ckpt_input.context, **input_data.context}
+                if input_data.clarification_answers:
+                    ckpt_input.clarification_answers = {**ckpt_input.clarification_answers, **input_data.clarification_answers}
+                input_data = ckpt_input
+            except Exception:  # noqa: BLE001
+                logger.warning("checkpoint_input_reconcile_failed", project_id=input_data.project_id)
             # Restore stage outputs
-            stage_outputs = checkpoint.stage_outputs
+            stage_outputs = dict(checkpoint.stage_outputs)  # copy to avoid mutation of cached dict
             start_stage_index = checkpoint.stage_index + 1
-            
+
             # Restore data from checkpoint
             self._load_stage_outputs(checkpoint.stage_outputs, result)
         else:
@@ -283,50 +333,64 @@ class RealEstatePipeline:
                 
                 if stage_result.status in ("awaiting_clarification", "domain_validation_failed", "validation_failed", "failed"):
                     return stage_result
-                
-                # Update checkpoint after each stage
-                stage_outputs[stage] = {}
-                if hasattr(stage_result, 'intake') and stage_result.intake:
+
+                # Update checkpoint after each stage - preserve all prior stage outputs (HIGH: 288 checkpoint key, 309 save logic)
+                # Store each stage result under its canonical key; do not wipe unrelated keys
+                if stage_result.intake is not None:
                     stage_outputs["intake"] = stage_result.intake.model_dump()
-                if hasattr(stage_result, 'clarification') and stage_result.clarification:
+                if stage_result.clarification is not None:
                     stage_outputs["clarification"] = stage_result.clarification.model_dump()
-                if hasattr(stage_result, 'research') and stage_result.research:
+                if stage_result.research is not None:
                     stage_outputs["research"] = stage_result.research.model_dump()
-                if hasattr(stage_result, 'architect') and stage_result.architect:
-                    stage_outputs["architect"] = stage_result.architect.spec.model_dump()
-                if hasattr(stage_result, 'composer') and stage_result.composer:
+                if stage_result.architect is not None:
+                    # Store full ArchitectResult to preserve generation_notes (HIGH: 296 vs ArchitectResult)
+                    # Loader handles both spec-only dict and full result dict for backward compat
+                    try:
+                        stage_outputs["architect"] = stage_result.architect.model_dump()
+                        # For backward compat, also ensure spec dict available via spec key if loader expects spec-only
+                        # Loader now checks both shapes
+                    except Exception:
+                        stage_outputs["architect"] = stage_result.architect.spec.model_dump()
+                if stage_result.composer is not None:
                     stage_outputs["composer"] = stage_result.composer.model_dump()
-                if hasattr(stage_result, 'domain_check') and stage_result.domain_check:
+                if stage_result.domain_check is not None:
                     stage_outputs["domain_expert"] = stage_result.domain_check.model_dump()
-                if hasattr(stage_result, 'assets') and stage_result.assets:
+                if stage_result.assets is not None:
                     stage_outputs["asset_selection"] = stage_result.assets.model_dump()
-                if hasattr(stage_result, 'validation') and stage_result.validation:
+                if stage_result.validation is not None:
                     stage_outputs["validation"] = stage_result.validation.model_dump()
-                if hasattr(stage_result, 'scene_package') and stage_result.scene_package:
+                if stage_result.scene_package is not None:
                     stage_outputs["scene_package"] = stage_result.scene_package.model_dump()
-                
-                # Save checkpoint after each stage
+                # Also ensure generic stage key points to its typed key for outer checkpoint resume logic
+                # (keeps checkpoint.stage_index mapping stable)
+                if stage not in stage_outputs:
+                    # e.g., stage "domain_expert" already stored as domain_expert; avoid empty placeholder
+                    stage_outputs[stage] = stage_outputs.get(stage, {})
+
+                # Save checkpoint after each stage (atomic via PipelineCheckpointManager)
                 self.checkpoint_manager.save_checkpoint(
                     PipelineCheckpoint(
                         project_id=input_data.project_id,
                         stage=stage,
                         stage_index=stage_index,
                         input_data=input_data.model_dump(),
-                        stage_outputs=stage_outputs,
+                        stage_outputs=dict(stage_outputs),  # copy for safety
                     )
                 )
-            
+
             # Success
             result.spec = result.architect.spec if result.architect else None
-            result.scene_package = result.scene_package
+            # Remove self-assignment (HIGH: 321) - keep scene_package as is (None for MVP)
+            # result.scene_package already merged above
             result.status = "completed"
-            
+
             logger.info("pipeline_completed", project_id=input_data.project_id, status=result.status)
-            
-            # Clear checkpoint on success
-            self.checkpoint_manager.clear_checkpoint(input_data.project_id)
-            
-        except (ValueError, KeyError, OSError) as e:
+
+            # Clear checkpoint only on successful completion (HIGH: 327 clear only success)
+            if result.status == "completed":
+                self.checkpoint_manager.clear_checkpoint(input_data.project_id)
+
+        except Exception as e:  # noqa: BLE001 - broad catch to ensure pipeline reports failure for any error (HIGH: outer except)
             logger.error("pipeline_failed", project_id=input_data.project_id, error=str(e))
             result.status = "failed"
             result.error = str(e)

@@ -33,7 +33,17 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "auth-storage",
-      partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }),
+      version: 1,
+      partialize: (state) => ({ user: state.user }),
+      onRehydrateStorage: () => (state) => {
+        // After rehydration, require cookie validation; mark not authenticated until /v1/auth/me succeeds
+        if (state) {
+          state.authReady = false
+          state.isAuthenticated = false
+          state.token = null
+        }
+      },
+      skipHydration: false,
     }
   )
 )

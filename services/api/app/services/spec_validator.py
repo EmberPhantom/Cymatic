@@ -60,10 +60,11 @@ class SpecValidator:
         },
     }
 
+    # Tuned for low-end Android / thermal constraints
     PERFORMANCE_THRESHOLDS = {
-        "max_triangles_warning": 80000,
-        "max_draw_calls_warning": 40,
-        "texture_budget_warning_mb": 80,
+        "max_triangles_warning": 50000,
+        "max_draw_calls_warning": 30,
+        "texture_budget_warning_mb": 50,
     }
 
     def validate(self, spec_dict: dict[str, Any]) -> SpecValidationResult:

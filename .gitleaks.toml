@@ -2,26 +2,21 @@
 # https://github.com/gitleaks/gitleaks
 
 [[allowlist]]
-description = "Allowlisted paths and patterns"
+description = "Allowlisted lockfiles and config"
 paths = [
     "(?i)package-lock\\.json",
     "(?i)yarn\\.lock",
     "(?i)\\.gitleaks\\.toml",
     "(?i)\\.env\\.example",
-    "(?i)\\.github/workflows/.*",
-    "scripts/.*",
-    "docs/.*",
-    "infra/.*",
-    "schemas/.*",
-    "docker-compose\\.yml",
-    "docker-compose\\.dev\\.yml",
-    "Dockerfile",
-    "Dockerfile\\.",
-    "Makefile",
 ]
 
 [[allowlist]]
 description = "Test files and fixtures"
+paths = [
+    "(?i)tests?/.*",
+    "(?i)__tests__/.*",
+    "(?i)fixtures/.*",
+]
 regexes = [
     """(?i)test.*secret.*""",
     """(?i)mock.*secret.*""",
@@ -32,7 +27,10 @@ regexes = [
 ]
 
 [[allowlist]]
-description = "Known test constants"
+description = "Known test constants — scoped to test files only"
+paths = [
+    "(?i)tests?/.*",
+]
 regexes = [
     """test-secret-key-for-testing-only-32charslong""",
     """test-secret-key-for-ci-that-is-at-least-32-chars""",
@@ -40,7 +38,8 @@ regexes = [
     """test-secret-key-for-benchmark-that-is-at-least-32-chars""",
     """test-admin-key-for-ci""",
     """test-admin-key-for-compose""",
-    """minioadmin""",
-    """cymatic""",
-    """cymatic_test""",
 ]
+
+# Note: infra/, schemas/, Dockerfiles, docker-compose, Makefile are NOT allowlisted
+# Secrets in those files must be parameterized via env vars (e.g., ${POSTGRES_PASSWORD})
+# and not hardcoded. This enforces ops review for any secret-like string in infra.

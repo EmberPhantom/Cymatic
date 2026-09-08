@@ -162,14 +162,23 @@ class MinIOClient:
         expires: timedelta = timedelta(hours=1),
         method: str = "GET",
     ) -> str:
-        """Generate presigned URL for object access."""
+        """Generate presigned URL for object access (branch by method)."""
         try:
-            url = self.client.presigned_get_object(
-                self.bucket_name,
-                object_name,
-                expires=expires,
-            )
-            logger.info("presigned_url_generated", object=object_name, method=method)
+            m = method.upper()
+            if m == "PUT":
+                url = self.client.presigned_put_object(
+                    self.bucket_name,
+                    object_name,
+                    expires=expires,
+                )
+            else:
+                # Default to GET for download; also allow HEAD
+                url = self.client.presigned_get_object(
+                    self.bucket_name,
+                    object_name,
+                    expires=expires,
+                )
+            logger.info("presigned_url_generated", object=object_name, method=m)
             return url
         except S3Error as e:
             logger.error("presigned_url_failed", object=object_name, error=str(e))

@@ -1,6 +1,5 @@
 """Tests for generation pipeline"""
 import pytest
-import asyncio
 from app.agents.intake_agent import process_intake
 from app.agents.clarification_agent import process_clarification_answers
 from app.agents.research_agent import research_generation
@@ -9,8 +8,6 @@ from app.agents.architect_agent import create_simulation_spec
 from app.agents.asset_agent import select_assets
 from app.agents.composer_agent import compose_scene
 from app.agents.validation_agent import validate_simulation_spec
-from app.pipelines.real_estate import generate_real_estate_spec
-from app.pipelines.heritage import generate_heritage_spec
 from cymatic_shared.schemas.simulation_spec import SimulationSpec, Entity, NavigationSpec, NavigationPoint, NavigationPath
 
 
@@ -90,13 +87,13 @@ class TestResearchAgent:
 
 class TestDomainExpertAgent:
     def test_real_estate_compliance(self):
-        # Create a valid spec
+        # Create a valid spec - bedrooms now require has_window True
         spec = SimulationSpec(
             domain="real_estate",
             metadata={"title": "Test", "description": "Test", "version": "1.0"},
             entities=[
-                Entity(id="room1", type="room", name="Living Room", position=[0,0,0], properties={"size": [15, 20, 10]}),
-                Entity(id="room2", type="room", name="Bedroom", position=[20,0,0], properties={"size": [12, 12, 10]}),
+                Entity(id="room1", type="room", name="Living Room", position=[0,0,0], properties={"size": [15, 20, 10], "has_window": True, "has_doors": True, "style": "modern"}),
+                Entity(id="room2", type="room", name="Bedroom", position=[20,0,0], properties={"size": [12, 12, 10], "has_window": True, "has_doors": True, "style": "modern"}),
             ],
             navigation=NavigationSpec(
                 points=[

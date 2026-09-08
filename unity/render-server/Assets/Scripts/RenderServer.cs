@@ -5,6 +5,7 @@ using UnityEngine.Networking;
 using System;
 using System.IO;
 using System.Text;
+using Unity.WebRTC;
 using Cysharp.Threading.Tasks;
 
 namespace Cymatic
@@ -48,10 +49,13 @@ namespace Cymatic
         public static RenderServer Instance { get; private set; }
         public bool IsStreaming => _isStreaming;
         public string CurrentSessionId => _currentSessionId;
+        public string RenderServerId => renderServerId;
         public StereoCameraRig StereoRig => _stereoRig;
         public WebRTCStreamer WebRTCStreamer => _webRTCStreamer;
         public InputManager InputManager => _inputManager;
         public PerformanceManager PerformanceManager => _performanceManager;
+        public SignalingClient SignalingClient => _signalingClient;
+        public EventBridge EventBridge => _eventBridge;
         
         private void Awake()
         {
@@ -113,7 +117,7 @@ namespace Cymatic
             _eventBridge.Configure(backendUrl, renderServerId);
             var signalingHost = "localhost";
             try { signalingHost = new System.Uri(backendUrl).Host; } catch {}
-            _signalingClient.Configure($"ws://{signalingHost}:{signalingPort}");
+            _signalingClient.Configure($"ws://{signalingHost}:{signalingPort}/ws");
         }
         
         private async void Start()
@@ -136,26 +140,36 @@ namespace Cymatic
         private async void HandleOfferReceived(string sessionId, string sdp)
         {
             try {
+                // MVP single-stream guard per AGENTS.md
+                if (_isStreaming)
+                {
+                    Debug.LogWarning($"[RenderServer] Busy, rejecting session {sessionId}");
+                    _signalingClient.Send(new SignalingMessage { type = "error", payload = new { session_id = sessionId, error = "busy: one concurrent stream in MVP" } });
+                    return;
+                }
                 _currentSessionId = sessionId;
                 Debug.Log($"[RenderServer] Received offer for session {sessionId}");
-                var sessionInfo = await _eventBridge.GetSessionInfo(sessionId);
+                // Create answer immediately for low latency, load scene in parallel
+                var answerTask = _webRTCStreamer.CreateAnswer(sdp);
+                var sessionInfoTask = _eventBridge.GetSessionInfo(sessionId);
+                var answer = await answerTask;
+                _signalingClient.SendAnswer(sessionId, answer);
+                var sessionInfo = await sessionInfoTask;
                 if (sessionInfo != null && !string.IsNullOrEmpty(sessionInfo.scenePackageUrl))
                 {
                     await LoadScene(sessionInfo.scenePackageUrl);
                 }
-                var answer = await _webRTCStreamer.CreateAnswer(sdp);
-                await _signalingClient.SendAnswer(sessionId, answer);
             } catch (System.Exception e) { Debug.LogError($"[RenderServer] HandleOffer error: {e}"); }
         }
         
         private async void HandleAnswerReceived(string sessionId, string sdp)
         {
-            await _webRTCStreamer.SetRemoteDescription(sdp);
+            try { await _webRTCStreamer.SetRemoteDescription(sdp); } catch (System.Exception e) { Debug.LogError($"HandleAnswer error {e}"); }
         }
         
         private async void HandleCandidateReceived(string sessionId, string candidate, string sdpMid, int sdpMLineIndex)
         {
-            await _webRTCStreamer.AddIceCandidate(candidate, sdpMid, sdpMLineIndex);
+            try { await _webRTCStreamer.AddIceCandidate(candidate, sdpMid, sdpMLineIndex); } catch (System.Exception e) { Debug.LogError($"HandleCandidate error {e}"); }
         }
         
         public async UniTask LoadScene(string scenePackageUrl)
@@ -204,14 +218,40 @@ namespace Cymatic
             if (!_isStreaming) return;
             var endedId = _currentSessionId;
             _isStreaming = false;
-            _webRTCStreamer.StopStreaming();
-            _inputManager.StopProcessing();
-            _performanceManager.StopMonitoring();
-            await _sceneLoader.UnloadScene();
-            await _eventBridge.SendEvent(endedId, "stream_ended", new { });
+            try { _webRTCStreamer.StopStreaming(); } catch {}
+            try { _inputManager.StopProcessing(); } catch {}
+            try { _performanceManager.StopMonitoring(); } catch {}
+            try { await _sceneLoader.UnloadScene(); } catch {}
+            try { await _eventBridge.SendEvent(endedId, "stream_ended", new { }); } catch {}
             _currentSessionId = null;
             Debug.Log("[RenderServer] Streaming stopped");
         }
+
+        // P0 FIX: WebRTCStreamer OnIceCandidate NRE - provide helper to route candidate to signaling/event bridge
+        public void SendIceCandidate(Unity.WebRTC.RTCIceCandidate candidate)
+        {
+            if (candidate == null) return;
+            if (string.IsNullOrEmpty(_currentSessionId))
+            {
+                Debug.LogWarning("[RenderServer] SendIceCandidate no session");
+                return;
+            }
+            try
+            {
+                // P0 FIX: real Unity.WebRTC 3.0.0-pre.8 uses capital Candidate/SdpMid/SdpMLineIndex (nullable)
+                _signalingClient?.SendIceCandidate(_currentSessionId, candidate.Candidate, candidate.SdpMid, candidate.SdpMLineIndex ?? 0);
+            }
+            catch (Exception e) { Debug.LogWarning($"[RenderServer] Signaling SendIceCandidate failed: {e.Message}"); }
+            try
+            {
+                _eventBridge?.SendIceCandidate(_currentSessionId, candidate).Forget();
+            }
+            catch (Exception e) { Debug.LogWarning($"[RenderServer] EventBridge SendIceCandidate failed: {e.Message}"); }
+        }
+
+#if !UNITY_WEBRTC
+        // stub for compile when package not present
+#endif
         
         private void Update()
         {
@@ -230,8 +270,7 @@ namespace Cymatic
                 _stereoRig.UpdateHeadPose(_inputManager.HeadPosition, _inputManager.HeadRotation);
             }
             
-            // Performance management
-            _performanceManager.Update();
+            // Performance management is driven by PerformanceManager's own Update (MonoBehaviour auto-tick)
         }
         
         private void OnDestroy()

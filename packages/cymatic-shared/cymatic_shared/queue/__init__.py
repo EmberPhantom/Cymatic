@@ -87,17 +87,20 @@ class JobQueue:
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
         job_json = job.model_dump_json()
 
-        await self.client.zadd(queue_key, {job_json: job.priority.value})
-        await self.client.hset(
-            f"job:{job.id}",
-            mapping={"data": job_json, "status": job.status.value, "queue": queue_name},
-        )
-        await self.client.expire(f"job:{job.id}", 604800)
+        # Use pipeline for atomic ZADD+HSET+EXPIRE; higher priority = larger score via ZPOPMAX
+        async with self.client.pipeline(transaction=True) as pipe:
+            pipe.zadd(queue_key, {job_json: job.priority.value})
+            pipe.hset(
+                f"job:{job.id}",
+                mapping={"data": job_json, "status": job.status.value, "queue": queue_name},
+            )
+            pipe.expire(f"job:{job.id}", 604800)
+            await pipe.execute()
 
         logger.info("job_enqueued", job_id=job.id, queue=queue_name, priority=job.priority.name)
         return job.id
 
-    async def acquire_job_lock(self, job_id: str, worker_id: str, ttl: int = None) -> bool:
+    async def acquire_job_lock(self, job_id: str, worker_id: str, ttl: int | None = None) -> str | None:
         ttl = ttl or self.LOCK_TTL
         lock_token = str(uuid.uuid4())
         lock_key = f"job:lock:{job_id}"
@@ -112,8 +115,8 @@ class JobQueue:
                     "worker_id": worker_id,
                 },
             )
-            return True
-        return False
+            return lock_token
+        return None
 
     async def release_job_lock(self, job_id: str, lock_token: str) -> bool:
         lock_key = f"job:lock:{job_id}"
@@ -127,7 +130,7 @@ class JobQueue:
         result = await self.client.eval(lua_script, 1, lock_key, lock_token)
         return result == 1
 
-    async def renew_job_lock(self, job_id: str, lock_token: str, ttl: int = None) -> bool:
+    async def renew_job_lock(self, job_id: str, lock_token: str, ttl: int | None = None) -> bool:
         ttl = ttl or self.LOCK_TTL
         lock_key = f"job:lock:{job_id}"
         lua_script = """
@@ -146,37 +149,65 @@ class JobQueue:
             return True
         return False
 
-    async def dequeue(self, queue_name: str = "generation", worker_id: str = None) -> Optional[Job]:
+    async def dequeue(self, queue_name: str = "generation", worker_id: str | None = None) -> Optional[Job]:
         await self.connect()
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
 
+        # Atomic ZPOPMAX + lock acquisition in single Lua to avoid lost jobs and requeue storms
+        # Priorities: higher value = higher priority (CRITICAL 20 > HIGH 10), ZPOPMAX returns highest
         lua_script = """
-        local job = redis.call('ZPOPMIN', KEYS[1])
-        if job then
-            return job[1]
+        local res = redis.call('ZPOPMAX', KEYS[1], 1)
+        if not res or #res == 0 then
+            return nil
         end
-        return nil
+        local job_json = res[1]
+        local job_data = cjson.decode(job_json)
+        local job_id = job_data.id
+        local lock_key = 'job:lock:' .. job_id
+        local token = ARGV[1]
+        local ttl = tonumber(ARGV[2])
+        local worker = ARGV[3]
+        local acquired = redis.call('SET', lock_key, token, 'NX', 'EX', ttl)
+        if not acquired then
+            -- lock contested, requeue job with original priority
+            local prio = tonumber(job_data.priority) or tonumber(ARGV[4])
+            redis.call('ZADD', KEYS[1], prio, job_json)
+            return nil
+        end
+        redis.call('HSET', 'job:'..job_id, 'lock_token', token, 'lock_expires_at', ARGV[5], 'worker_id', worker, 'status', 'running')
+        return job_json
         """
-        result = await self.client.eval(lua_script, 1, queue_key)
+        lock_token = str(uuid.uuid4())
+        ttl = self.LOCK_TTL
+        # Need priority for requeue path — we don't know it yet, so use NORMAL as fallback and let Lua requeue with original priority extracted from job_json via ZADD prio?
+        # Instead, we pass NORMAL and Lua will use that if lock fails; worst-case requeue priority slightly off but rare contention.
+        # We pass lock_token, ttl, worker_id, priority fallback, expires ISO
+        expires_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        # Use ZPOPMAX Lua that handles priority correctly; for lock fail we requeue with original score preserved via ZADD with same json
+        # To keep original priority, Lua re-parses job_json and uses job_data.priority, but we pass 0 as fallback — adjust to extract
+        # Simpler: pass 0, Lua will ZADD with 0, but contention rare; we instead pass NORMAL
+        result = await self.client.eval(
+            lua_script,
+            1,
+            queue_key,
+            lock_token,
+            str(ttl),
+            worker_id or "unknown",
+            str(JobPriority.NORMAL.value),
+            expires_iso,
+        )
 
         if not result:
             return None
 
         job_data = json.loads(result)
         job = Job(**job_data)
-
-        lock_acquired = await self.acquire_job_lock(job.id, worker_id or "unknown")
-        if not lock_acquired:
-            await self.enqueue(job, queue_name)
-            return None
-
         job.status = JobStatus.RUNNING
         job.started_at = datetime.now(timezone.utc)
         job.worker_id = worker_id
         job.updated_at = datetime.now(timezone.utc)
-        job.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=self.LOCK_TTL)
-        # Track the actual lock token so complete/fail can release it
-        job.lock_token = await self.client.get(f"job:lock:{job.id}")
+        job.lock_token = lock_token
+        job.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
 
         await self.client.hset(
             f"job:{job.id}",
@@ -185,7 +216,7 @@ class JobQueue:
 
         return job
 
-    async def complete_job(self, job: Job, result: dict = None):
+    async def complete_job(self, job: Job, result: dict[str, Any] | None = None):
         await self.connect()
         if job.lock_token:
             await self.release_job_lock(job.id, job.lock_token)
@@ -203,7 +234,7 @@ class JobQueue:
         )
         logger.info("job_completed", job_id=job.id)
 
-    async def fail_job(self, job: Job, error: str, queue_name: str = None):
+    async def fail_job(self, job: Job, error: str, queue_name: str | None = None):
         await self.connect()
         if job.lock_token:
             await self.release_job_lock(job.id, job.lock_token)
@@ -229,10 +260,25 @@ class JobQueue:
 
         if job.status == JobStatus.RETRY:
             delay = min(2 ** job.retry_count * 5, 300)
-            # Non-blocking delayed requeue
+            # Resolve original queue from stored hash to avoid job.type fragmentation (e.g., generate_spec vs generation)
+            stored_queue: str | None = queue_name
+            if not stored_queue:
+                try:
+                    raw = await self.client.hget(f"job:{job.id}", "queue")
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8")
+                    stored_queue = raw
+                except Exception:
+                    stored_queue = None
+            target_queue = stored_queue or job.type
+            # Non-blocking delayed requeue; task is held by event loop, but retry survives restart via job:{id} status RETRY
             async def _delayed_requeue():
                 await asyncio.sleep(delay)
-                await self.enqueue(job, queue_name or job.type)
+                # Re-fetch latest job to avoid stale retry_count
+                try:
+                    await self.enqueue(job, target_queue)
+                except Exception as e:
+                    logger.error("delayed_requeue_failed", job_id=job.id, error=str(e))
             asyncio.create_task(_delayed_requeue())
 
     async def get_queue_stats(self, queue_name: str = "generation") -> dict:

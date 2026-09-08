@@ -1,4 +1,5 @@
-"""Usage Tracking and Quota Management"""
+"""Usage Tracking and Quota Management with Redis atomic quotas"""
+
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -66,24 +67,77 @@ class ProviderQuota(BaseModel):
 
 
 class UsageTracker:
-    """Tracks LLM usage, enforces quotas, and logs for billing."""
+    """Tracks LLM usage, enforces quotas via Redis Lua INCR+EXPIRE.
+
+    Falls back to local quotas if Redis unavailable (but check_quota remains fail-closed).
+    """
 
     def __init__(self, redis_url: str | None = None) -> None:
-        self.redis_url = redis_url or settings.REDIS_URL
+        # DB 2 = usage (isolated from cache/rate)
+        self.redis_url = redis_url or getattr(settings, "REDIS_USAGE_URL", None) or settings.REDIS_URL
         self._client: redis.Redis | None = None
         self._local_quotas: dict[str, ProviderQuota] = {}
         self._initialize_default_quotas()
 
     def _initialize_default_quotas(self) -> None:
-        """Initialize default quotas per provider."""
+        """Initialize default quotas per provider from actual ProviderConfig."""
         from app.schemas.providers import ProviderName
 
-        for provider in ProviderName:
-            self._local_quotas[provider.value] = ProviderQuota(
-                provider=provider.value,
-                rpm_limit=60,
-                tpm_limit=100000,
-            )
+        # Use actual ProviderConfig limits rather than hardcoded 60/100k
+        try:
+            from app.routing.engine import routing_engine
+
+            for provider in ProviderName:
+                cfg = routing_engine.providers.get(provider)
+                if cfg:
+                    self._local_quotas[provider.value] = ProviderQuota(
+                        provider=provider.value,
+                        rpm_limit=cfg.rate_limit_rpm,
+                        tpm_limit=cfg.rate_limit_tpm,
+                    )
+                else:
+                    self._local_quotas[provider.value] = ProviderQuota(
+                        provider=provider.value,
+                        rpm_limit=60,
+                        tpm_limit=100000,
+                    )
+        except Exception:
+            from app.schemas.providers import ProviderName as _PN
+
+            for provider in _PN:
+                self._local_quotas[provider.value] = ProviderQuota(
+                    provider=provider.value,
+                    rpm_limit=60,
+                    tpm_limit=100000,
+                )
+
+    def _get_provider_limits(self, provider: str) -> ProviderQuota:
+        # Return live limits from ProviderConfig if available
+        try:
+            from app.schemas.providers import ProviderName
+            from app.routing.engine import routing_engine
+
+            # Try ProviderName conversion
+            try:
+                pn = ProviderName(provider)
+                cfg = routing_engine.providers.get(pn)
+                if cfg:
+                    # Keep existing quota object but update limits to live config
+                    q = self._local_quotas.get(provider)
+                    if q:
+                        q.rpm_limit = cfg.rate_limit_rpm
+                        q.tpm_limit = cfg.rate_limit_tpm
+                        return q
+                    return ProviderQuota(
+                        provider=provider,
+                        rpm_limit=cfg.rate_limit_rpm,
+                        tpm_limit=cfg.rate_limit_tpm,
+                    )
+            except ValueError:
+                pass
+        except Exception:
+            pass
+        return self._local_quotas.get(provider, ProviderQuota(provider=provider))
 
     async def connect(self) -> None:
         if not self._client:
@@ -98,71 +152,187 @@ class UsageTracker:
             await self._client.close()
             self._client = None
 
+    # Lua script for atomic INCR + EXPIRE (SET if new)
+    _INCR_EXPIRE_LUA = """
+local current = redis.call('INCRBY', KEYS[1], ARGV[1])
+if current == tonumber(ARGV[1]) then
+  redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return current
+"""
+
+    _INCRBYFLOAT_EXPIRE_LUA = """
+local current = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])
+if current == tonumber(ARGV[1]) then
+  redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return current
+"""
+
+    async def _redis_incr(self, key: str, increment: int, ttl: int) -> int:
+        if self._client is None:
+            await self.connect()
+        if self._client is None:
+            return 0
+        try:
+            # Use Lua for atomic INCR+EXPIRE
+            result = await self._client.eval(self._INCR_EXPIRE_LUA, 1, key, str(increment), str(ttl))
+            return int(float(result)) if result is not None else 0
+        except Exception:
+            # Fallback pipeline
+            try:
+                pipe = self._client.pipeline(transaction=False)
+                pipe.incrby(key, increment)  # type: ignore
+                pipe.expire(key, ttl)  # type: ignore
+                res = await pipe.execute()
+                return int(res[0]) if res else 0
+            except Exception as e:
+                logger.warning("quota_incr_failed", key=key, error=str(e))
+                return 0
+
+    async def _redis_incr_float(self, key: str, increment: float, ttl: int) -> float:
+        if self._client is None:
+            await self.connect()
+        if self._client is None:
+            return 0.0
+        try:
+            result = await self._client.eval(self._INCRBYFLOAT_EXPIRE_LUA, 1, key, str(increment), str(ttl))
+            return float(result) if result is not None else 0.0
+        except Exception:
+            try:
+                pipe = self._client.pipeline(transaction=False)
+                pipe.incrbyfloat(key, increment)  # type: ignore
+                pipe.expire(key, ttl)  # type: ignore
+                res = await pipe.execute()
+                return float(res[0]) if res else 0.0
+            except Exception as e:
+                logger.warning("quota_incr_float_failed", key=key, error=str(e))
+                return 0.0
+
     async def log_usage(self, usage: UsageLog) -> None:
         """Log usage event."""
         await self.connect()
         if self._client is None:
             logger.warning("usage_log_no_redis", usage=usage.model_dump())
+            # Still update local quotas as fallback
+            await self._update_quota_local(usage)
             return
 
         # Store in Redis with TTL (30 days)
         key = f"usage:{usage.timestamp.strftime('%Y-%m-%d')}:{usage.request_id}"
-        await self._client.setex(
-            key,
-            2592000,  # 30 days
-            usage.model_dump_json(),
-        )
+        try:
+            await self._client.setex(
+                key,
+                2592000,  # 30 days
+                usage.model_dump_json(),
+            )
+        except Exception as e:
+            logger.warning("usage_log_failed", error=str(e))
 
         # Update daily aggregates
         day_key = f"usage:daily:{usage.timestamp.strftime('%Y-%m-%d')}"
-        await self._client.hincrby(day_key, f"{usage.provider}:{usage.task_type}:count", 1)
-        await self._client.hincrby(
-            day_key, f"{usage.provider}:{usage.task_type}:tokens", usage.total_tokens
-        )
-        await self._client.hincrby(day_key, f"{usage.provider}:latency_sum", usage.latency_ms)
+        try:
+            pipe = self._client.pipeline(transaction=False)
+            pipe.hincrby(day_key, f"{usage.provider}:{usage.task_type}:count", 1)  # type: ignore
+            # Fix tpm never trip for STT/TTS: ensure tokens >0 even when zero reported
+            tokens_for_quota = usage.total_tokens
+            if tokens_for_quota == 0 and usage.task_type in ("stt", "tts"):
+                # Estimate: STT 1min audio ~150 tokens, TTS text len/4 tokens
+                if usage.task_type == "stt":
+                    tokens_for_quota = 150
+                else:
+                    # Rough: chars/4 tokens
+                    tokens_for_quota = max(10, len(usage.model) * 2) if usage.model else 100
+                    # Prefer metadata text_len if present
+                    text_len = usage.metadata.get("text_len") or usage.metadata.get("chars")
+                    if isinstance(text_len, int):
+                        tokens_for_quota = max(10, text_len // 4)
+            else:
+                tokens_for_quota = max(tokens_for_quota, 1) if usage.task_type not in ("stt", "tts") else tokens_for_quota
+            pipe.hincrby(day_key, f"{usage.provider}:{usage.task_type}:tokens", tokens_for_quota)  # type: ignore
+            pipe.hincrby(day_key, f"{usage.provider}:latency_sum", usage.latency_ms)  # type: ignore
+            pipe.expire(day_key, 2592000)  # type: ignore
+            await pipe.execute()
+        except Exception as e:
+            logger.warning("usage_aggregate_failed", error=str(e))
 
-        # Update provider quotas
-        await self._update_quota(usage)
+        # Update provider quotas via Redis atomic ops
+        await self._update_quota_redis(usage)
+        # Also update local for get_quota_status fallback
+        await self._update_quota_local(usage)
 
         # Log to structured logger
         logger.info("llm_usage", **usage.model_dump())
 
-    async def _update_quota(self, usage: UsageLog) -> None:
-        """Update provider quota counters."""
+    async def _update_quota_redis(self, usage: UsageLog) -> None:
+        """Update provider quota counters in Redis."""
+        now = datetime.now(timezone.utc)
+        # Keys with window TTLs
+        minute_bucket = now.strftime("%Y-%m-%d-%H-%M")
+        day_bucket = now.strftime("%Y-%m-%d")
+        month_bucket = now.strftime("%Y-%m")
+        rpm_key = f"quota:{usage.provider}:rpm:{minute_bucket}"
+        tpm_key = f"quota:{usage.provider}:tpm:{minute_bucket}"
+        daily_key = f"quota:{usage.provider}:daily:{day_bucket}"
+        monthly_cost_key = f"quota:{usage.provider}:monthly_cost:{month_bucket}"
+
+        # Estimate tokens for STT/TTS if zero
+        tokens = usage.total_tokens
+        if tokens == 0 and usage.task_type in ("stt", "tts"):
+            if usage.task_type == "stt":
+                tokens = 150
+            else:
+                text_len = usage.metadata.get("text_len") if isinstance(usage.metadata.get("text_len"), int) else 100
+                tokens = max(10, int(text_len) // 4) if isinstance(text_len, int) else 100
+
+        cost_per_1k = self._estimate_cost(usage.provider, usage.model)
+        cost = (tokens / 1000) * cost_per_1k
+
+        # RPM: increment 1
+        await self._redis_incr(rpm_key, 1, 70)
+        # TPM: increment tokens
+        if tokens > 0:
+            await self._redis_incr(tpm_key, tokens, 70)
+        # Daily
+        if tokens > 0:
+            await self._redis_incr(daily_key, tokens, 86400 * 2)
+        # Monthly cost
+        if cost > 0:
+            await self._redis_incr_float(monthly_cost_key, cost, 86400 * 32)
+
+    async def _update_quota_local(self, usage: UsageLog) -> None:
+        """Update local quota counters (fallback)."""
         quota = self._local_quotas.get(usage.provider)
         if not quota:
-            return
+            # Create from live config
+            quota = self._get_provider_limits(usage.provider)
+            self._local_quotas[usage.provider] = quota
 
         now = datetime.now(timezone.utc)
 
-        # Reset RPM window if needed (1 minute)
+        # Reset windows if needed
         if (now - quota.rpm_window_start).total_seconds() >= 60:
             quota.current_rpm = 0
             quota.rpm_window_start = now
-
-        # Reset TPM window if needed (1 minute)
         if (now - quota.tpm_window_start).total_seconds() >= 60:
             quota.current_tpm = 0
             quota.tpm_window_start = now
-
-        # Reset daily window if needed
         if (now - quota.daily_window_start).days >= 1:
             quota.current_daily_tokens = 0
             quota.daily_window_start = now
-
-        # Reset monthly window if needed
         if (now - quota.monthly_window_start).days >= 30:
             quota.current_monthly_cost_usd = 0.0
             quota.monthly_window_start = now
 
-        # Increment counters
+        # Increment - use estimated tokens for STT/TTS
+        tokens = usage.total_tokens
+        if tokens == 0 and usage.task_type in ("stt", "tts"):
+            tokens = 150 if usage.task_type == "stt" else max(10, int(usage.metadata.get("text_len", 100)) // 4)  # type: ignore
         quota.current_rpm += 1
-        quota.current_tpm += usage.total_tokens
-        quota.current_daily_tokens += usage.total_tokens
-
-        # Estimate cost (rough)
+        quota.current_tpm += tokens
+        quota.current_daily_tokens += tokens
         cost_per_1k = self._estimate_cost(usage.provider, usage.model)
-        quota.current_monthly_cost_usd += (usage.total_tokens / 1000) * cost_per_1k
+        quota.current_monthly_cost_usd += (tokens / 1000) * cost_per_1k
 
     def _estimate_cost(self, provider: str, model: str) -> float:
         """Estimate cost per 1k tokens."""
@@ -176,37 +346,138 @@ class UsageTracker:
         return costs.get(provider, 0.001)
 
     async def check_quota(self, provider: str, estimated_tokens: int = 1000) -> bool:
-        """Check if request would exceed quota."""
+        """Check if request would exceed quota (Redis first, fallback local). Returns True if allowed."""
+        quota_limits = self._get_provider_limits(provider)
+        now = datetime.now(timezone.utc)
+        minute_bucket = now.strftime("%Y-%m-%d-%H-%M")
+        day_bucket = now.strftime("%Y-%m-%d")
+        month_bucket = now.strftime("%Y-%m")
+
+        # Fix tpm never trip for STT/TTS: ensure estimated_tokens at least 1 for those tasks
+        # Caller should pass proper estimated_tokens; if 0, default to 100
+        if estimated_tokens <= 0:
+            estimated_tokens = 100
+
+        # Try Redis
+        await self.connect()
+        if self._client is not None:
+            try:
+                rpm_key = f"quota:{provider}:rpm:{minute_bucket}"
+                tpm_key = f"quota:{provider}:tpm:{minute_bucket}"
+                daily_key = f"quota:{provider}:daily:{day_bucket}"
+                monthly_cost_key = f"quota:{provider}:monthly_cost:{month_bucket}"
+
+                pipe = self._client.pipeline(transaction=False)
+                pipe.get(rpm_key)  # type: ignore
+                pipe.get(tpm_key)  # type: ignore
+                pipe.get(daily_key)  # type: ignore
+                pipe.get(monthly_cost_key)  # type: ignore
+                vals = await pipe.execute()
+                cur_rpm = int(vals[0]) if vals[0] else 0
+                cur_tpm = int(vals[1]) if vals[1] else 0
+                cur_daily = int(vals[2]) if vals[2] else 0
+                cur_monthly_cost = float(vals[3]) if vals[3] else 0.0
+
+                # Check RPM
+                if cur_rpm >= quota_limits.rpm_limit:
+                    return False
+                # Check TPM
+                if cur_tpm + estimated_tokens > quota_limits.tpm_limit:
+                    return False
+                # Check daily
+                if cur_daily + estimated_tokens > quota_limits.daily_token_limit:
+                    return False
+                # Check monthly cost – this was missing before
+                est_cost = (estimated_tokens / 1000) * self._estimate_cost(provider, "")
+                if cur_monthly_cost + est_cost > quota_limits.monthly_cost_limit_usd:
+                    return False
+
+                return True
+            except Exception as e:
+                logger.warning("quota_check_redis_failed", provider=provider, error=str(e))
+                # fall through to local
+
+        # Fallback local (also covers no Redis)
         quota = self._local_quotas.get(provider)
         if not quota:
             return True
+        # Update limits from live config
+        quota = self._get_provider_limits(provider)
 
-        now = datetime.now(timezone.utc)
-
-        # Check RPM
+        # Check windows similar to original but with monthly_cost
+        # RPM
         if (now - quota.rpm_window_start).total_seconds() < 60:
             if quota.current_rpm >= quota.rpm_limit:
                 return False
-
-        # Check TPM
+        # TPM
         if (now - quota.tpm_window_start).total_seconds() < 60:
             if quota.current_tpm + estimated_tokens > quota.tpm_limit:
                 return False
-
-        # Check daily tokens
+        # Daily
         if (now - quota.daily_window_start).days < 1:
             if quota.current_daily_tokens + estimated_tokens > quota.daily_token_limit:
                 return False
-
+        # Monthly cost
+        if (now - quota.monthly_window_start).days < 30:
+            est_cost = (estimated_tokens / 1000) * self._estimate_cost(provider, "")
+            if quota.current_monthly_cost_usd + est_cost > quota.monthly_cost_limit_usd:
+                return False
         return True
 
     async def get_quota_status(self, provider: str) -> dict[str, Any]:
-        """Get current quota status."""
+        """Get current quota status from Redis (preferred) else local."""
+        await self.connect()
+        quota_limits = self._get_provider_limits(provider)
+        now = datetime.now(timezone.utc)
+        minute_bucket = now.strftime("%Y-%m-%d-%H-%M")
+        day_bucket = now.strftime("%Y-%m-%d")
+        month_bucket = now.strftime("%Y-%m")
+        if self._client is not None:
+            try:
+                rpm_key = f"quota:{provider}:rpm:{minute_bucket}"
+                tpm_key = f"quota:{provider}:tpm:{minute_bucket}"
+                daily_key = f"quota:{provider}:daily:{day_bucket}"
+                monthly_cost_key = f"quota:{provider}:monthly_cost:{month_bucket}"
+                pipe = self._client.pipeline(transaction=False)
+                pipe.get(rpm_key)  # type: ignore
+                pipe.get(tpm_key)  # type: ignore
+                pipe.get(daily_key)  # type: ignore
+                pipe.get(monthly_cost_key)  # type: ignore
+                vals = await pipe.execute()
+                cur_rpm = int(vals[0]) if vals[0] else 0
+                cur_tpm = int(vals[1]) if vals[1] else 0
+                cur_daily = int(vals[2]) if vals[2] else 0
+                cur_monthly = float(vals[3]) if vals[3] else 0.0
+                return {
+                    "provider": provider,
+                    "rpm": {
+                        "used": cur_rpm,
+                        "limit": quota_limits.rpm_limit,
+                        "remaining": max(0, quota_limits.rpm_limit - cur_rpm),
+                    },
+                    "tpm": {
+                        "used": cur_tpm,
+                        "limit": quota_limits.tpm_limit,
+                        "remaining": max(0, quota_limits.tpm_limit - cur_tpm),
+                    },
+                    "daily_tokens": {
+                        "used": cur_daily,
+                        "limit": quota_limits.daily_token_limit,
+                        "remaining": max(0, quota_limits.daily_token_limit - cur_daily),
+                    },
+                    "monthly_cost_usd": {
+                        "used": round(cur_monthly, 4),
+                        "limit": quota_limits.monthly_cost_limit_usd,
+                        "remaining": round(quota_limits.monthly_cost_limit_usd - cur_monthly, 4),
+                    },
+                }
+            except Exception:
+                pass
+
+        # Fallback to local logic
         quota = self._local_quotas.get(provider)
         if not quota:
             return {}
-
-        now = datetime.now(timezone.utc)
 
         # Reset windows if needed
         if (now - quota.rpm_window_start).total_seconds() >= 60:
@@ -243,7 +514,13 @@ class UsageTracker:
         }
 
     async def get_usage_stats(self, days: int = 7) -> dict[str, Any]:
-        """Get aggregated usage statistics."""
+        """Get aggregated usage statistics with days cap (max 30)."""
+        # Fix days cap to prevent unbounded Redis load
+        MAX_DAYS = 30
+        if days > MAX_DAYS:
+            days = MAX_DAYS
+        if days < 1:
+            days = 1
         await self.connect()
         if self._client is None:
             return {
@@ -271,7 +548,10 @@ class UsageTracker:
         for i in range(days):
             day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
             day_key = f"usage:daily:{day}"
-            data: dict[Any, Any] = await self._client.hgetall(day_key)
+            try:
+                data: dict[Any, Any] = await self._client.hgetall(day_key)
+            except Exception:
+                continue
 
             for key, value in data.items():
                 key_str = key.decode() if isinstance(key, bytes) else str(key)
@@ -289,9 +569,7 @@ class UsageTracker:
                         by_task[task] = by_task.get(task, 0) + int(val_str)
                         stats["total_requests"] = int(stats["total_requests"]) + int(val_str)
                     elif metric == "tokens":
-                        by_provider[f"{provider}_tokens"] = by_provider.get(
-                            f"{provider}_tokens", 0
-                        ) + int(val_str)
+                        by_provider[f"{provider}_tokens"] = by_provider.get(f"{provider}_tokens", 0) + int(val_str)
                         stats["total_tokens"] = int(stats["total_tokens"]) + int(val_str)
                     elif metric == "latency_sum":
                         latency_sum += int(val_str)

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.6
 # ── Build stage ──────────────────────────────────────────────
 FROM python:3.11-slim AS builder
 
@@ -8,39 +9,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY packages/cymatic-shared/ ./shared/
-RUN pip install --no-cache-dir --prefix=/install ./shared
-
-COPY services/api/requirements.txt ./requirements.txt
+# Requirements first for layer cache
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Shared package via additional_context 'shared' (compose per-service) or fallback
+COPY --from=shared . ./shared/
+RUN pip install --no-cache-dir --prefix=/install ./shared
 
 # ── Runtime stage ────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system app && useradd --system --gid app --create-home app --home-dir /app app
 
 COPY --from=builder /install /usr/local
-COPY --from=builder /tmp/build/shared /app/packages/cymatic-shared
 
 WORKDIR /app
 
-COPY services/api/app/ ./app/
-COPY services/api/alembic.ini ./alembic.ini
-COPY services/api/alembic/ ./alembic/
+COPY app/ ./app/
+COPY alembic.ini ./alembic.ini
+COPY alembic/ ./alembic/
+
+RUN chown -R app:app /app
+USER app
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s CMD python -c "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-4}"]
 
 # ── Test stage ──────────────────────────────────────────────
 FROM runtime AS test
 
-COPY services/api/tests/ ./tests/
-COPY services/api/pytest.ini ./pytest.ini
-RUN pip install --no-cache-dir pytest==8.3.5 pytest-asyncio==0.24.0 pytest-cov psycopg2-binary
+USER root
 
-ENV PYTHONPATH=/app/packages/cymatic-shared
+COPY tests/ ./tests/
+COPY pytest.ini ./pytest.ini
+RUN pip install --no-cache-dir pytest==8.3.5 pytest-asyncio==0.24.0 pytest-cov psycopg2-binary==2.9.9 httpx
+
+ENV PYTHONPATH=/app:/usr/local/lib/python3.11/site-packages
+
+USER app
 
 CMD ["pytest", "tests/", "-v", "--tb=short"]

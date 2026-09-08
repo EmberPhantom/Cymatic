@@ -5,6 +5,9 @@ import android.graphics.PointF
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import kotlinx.coroutines.channels.Channel
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.sqrt
 
 class GazeManager(private val context: Context) {
 
@@ -53,10 +56,11 @@ class GazeManager(private val context: Context) {
             gazeDirection[1] * gazeDirection[1] +
             gazeDirection[2] * gazeDirection[2]
         ))
-        
-        // Map to screen coordinates (normalized -1 to 1)
-        val normalizedX = yaw / (PI / 2) // Approximate
-        val normalizedY = pitch / (PI / 4)
+
+        // Map to screen coordinates (normalized -1 to 1) - use Float PI for type safety
+        val piF = PI.toFloat()
+        val normalizedX = yaw / (piF / 2f) // Approximate
+        val normalizedY = pitch / (piF / 4f)
         
         // Map to screen pixels
         reticlePosition.x = ((normalizedX + 1) / 2) * screenWidth

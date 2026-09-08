@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 using Cysharp.Threading.Tasks;
 using Newtonsoft.Json;
+using Unity.WebRTC;
 
 namespace Cymatic
 {
@@ -20,6 +21,11 @@ namespace Cymatic
         // State
         private bool _isRegistered = false;
         private string _authToken;
+
+        // P0 Fix: expose auth token for CopilotAgent (was private)
+        public string AuthToken => _authToken;
+        public string GetAuthToken() => _authToken;
+        public string RenderServerId => _renderServerId;
         
         public event Action<string, string, string> OnCommandReceived; // sessionId, command, payload
         
@@ -80,23 +86,25 @@ namespace Cymatic
             await PostAsync<object>("/v1/stream/events", evt);
         }
         
-        public async UniTask SendInput(string sessionId, InputPacket input)
+        public async UniTask SendInput(string sessionId, InputManager.InputPacket input)
         {
             if (string.IsNullOrEmpty(sessionId)) return;
             
             await PostAsync<object>($"/v1/stream/sessions/{sessionId}/input", input);
         }
         
-        public async UniTask SendIceCandidate(string sessionId, RTCIceCandidate candidate)
+        public async UniTask SendIceCandidate(string sessionId, Unity.WebRTC.RTCIceCandidate candidate)
         {
             if (string.IsNullOrEmpty(sessionId)) return;
+            if (candidate == null) return;
             
+            // P0 FIX: real Unity.WebRTC 3.0.0-pre.8 uses capital Candidate/SdpMid/SdpMLineIndex (nullable)
             var ice = new IceCandidateMessage
             {
                 session_id = sessionId,
-                candidate = candidate.candidate,
-                sdp_mid = candidate.sdpMid,
-                sdp_mline_index = candidate.sdpMLineIndex
+                candidate = candidate.Candidate,
+                sdp_mid = candidate.SdpMid,
+                sdp_mline_index = candidate.SdpMLineIndex ?? 0
             };
             
             await PostAsync<object>($"/v1/stream/sessions/{sessionId}/candidate", ice);

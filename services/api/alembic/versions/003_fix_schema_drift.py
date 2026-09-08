@@ -14,8 +14,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Fix assetstatus enum - add 'uploading' if not exists
-    op.execute("ALTER TYPE assetstatus ADD VALUE IF NOT EXISTS 'uploading'")
+    # Fix assetstatus enum - add 'uploading' if not exists (must be outside transaction)
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE assetstatus ADD VALUE IF NOT EXISTS 'uploading'")
 
     # Add organization_id to assets (tenant isolation)
     op.add_column("assets", sa.Column("organization_id", sa.Integer(), nullable=True))

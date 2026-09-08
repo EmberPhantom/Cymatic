@@ -6,6 +6,7 @@ namespace Cymatic.Navigation
 {
     /// <summary>
     /// Manages navigation mesh and pathfinding for the scene.
+    /// P0 FIX: Use NavMeshBuilder.BuildNavMeshData (correct 2022.3 signature) + AddNavMeshData
     /// </summary>
     public class NavigationManager : MonoBehaviour
     {
@@ -28,10 +29,11 @@ namespace Cymatic.Navigation
         [SerializeField] private Color navMeshColor = new Color(0, 1, 0, 0.3f);
         
         private NavMeshData _navMesh;
+        private NavMeshDataInstance _navMeshInstance;
         private bool _isBuilt = false;
         
         public static NavigationManager Instance { get; private set; }
-        public bool IsNavMeshReady => _isBuilt && _navMesh != null && _navMesh.isValid;
+        public bool IsNavMeshReady => _isBuilt && _navMesh != null;
         
         void Awake()
         {
@@ -49,18 +51,32 @@ namespace Cymatic.Navigation
         
         public void BuildNavMesh()
         {
-            if (buildSettings == null)
-                buildSettings = new NavMeshBuildSettings();
-            
-            buildSettings.agentRadius = agentRadius;
-            buildSettings.agentHeight = agentHeight;
-            buildSettings.maxSlope = maxSlope;
-            buildSettings.stepHeight = stepHeight;
-            buildSettings.minRegionArea = 1f;
+            // Ensure valid build settings
+            if (buildSettings.agentTypeID == 0)
+            {
+                buildSettings.agentRadius = agentRadius;
+                buildSettings.agentHeight = agentHeight;
+                buildSettings.agentSlope = maxSlope;
+                buildSettings.agentClimb = stepHeight;
+                buildSettings.minRegionArea = 1f;
+            }
+            else
+            {
+                buildSettings.agentRadius = agentRadius;
+                buildSettings.agentHeight = agentHeight;
+                buildSettings.agentSlope = maxSlope;
+                buildSettings.agentClimb = stepHeight;
+                buildSettings.minRegionArea = 1f;
+            }
             
             var sources = new List<NavMeshBuildSource>();
+#if UNITY_2022_3_OR_NEWER
+            var renderers = UnityEngine.Object.FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None);
+            var colliders = UnityEngine.Object.FindObjectsByType<Collider>(FindObjectsSortMode.None);
+#else
             var renderers = FindObjectsOfType<MeshRenderer>();
             var colliders = FindObjectsOfType<Collider>();
+#endif
             
             foreach (var r in renderers)
             {
@@ -68,22 +84,42 @@ namespace Cymatic.Navigation
                 {
                     var source = new NavMeshBuildSource
                     {
-                        shape = NavMeshBuildSourceShape.MeshRenderer,
-                        sourceObject = r,
+                        shape = NavMeshBuildSourceShape.Mesh,
+                        sourceObject = r.GetComponent<MeshFilter>() != null ? r.GetComponent<MeshFilter>().sharedMesh : null,
+                        transform = r.transform.localToWorldMatrix,
                         area = 0
                     };
+                    // Fallback if mesh null: use bounds
+                    if (source.sourceObject == null)
+                    {
+                        source.shape = NavMeshBuildSourceShape.Box;
+                        source.size = r.bounds.size;
+                        source.transform = Matrix4x4.TRS(r.bounds.center, Quaternion.identity, Vector3.one);
+                    }
                     sources.Add(source);
                 }
             }
             
             foreach (var c in colliders)
             {
-                if (c.gameObject.isStatic && c is MeshCollider)
+                if (c.gameObject.isStatic && c is MeshCollider meshCol && meshCol.sharedMesh != null)
                 {
                     var source = new NavMeshBuildSource
                     {
-                        shape = NavMeshBuildSourceShape.MeshCollider,
-                        sourceObject = c,
+                        shape = NavMeshBuildSourceShape.Mesh,
+                        sourceObject = meshCol.sharedMesh,
+                        transform = c.transform.localToWorldMatrix,
+                        area = 0
+                    };
+                    sources.Add(source);
+                }
+                else if (c.gameObject.isStatic && c is BoxCollider box)
+                {
+                    var source = new NavMeshBuildSource
+                    {
+                        shape = NavMeshBuildSourceShape.Box,
+                        size = box.size,
+                        transform = Matrix4x4.TRS(box.transform.position, box.transform.rotation, box.transform.lossyScale),
                         area = 0
                     };
                     sources.Add(source);
@@ -91,11 +127,20 @@ namespace Cymatic.Navigation
             }
             
             var bounds = new Bounds(Vector3.zero, Vector3.one * 10000f);
-            _navMesh = NavMeshBuilder.BuildNavMesh(sources, buildSettings, bounds);
+            // P0 FIX: correct signature for Unity 2022.3: BuildNavMeshData(settings, sources, bounds, pos, rot)
+            var newData = NavMeshBuilder.BuildNavMeshData(buildSettings, sources, bounds, Vector3.zero, Quaternion.identity);
             
-            if (_navMesh != null)
+            if (newData != null)
             {
-                NavMesh.AddNavMeshData(_navMesh);
+                // Remove previous instance if exists
+                if (_navMeshInstance.valid)
+                    _navMeshInstance.Remove();
+                if (_navMesh != null)
+                {
+                    // previous data will be GC'd after Remove
+                }
+                _navMesh = newData;
+                _navMeshInstance = NavMesh.AddNavMeshData(_navMesh);
                 _isBuilt = true;
                 Debug.Log($"[NavigationManager] NavMesh built with {sources.Count} sources");
             }
@@ -131,10 +176,9 @@ namespace Cymatic.Navigation
         
         public Vector3 FindNearestNavMeshPoint(Vector3 position, float maxDistance = 10f)
         {
-            NavMeshHit hit;
-            if (NavMesh.SamplePosition(transform.InverseTransformPoint(position), out NavMeshHit hit, 10f, NavMesh.AllAreas))
+            if (NavMesh.SamplePosition(position, out NavMeshHit hit, maxDistance, NavMesh.AllAreas))
             {
-                return transform.TransformPoint(hit.position);
+                return hit.position;
             }
             return position;
         }
@@ -162,31 +206,37 @@ namespace Cymatic.Navigation
         
         public void RebuildNavMesh()
         {
+            if (_navMeshInstance.valid)
+            {
+                _navMeshInstance.Remove();
+                _navMeshInstance = default;
+            }
             if (_navMesh != null)
             {
-                NavMesh.RemoveNavMeshData(_navMesh);
+                // Destroy old navmesh data
+                // Note: Do not DestroyImmediate; let GC handle
                 _navMesh = null;
             }
+            _isBuilt = false;
             BuildNavMesh();
         }
         
         void OnDrawGizmos()
         {
-            if (!showNavMesh || _navMesh == null) return;
-            
+            if (!showNavMesh) return;
+            // P0 FIX: NavMeshData does not have GetNavMeshTriangles; use CalculateTriangulation
+            var triangulation = NavMesh.CalculateTriangulation();
+            if (triangulation.vertices == null || triangulation.indices == null) return;
             Gizmos.color = navMeshColor;
-            var triangles = _navMesh.GetNavMeshTriangles();
-            for (int i = 0; i < triangles.Length; i += 3)
+            for (int i = 0; i < triangulation.indices.Length; i += 3)
             {
-                if (i + 2 < triangles.Length)
-                {
-                    var v1 = triangles[i];
-                    var v2 = triangles[i + 1];
-                    var v3 = triangles[i + 2];
-                    Gizmos.DrawLine(v1, v2);
-                    Gizmos.DrawLine(v2, v3);
-                    Gizmos.DrawLine(v3, v1);
-                }
+                if (i + 2 >= triangulation.indices.Length) break;
+                var v0 = triangulation.vertices[triangulation.indices[i]];
+                var v1 = triangulation.vertices[triangulation.indices[i+1]];
+                var v2 = triangulation.vertices[triangulation.indices[i+2]];
+                Gizmos.DrawLine(v0, v1);
+                Gizmos.DrawLine(v1, v2);
+                Gizmos.DrawLine(v2, v0);
             }
         }
         
@@ -194,6 +244,8 @@ namespace Cymatic.Navigation
         {
             if (Instance == this)
                 Instance = null;
+            if (_navMeshInstance.valid)
+                _navMeshInstance.Remove();
         }
     }
 }

@@ -6,7 +6,6 @@ from fastapi import (
     status,
     WebSocket,
     WebSocketDisconnect,
-    Query,
 )
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -20,15 +19,29 @@ from jose import JWTError
 from app.core.config import get_settings
 from app.core.dependencies import require_viewer
 from app.core.security import decode_token, is_token_revoked
+from app.core.rate_limit import is_rate_limited
 from app.db.session import get_db, AsyncSessionLocal
 from app.models.stream_session import StreamSession, StreamSessionStatus
-from app.models.project import Project
+from app.models.project import Project, ProjectStatus
 from app.models.user import User
 from app.models.runtime_event import RuntimeEvent
 
 router = APIRouter()
 settings = get_settings()
 logger = structlog.get_logger()
+
+# Reuse global httpx client (avoid per-request AsyncClient creation)
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+        )
+    return _http_client
 
 
 class StreamSessionCreate(BaseModel):
@@ -50,12 +63,12 @@ class StreamSessionResponse(BaseModel):
 
 class WebRTCOffer(BaseModel):
     sdp: str
-    type: str
+    type: Literal["offer"]
 
 
 class WebRTCAnswer(BaseModel):
     sdp: str
-    type: str
+    type: Literal["answer"]
 
 
 class ICECandidate(BaseModel):
@@ -101,7 +114,7 @@ async def create_stream_session(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    if project.status != "published":
+    if project.status != ProjectStatus.PUBLISHED:
         raise HTTPException(
             status_code=400, detail="Project must be published to stream"
         )
@@ -116,16 +129,17 @@ async def create_stream_session(
     await db.refresh(session)
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{settings.RENDER_SERVER_URL}/api/sessions",
-                json={"session_id": session.id, "project_id": session.project_id},
-            )
-            if resp.status_code == 200:
-                session.status = StreamSessionStatus.CONNECTING
-                session.signaling_session_id = resp.json().get("signaling_session_id")
-                await db.commit()
-                await db.refresh(session)
+        client = _get_http_client()
+        resp = await client.post(
+            f"{settings.RENDER_SERVER_URL}/api/sessions",
+            json={"session_id": session.id, "project_id": session.project_id},
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
+        if resp.status_code == 200:
+            session.status = StreamSessionStatus.CONNECTING
+            session.signaling_session_id = resp.json().get("signaling_session_id")
+            await db.commit()
+            await db.refresh(session)
     except httpx.ConnectError:
         session.status = StreamSessionStatus.FAILED
         await db.commit()
@@ -177,21 +191,22 @@ async def handle_offer(
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/offer",
-                json={"sdp": offer.sdp, "type": offer.type},
-            )
-            resp.raise_for_status()
-            answer_data = resp.json()
-            session.status = StreamSessionStatus.ACTIVE
-            session.started_at = datetime.now(timezone.utc)
-            await db.commit()
-            return {
-                "status": "offer_forwarded",
-                "session_id": session_id,
-                "answer": answer_data,
-            }
+        client = _get_http_client()
+        resp = await client.post(
+            f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/offer",
+            json={"sdp": offer.sdp, "type": offer.type},
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
+        resp.raise_for_status()
+        answer_data = resp.json()
+        session.status = StreamSessionStatus.ACTIVE
+        session.started_at = datetime.now(timezone.utc)
+        await db.commit()
+        return {
+            "status": "offer_forwarded",
+            "session_id": session_id,
+            "answer": answer_data,
+        }
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="Render server unavailable")
     except httpx.TimeoutException:
@@ -222,12 +237,13 @@ async def handle_answer(
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/answer",
-                json={"sdp": answer.sdp, "type": answer.type},
-            )
-            resp.raise_for_status()
+        client = _get_http_client()
+        resp = await client.post(
+            f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/answer",
+            json={"sdp": answer.sdp, "type": answer.type},
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
+        resp.raise_for_status()
         return {"status": "answer_forwarded", "session_id": session_id}
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="Render server unavailable")
@@ -284,15 +300,16 @@ async def handle_candidate(
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/candidate",
-                json={
-                    "candidate": candidate.candidate,
-                    "sdp_mid": candidate.sdp_mid,
-                    "sdp_mline_index": candidate.sdp_mline_index,
-                },
-            )
+        client = _get_http_client()
+        await client.post(
+            f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/candidate",
+            json={
+                "candidate": candidate.candidate,
+                "sdp_mid": candidate.sdp_mid,
+                "sdp_mline_index": candidate.sdp_mline_index,
+            },
+            timeout=httpx.Timeout(5.0, connect=3.0),
+        )
     except httpx.ConnectError:
         logger.warning(
             "candidate_forward_failed_render_unavailable", session_id=session_id
@@ -330,15 +347,16 @@ async def handle_input(
     await db.commit()
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/input",
-                json={
-                    "input_type": input_packet.input_type,
-                    "payload": input_packet.payload,
-                    "timestamp": input_packet.timestamp,
-                },
-            )
+        client = _get_http_client()
+        await client.post(
+            f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/input",
+            json={
+                "input_type": input_packet.input_type,
+                "payload": input_packet.payload,
+                "timestamp": input_packet.timestamp,
+            },
+            timeout=httpx.Timeout(5.0, connect=3.0),
+        )
     except httpx.ConnectError:
         logger.warning("input_forward_failed_render_unavailable", session_id=session_id)
     except httpx.TimeoutException:
@@ -376,25 +394,26 @@ async def copilot_message(
     await db.commit()
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{settings.LLM_ROUTER_URL}/v1/chat/completions",
-                json={
-                    "messages": [{"role": "user", "content": message.message}],
-                    "task_type": "copilot_chat",
-                    "sensitivity": "internal",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            response_text = (
-                data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            )
-            return {
-                "response": response_text,
-                "actions": [],
-                "provider": data.get("provider", "unknown"),
-            }
+        client = _get_http_client()
+        resp = await client.post(
+            f"{settings.LLM_ROUTER_URL}/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": message.message}],
+                "task_type": "copilot_chat",
+                "sensitivity": "internal",
+            },
+            timeout=httpx.Timeout(30.0, connect=5.0),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        response_text = (
+            data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        )
+        return {
+            "response": response_text,
+            "actions": [],
+            "provider": data.get("provider", "unknown"),
+        }
     except httpx.ConnectError:
         logger.warning("copilot_llm_unavailable", session_id=session_id)
         return JSONResponse(
@@ -451,23 +470,24 @@ async def voice_transcript(
     await db.commit()
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{settings.LLM_ROUTER_URL}/v1/chat/completions",
-                json={
-                    "messages": [{"role": "user", "content": transcript.transcript}],
-                    "task_type": "copilot_chat",
-                    "sensitivity": "internal",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            response_text = (
-                data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            )
-            voice_session.response_text = response_text
-            await db.commit()
-            return {"response": response_text, "tts_audio_url": None}
+        client = _get_http_client()
+        resp = await client.post(
+            f"{settings.LLM_ROUTER_URL}/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": transcript.transcript}],
+                "task_type": "copilot_chat",
+                "sensitivity": "internal",
+            },
+            timeout=httpx.Timeout(30.0, connect=5.0),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        response_text = (
+            data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        )
+        voice_session.response_text = response_text
+        await db.commit()
+        return {"response": response_text, "tts_audio_url": None}
     except httpx.ConnectError:
         logger.warning("voice_llm_unavailable", session_id=session_id)
         return JSONResponse(
@@ -559,7 +579,7 @@ class SignalingManager:
                         pass
 
     async def send_to_client(self, session_id: str, client_type: str, message: dict):
-        if session_id in self.session_participants.get(session_id, {}):
+        if session_id in self.session_participants:
             ws = self.session_participants[session_id].get(client_type)
             if ws:
                 try:
@@ -575,8 +595,6 @@ signaling_manager = SignalingManager()
 async def websocket_signaling(
     websocket: WebSocket,
     session_id: str,
-    token: str = Query(...),
-    type: Literal["android", "render_server", "unknown"] = Query("unknown"),
 ):
     """WebSocket endpoint for WebRTC signaling between render server and Android client."""
     # Validate session_id is numeric
@@ -586,26 +604,76 @@ async def websocket_signaling(
         await websocket.close(code=4002, reason="Invalid session ID")
         return
 
-    # Decode and validate token
+    # Token handling: prefer Authorization header to avoid URL leak, fallback to query for compat
+    auth_header = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+    token: str | None = None
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    else:
+        # Check Sec-WebSocket-Protocol may contain token
+        proto = websocket.headers.get("sec-websocket-protocol") or websocket.headers.get("Sec-WebSocket-Protocol")
+        if proto and proto.lower().startswith("bearer "):
+            token = proto[7:].strip()
+        else:
+            token = websocket.query_params.get("token")
+            if token:
+                logger.warning("ws_token_in_query_deprecated", session_id=session_id)
+
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+
+    # Rate limit WS handshakes (per IP before auth)
+    try:
+        client_host = websocket.client.host if websocket.client else "unknown"
+        limited, _ = await is_rate_limited(f"ws:handshake:{client_host}", "20/minute")
+        if limited:
+            await websocket.close(code=4029, reason="Rate limited")
+            return
+    except Exception:
+        # Fail-closed would already be handled inside is_rate_limited; if that fails, close
+        pass
+
+    # Decode and validate token (strict access type)
     try:
         payload = decode_token(token)
-        if payload.get("type") not in ("access", None):
+        if payload.get("type") != "access":
             await websocket.close(code=4001, reason="Invalid token type")
             return
         user_id = payload.get("sub")
         if user_id is None:
             await websocket.close(code=4001, reason="Invalid token")
             return
+        # Validate user_id is int-like
+        try:
+            int(user_id)
+        except (ValueError, TypeError):
+            await websocket.close(code=4001, reason="Invalid token")
+            return
     except (JWTError, ValueError):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
-    # Check token revocation
+    # Check token revocation (RedisError handled inside)
     if await is_token_revoked(token):
         await websocket.close(code=4001, reason="Token revoked")
         return
 
-    client_type = type
+    # Rate limit per user after auth
+    try:
+        limited_user, _ = await is_rate_limited(f"ws:user:{user_id}", "30/minute")
+        if limited_user:
+            await websocket.close(code=4029, reason="Rate limited")
+            return
+    except Exception:
+        pass
+
+    # Determine client_type via query alias "type" (avoid shadowing builtin)
+    raw_type = websocket.query_params.get("type", "unknown")
+    if raw_type not in ("android", "render_server", "unknown"):
+        client_type: Literal["android", "render_server", "unknown"] = "unknown"
+    else:
+        client_type = raw_type  # type: ignore[assignment]
 
     # Verify session exists, user owns it, and user is active
     db = AsyncSessionLocal()
@@ -617,12 +685,17 @@ async def websocket_signaling(
         if not session:
             await websocket.close(code=4004, reason="Session not found")
             return
-        if str(session.user_id) != user_id:
+        if str(session.user_id) != str(user_id):
             await websocket.close(code=4003, reason="Forbidden")
             return
 
         # Verify user is active
-        user_result = await db.execute(select(User).where(User.id == int(user_id)))
+        try:
+            uid_int = int(str(user_id))
+        except (ValueError, TypeError):
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+        user_result = await db.execute(select(User).where(User.id == uid_int))
         user = user_result.scalar_one_or_none()
         if not user or not user.is_active:
             await websocket.close(code=4001, reason="User inactive")

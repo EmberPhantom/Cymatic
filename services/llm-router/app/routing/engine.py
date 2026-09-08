@@ -1,4 +1,5 @@
 """Routing Policy Engine - Task-based and sensitivity-based routing with circuit breaker"""
+
 from datetime import datetime, timezone
 from typing import Any
 
@@ -8,9 +9,11 @@ from pydantic import BaseModel
 from app.routing.circuit_breaker import (
     can_execute_provider,
     get_all_circuit_breaker_status,
+    get_circuit_breaker,
     record_provider_failure,
     record_provider_success,
 )
+from app.routing.circuit_breaker import CircuitState
 from app.schemas.providers import (
     DEFAULT_PROVIDERS,
     ModelProfile,
@@ -301,7 +304,7 @@ class RoutingEngine:
     def route(
         self, task_type: TaskType, sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
     ) -> RoutingDecision:
-        """Route request to best provider with circuit breaker protection."""
+        """Route request to best provider with circuit breaker protection (single source of truth)."""
         policy = self.get_policy(task_type, sensitivity)
 
         # Find preferred provider
@@ -317,7 +320,7 @@ class RoutingEngine:
             if sensitivity not in provider.supported_sensitivity:
                 continue
 
-            # Check circuit breaker
+            # Check circuit breaker – single source of truth, no dual healthy check
             if not can_execute_provider(provider_name):
                 logger.warning("circuit_breaker_open", provider=provider_name)
                 continue
@@ -325,28 +328,27 @@ class RoutingEngine:
             # Check if provider has the model
             model_profile = provider.models.get(policy.preferred_profile)
             if model_profile:
-                # Check health
-                if self.status[provider_name].healthy:
-                    fallback: ProviderName | None = None
-                    if policy.fallback_profile:
-                        for fb_provider in policy.allowed_providers:
-                            if fb_provider != provider_name:
-                                fb_config = self.providers.get(fb_provider)
-                                if (
-                                    fb_config
-                                    and fb_config.enabled
-                                    and fb_config.models.get(policy.fallback_profile)
-                                ):
-                                    fallback = fb_provider
-                                    break
+                fallback: ProviderName | None = None
+                if policy.fallback_profile:
+                    for fb_provider in policy.allowed_providers:
+                        if fb_provider != provider_name:
+                            fb_config = self.providers.get(fb_provider)
+                            if (
+                                fb_config
+                                and fb_config.enabled
+                                and fb_config.models.get(policy.fallback_profile)
+                                and can_execute_provider(fb_provider)
+                            ):
+                                fallback = fb_provider
+                                break
 
-                    return RoutingDecision(
-                        provider=provider_name,
-                        model=policy.preferred_profile,
-                        model_profile=model_profile,
-                        reason=f"Preferred model for {task_type} at {sensitivity} sensitivity",
-                        fallback=fallback,
-                    )
+                return RoutingDecision(
+                    provider=provider_name,
+                    model=policy.preferred_profile,
+                    model_profile=model_profile,
+                    reason=f"Preferred model for {task_type} at {sensitivity} sensitivity",
+                    fallback=fallback,
+                )
 
         # Try fallback profile
         if policy.fallback_profile:
@@ -363,7 +365,7 @@ class RoutingEngine:
                     continue
 
                 model_profile = provider.models.get(policy.fallback_profile)
-                if model_profile and self.status[provider_name].healthy:
+                if model_profile:
                     return RoutingDecision(
                         provider=provider_name,
                         model=policy.fallback_profile,
@@ -386,7 +388,7 @@ class RoutingEngine:
                 continue
 
             for model_id, model_profile in provider.models.items():
-                if task_type in model_profile.task_types and self.status[provider_name].healthy:
+                if task_type in model_profile.task_types:
                     return RoutingDecision(
                         provider=provider_name,
                         model=model_id,
@@ -400,8 +402,7 @@ class RoutingEngine:
     def record_provider_result(
         self, provider: ProviderName | str, success: bool, latency_ms: float = 0
     ) -> None:
-        """Record provider request result for circuit breaker."""
-        # Normalize provider to ProviderName | str for circuit breaker
+        """Record provider request result for circuit breaker and sync status from breaker state."""
         if success:
             record_provider_success(provider)
         else:
@@ -417,10 +418,21 @@ class RoutingEngine:
             except ValueError:
                 return
         if provider_key in self.status:
-            self.status[provider_key].healthy = success
+            # Single source of truth: healthy derived from circuit breaker state
+            try:
+                cb = get_circuit_breaker(provider_key)
+                healthy = cb.state != CircuitState.OPEN
+            except Exception:
+                healthy = success
+            # Only mark unhealthy when circuit is open; keep latency/error tracking
+            self.status[provider_key].healthy = healthy
             self.status[provider_key].latency_ms = latency_ms
             if not success:
                 self.status[provider_key].error_count += 1
+            else:
+                # On success, decay error count if circuit closed
+                if healthy and self.status[provider_key].error_count > 0:
+                    self.status[provider_key].error_count = max(0, self.status[provider_key].error_count - 1)
             self.status[provider_key].last_check = datetime.now(timezone.utc).isoformat()
 
     def get_circuit_breaker_status(self) -> dict[str, dict[str, Any]]:

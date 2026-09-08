@@ -4,11 +4,9 @@ Schema Sync Check - Compares Python Pydantic models with TypeScript interfaces.
 
 This script extracts field names and types from both schemas and reports any drift.
 """
-import json
 import sys
-import subprocess
 from pathlib import Path
-from typing import Dict, Any, Set, List, Tuple
+from typing import Dict, Any, List, Tuple
 import importlib.util
 
 PYTHON_SCHEMA = Path(__file__).parent.parent / "schemas" / "simulation_spec.py"
@@ -68,9 +66,8 @@ def extract_typescript_schema() -> Dict[str, Any]:
 
 def get_pydantic_fields(schema: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
     """Recursively extract field names and types from Pydantic JSON schema."""
-    fields = {}
+    fields: Dict[str, str] = {}
     properties = schema.get('properties', {})
-    required = set(schema.get('required', []))
 
     for prop_name, prop_schema in properties.items():
         full_name = f"{prefix}{prop_name}"
@@ -121,7 +118,7 @@ def compare_schemas(py_fields: Dict[str, str], ts_fields: Dict[str, Dict[str, st
     info = []
 
     # Main interface comparison
-    py_main = {k: v for k, v in py_fields.items() if not '.' in k}
+    py_main = {k: v for k, v in py_fields.items() if '.' not in k}
     ts_main = ts_fields.get('SimulationSpec', {})
 
     py_keys = set(py_main.keys())

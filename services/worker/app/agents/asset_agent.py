@@ -91,28 +91,48 @@ class AssetAgent:
         """Select assets for all entities in the spec."""
         domain = input_data.domain
         budget = input_data.performance_budget
-        
+
         # Determine performance profile
         profile = self._get_performance_profile(budget)
-        
-        selected = []
-        substitutions = []
-        warnings = []
-        total_size = 0
+
+        selected: list[AssetReference] = []
+        substitutions: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        total_size = 0.0
         total_triangles = 0
-        
+        seen_uris: set[str] = set()
+
+        # Enforce max_entities cap early
+        max_entities_cap = int(budget.get("max_entities", 500))
+        # If spec already exceeds cap, warn
+        if len(input_data.spec_entities) > max_entities_cap:
+            warnings.append(f"Spec entity count {len(input_data.spec_entities)} exceeds budget max_entities {max_entities_cap}")
+
         # Process each entity
         for entity in input_data.spec_entities:
             entity_assets = self._select_entity_assets(
                 entity, domain, profile, input_data.available_assets
             )
-            
+
             for asset in entity_assets:
-                # Check budget
+                # Deduplicate same URI across entities (HIGH: same uri duplication)
+                if asset.uri in seen_uris:
+                    continue
+
+                # Enforce max_entities cap on assets as well
+                if max_entities_cap and len(selected) >= max_entities_cap:
+                    warnings.append(f"Skipping {asset.uri}: max_entities budget {max_entities_cap} reached")
+                    continue
+
+                # Check triangle budget - retry with LOD if needed, re-validate
                 if total_triangles + asset.estimated_triangles > budget.get("max_triangles", 100000):
-                    # Find lower LOD alternative
                     lod_asset = self._find_lod_alternative(asset, profile)
-                    if lod_asset:
+                    if lod_asset and lod_asset.uri not in seen_uris:
+                        # Re-check triangle budget even after LOD; skip if still exceeds and no further LOD
+                        if total_triangles + lod_asset.estimated_triangles > budget.get("max_triangles", 100000):
+                            # If LOD still exceeds and it's not reducible further, skip
+                            warnings.append(f"Skipping {asset.uri} (and LOD {lod_asset.uri}): exceeds triangle budget even at LOD")
+                            continue
                         substitutions.append({
                             "original": asset.uri,
                             "substituted": lod_asset.uri,
@@ -122,16 +142,28 @@ class AssetAgent:
                     else:
                         warnings.append(f"Skipping {asset.uri}: exceeds triangle budget")
                         continue
-                
+
+                # Final dedup check for LOD uri
+                if asset.uri in seen_uris:
+                    continue
+                seen_uris.add(asset.uri)
                 selected.append(asset)
                 total_triangles += asset.estimated_triangles
                 total_size += asset.estimated_size_mb
-        
-        # Add essential assets (lighting, skybox, etc.)
+
+        # Add essential assets (lighting, skybox, etc.) with dedup and size accounting
         essential = self._get_essential_assets(domain, profile)
         for asset in essential:
+            if asset.uri in seen_uris:
+                continue
+            if max_entities_cap and len(selected) >= max_entities_cap:
+                warnings.append(f"Skipping essential {asset.uri}: max_entities budget reached")
+                continue
+            # Essential assets bypass triangle budget but still count toward size and dedup
+            seen_uris.add(asset.uri)
             selected.append(asset)
             total_size += asset.estimated_size_mb
+            total_triangles += asset.estimated_triangles
         
         # Create manifest
         manifest = AssetManifest(
@@ -213,21 +245,18 @@ class AssetAgent:
     
     def _create_asset_reference(self, uri: str, profile: str, required: bool) -> AssetReference:
         """Create asset reference with profile-appropriate settings."""
-        _ = self.PERFORMANCE_PROFILES[profile]
+        cfg = self.PERFORMANCE_PROFILES.get(profile, self.PERFORMANCE_PROFILES["medium"])
 
-        # Estimate size and triangles based on profile
+        # Derive estimates from PERFORMANCE_PROFILES to stay consistent (HIGH: hardcode vs profile)
+        max_per_asset = int(cfg.get("max_triangles_per_asset", 15000))
+        estimated_triangles = max(500, int(max_per_asset * 0.6))
         if profile == "low":
-            estimated_triangles = 3000
-            estimated_size = 2
-            lod_levels = 2
+            estimated_size = 2.0
         elif profile == "medium":
-            estimated_triangles = 10000
-            estimated_size = 8
-            lod_levels = 3
+            estimated_size = 8.0
         else:
-            estimated_triangles = 30000
-            estimated_size = 25
-            lod_levels = 4
+            estimated_size = 25.0
+        lod_levels = int(cfg.get("lod_levels", 2))
         
         return AssetReference(
             id=uri.split("/")[-1].replace(".glb", ""),
@@ -241,14 +270,22 @@ class AssetAgent:
         )
     
     def _find_lod_alternative(self, asset: AssetReference, profile: str) -> AssetReference | None:
-        """Find lower LOD version of asset."""
+        """Find lower LOD version of asset. Preserves budget accounting (HIGH: LOD zero bypass)."""
         if asset.fallback_uri:
+            lod_levels = max(1, (asset.lod_levels or 2) - 1)
+            # Preserve estimates with reduction to avoid zero-bypass cheating budget.
+            # Use ~50% triangles and size reduction, clamped to minimum.
+            est_tris = max(500, int((asset.estimated_triangles or 3000) * 0.5))
+            est_size = max(0.5, float(asset.estimated_size_mb or 2.0) * 0.5)
             return AssetReference(
                 id=asset.id + "_low",
                 type=asset.type,
                 uri=asset.fallback_uri,
-                lod_levels=max(1, (asset.lod_levels or 2) - 1),
-                required=asset.required
+                fallback_uri=None,
+                lod_levels=lod_levels,
+                required=asset.required,
+                estimated_triangles=est_tris,
+                estimated_size_mb=est_size,
             )
         return None
     

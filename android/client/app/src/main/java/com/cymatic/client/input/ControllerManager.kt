@@ -69,7 +69,6 @@ class ControllerManager(private val context: Context) {
             Log.w("ControllerManager", "Bluetooth permission not granted, skip receiver")
         }
     }
-    }
     
     private val bluetoothReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
