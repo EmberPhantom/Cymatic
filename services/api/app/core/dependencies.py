@@ -39,13 +39,13 @@ async def get_current_user(
 
     try:
         payload = decode_token(token)
-        if payload.get("type") not in ("access", None):
+        if payload.get("type") != "access":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token type",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        user_id: str = payload.get("sub")
+        user_id: str = payload.get("sub")  # type: ignore[assignment]
         if user_id is None:
             raise AuthError("Invalid token payload")
     except (JWTError, ValueError):
@@ -65,7 +65,15 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    result = await db.execute(select(User).where(User.id == int(user_id)))
+    try:
+        user_id_int = int(user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    result = await db.execute(select(User).where(User.id == user_id_int))
     user = result.scalar_one_or_none()
 
     if not user:

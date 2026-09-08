@@ -1,6 +1,5 @@
 """Tests for Worker service"""
 import pytest
-from app.tasks.generation import generate_spec_task, validate_spec_task
 from app.agents.intake_agent import process_intake
 from app.agents.clarification_agent import process_clarification_answers
 from app.agents.validation_agent import validate_simulation_spec

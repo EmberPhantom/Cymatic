@@ -41,7 +41,10 @@ class SpecValidationResult:
 
 
 class SpecValidator:
-    """Validates simulation specifications against schema and business rules."""
+    """Validates simulation specifications against schema and business rules.
+
+    Thresholds tuned for low-end Android + LAN streaming + thermal constraints.
+    """
 
     DOMAIN_REQUIREMENTS = {
         "real_estate": {
@@ -58,10 +61,11 @@ class SpecValidator:
         },
     }
 
+    # Low-end Android optimized: stricter than desktop
     PERFORMANCE_THRESHOLDS = {
-        "max_triangles_warning": 80000,
-        "max_draw_calls_warning": 40,
-        "texture_budget_warning_mb": 80,
+        "max_triangles_warning": 50000,  # was 80000 -> lower for low-poly MVP
+        "max_draw_calls_warning": 30,  # was 40 -> simpler shaders
+        "texture_budget_warning_mb": 50,  # was 80 -> limited VRAM/thermal
     }
 
     def validate(self, spec_dict: Dict[str, Any]) -> SpecValidationResult:
@@ -97,7 +101,7 @@ class SpecValidator:
 
     def _validate_business_rules(self, spec: SimulationSpec, result: SpecValidationResult):
         req = self.DOMAIN_REQUIREMENTS.get(spec.domain, {})
-        entity_types = {}
+        entity_types: Dict[str, int] = {}
         for entity in spec.entities:
             entity_types[entity.type] = entity_types.get(entity.type, 0) + 1
         for required_type in req.get("required_entity_types", []):
@@ -118,15 +122,21 @@ class SpecValidator:
     def _validate_performance(self, spec: SimulationSpec, result: SpecValidationResult):
         budget = spec.performance_budget
         if budget.max_triangles > self.PERFORMANCE_THRESHOLDS["max_triangles_warning"]:
-            result.add_warning("performance_budget.max_triangles", "Triangle budget exceeds recommended threshold")
+            result.add_warning("performance_budget.max_triangles", f"Triangle budget {budget.max_triangles} exceeds recommended {self.PERFORMANCE_THRESHOLDS['max_triangles_warning']} for low-end Android")
         if budget.max_draw_calls > self.PERFORMANCE_THRESHOLDS["max_draw_calls_warning"]:
-            result.add_warning("performance_budget.max_draw_calls", "Draw call budget exceeds recommended threshold")
+            result.add_warning("performance_budget.max_draw_calls", f"Draw call budget {budget.max_draw_calls} exceeds recommended {self.PERFORMANCE_THRESHOLDS['max_draw_calls_warning']}")
         if budget.texture_budget_mb > self.PERFORMANCE_THRESHOLDS["texture_budget_warning_mb"]:
-            result.add_warning("performance_budget.texture_budget_mb", "Texture budget exceeds recommended threshold")
+            result.add_warning("performance_budget.texture_budget_mb", f"Texture budget {budget.texture_budget_mb}MB exceeds recommended {self.PERFORMANCE_THRESHOLDS['texture_budget_warning_mb']}MB")
         if budget.target_fps < 30:
             result.add_warning("performance_budget.target_fps", "Target FPS below 30 may cause motion sickness")
         elif budget.target_fps > 90:
             result.add_warning("performance_budget.target_fps", "Target FPS above 90 may not be achievable on mobile")
+        # Additional low-end check: warn if both triangles and textures high simultaneously
+        if (
+            budget.max_triangles > self.PERFORMANCE_THRESHOLDS["max_triangles_warning"]
+            and budget.texture_budget_mb > self.PERFORMANCE_THRESHOLDS["texture_budget_warning_mb"]
+        ):
+            result.add_warning("performance_budget", "Combined triangle + texture budget high for thermal-constrained devices")
 
     def _validate_navigation(self, spec: SimulationSpec, result: SpecValidationResult):
         points = {p.id: p for p in spec.navigation.points}

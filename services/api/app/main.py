@@ -77,6 +77,21 @@ app.include_router(api_router, prefix="/v1")
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):
+    # Do not swallow HTTPException (e.g., 401/403/404) — re-raise with proper status
+    if isinstance(exc, HTTPException):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "type": "about:blank",
+                "title": exc.detail if isinstance(exc.detail, str) else "HTTP Error",
+                "status": exc.status_code,
+                "detail": exc.detail,
+                "instance": str(request.url.path),
+            },
+            headers=getattr(exc, "headers", None),
+        )
     import traceback
 
     corr = getattr(request.state, "correlation_id", None) or request.headers.get(
@@ -85,7 +100,7 @@ async def unhandled_exception_handler(request, exc):
     structlog.get_logger().error(
         "unhandled_exception",
         correlation_id=corr,
-        path=str(request.url),
+        path=str(request.url.path),
         error=str(exc),
         traceback=traceback.format_exc(),
     )
@@ -98,7 +113,7 @@ async def unhandled_exception_handler(request, exc):
             "title": "Internal Server Error",
             "status": 500,
             "detail": "Unexpected error",
-            "instance": str(request.url),
+            "instance": str(request.url.path),
             "correlation_id": corr,
         },
     )
@@ -106,38 +121,43 @@ async def unhandled_exception_handler(request, exc):
 
 @app.get("/health")
 async def health_check():
+    import asyncio
+
     checks = {"status": "healthy", "api": "healthy", "version": settings.APP_VERSION}
-    # DB check
+    # DB check with timeout, do not leak exception details
     try:
         from app.db.session import AsyncSessionLocal
         from sqlalchemy import text
 
         async with AsyncSessionLocal() as db:
-            await db.execute(text("SELECT 1"))
+            await asyncio.wait_for(db.execute(text("SELECT 1")), timeout=2.0)
         checks["db"] = "healthy"
-    except Exception as e:
-        checks["db"] = f"unhealthy: {e}"
+    except Exception:
+        checks["db"] = "unhealthy"
         checks["status"] = "degraded"
         checks["api"] = "degraded"
-    # Redis check
+    # Redis check with timeout
     try:
         from app.core.rate_limit import _get_redis
 
         r = _get_redis()
         if r is not None:
-            await r.ping()
+            await asyncio.wait_for(r.ping(), timeout=2.0)
             checks["redis"] = "healthy"
         else:
             checks["redis"] = "unknown"
-    except Exception as e:
-        checks["redis"] = f"unhealthy: {e}"
+    except Exception:
+        checks["redis"] = "unhealthy"
         checks["status"] = "degraded"
     return checks
 
 
 @app.get("/metrics")
 async def metrics(x_api_key: str = Header(None)):
-    if settings.ADMIN_API_KEY and x_api_key != settings.ADMIN_API_KEY:
+    # Fail-closed: require ADMIN_API_KEY in all envs, especially prod
+    if not settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=503, detail="Metrics not configured")
+    if x_api_key != settings.ADMIN_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid admin API key")
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 

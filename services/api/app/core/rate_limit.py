@@ -1,12 +1,15 @@
 """Redis sliding-window rate limiter."""
 
 import time
+import uuid
 from typing import Optional
 import redis.asyncio as redis
+import structlog
 from fastapi import Request, HTTPException
 from app.core.config import get_settings
 
 settings = get_settings()
+logger = structlog.get_logger()
 _redis: Optional[redis.Redis] = None
 
 
@@ -14,8 +17,11 @@ def _get_redis() -> Optional[redis.Redis]:
     global _redis
     if _redis is None:
         try:
-            _redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
-        except Exception:
+            # DB 3 = rate (isolated from queue/cache)
+            redis_url = getattr(settings, "REDIS_RATE_URL", None) or settings.REDIS_URL
+            _redis = redis.from_url(redis_url, decode_responses=True)
+        except Exception as e:
+            logger.warning("rate_limit_redis_init_failed", error=str(e))
             _redis = None
     return _redis
 
@@ -29,31 +35,60 @@ def parse_limit(limit: str) -> tuple[int, int]:
 
 
 async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
-    """Return (is_limited, retry_after_seconds)."""
+    """Return (is_limited, retry_after_seconds) using sliding window.
+
+    Fail-closed: if Redis is unavailable or errors, deny request.
+    """
     r = _get_redis()
     if r is None:
-        return False, 0
+        logger.warning("rate_limit_redis_unavailable", key=key)
+        return True, 60
     count, window = parse_limit(limit)
-    now = int(time.time())
-    window_key = f"rl:{key}:{now // window}"
+    now = time.time()
+    redis_key = f"rl:{key}"
     try:
-        current = await r.incr(window_key)
-        if current == 1:
-            await r.expire(window_key, window)
-        if current > count:
-            ttl = await r.ttl(window_key)
-            return True, max(ttl, 1)
-    except Exception:
+        # Use pipeline to atomically clean old entries and count
+        async with r.pipeline(transaction=True) as pipe:
+            pipe.zremrangebyscore(redis_key, 0, now - window)
+            pipe.zcard(redis_key)
+            pipe.zrange(redis_key, 0, 0, withscores=True)
+            pipe.expire(redis_key, window)
+            results = await pipe.execute()
+        current = int(results[1]) if len(results) > 1 and results[1] is not None else 0
+        oldest = results[2] if len(results) > 2 else None
+        if current >= count:
+            if oldest and len(oldest) > 0:
+                # oldest is [(member, score)]
+                try:
+                    oldest_score = float(oldest[0][1])
+                    retry_after = int(oldest_score + window - now) + 1
+                except Exception:
+                    retry_after = window
+            else:
+                retry_after = window
+            return True, max(retry_after, 1)
+        # Not limited: add current request
+        await r.zadd(redis_key, {str(uuid.uuid4()): now})
+        await r.expire(redis_key, window)
         return False, 0
-    return False, 0
+    except Exception as e:
+        logger.error("rate_limit_error", key=key, error=str(e))
+        return True, window
 
 
 async def rate_limit_dependency(request: Request, limit: str):
-    key = (
-        f"{request.client.host}:{request.url.path}"
-        if request.client
-        else request.url.path
-    )
+    # Key per user/org not IP (fail-closed requires authenticated context when available)
+    user_id = getattr(request.state, "user_id", None)
+    org_id = getattr(request.state, "organization_id", None)
+    if user_id is not None and org_id is not None:
+        key = f"{org_id}:{user_id}:{request.url.path}"
+    elif user_id is not None:
+        key = f"user:{user_id}:{request.url.path}"
+    else:
+        # fallback for unauthenticated endpoints - use IP but still per-path
+        client_host = request.client.host if request.client and request.client.host else "unknown"
+        # Use X-Forwarded-For if behind proxy? Use client_host for now
+        key = f"ip:{client_host}:{request.url.path}"
     limited, retry_after = await is_rate_limited(key, limit)
     if limited:
         raise HTTPException(

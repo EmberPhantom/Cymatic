@@ -1,11 +1,14 @@
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+import asyncio
+import os
+import re
+import uuid
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import asyncio
-from datetime import timedelta
+from sqlalchemy.orm.attributes import flag_modified
 from app.core.dependencies import require_creator, require_admin, require_viewer
 from app.db.session import get_db
 from app.models.asset import Asset, AssetType, AssetStatus
@@ -18,6 +21,41 @@ from app.services.minio_client import (
 )
 
 router = APIRouter()
+
+_SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Sanitize filename to prevent path traversal and enforce whitelist.
+
+    - basename to strip directories
+    - whitelist [a-zA-Z0-9._-], replace others with _
+    - max 255 chars total including UUID prefix
+    - UUID prefix to avoid collisions
+    """
+    basename = os.path.basename(filename or "")
+    if not basename or basename in (".", ".."):
+        basename = "file"
+    # Remove leading dots to avoid hidden files, and strip whitespace
+    basename = basename.strip().lstrip(".")
+    if not basename:
+        basename = "file"
+    # Whitelist
+    safe = _SAFE_FILENAME_RE.sub("_", basename)
+    # Collapse consecutive underscores
+    safe = re.sub(r"_+", "_", safe)
+    if not safe:
+        safe = "file"
+    # Reserve space for UUID prefix (32 hex + underscore)
+    prefix = uuid.uuid4().hex
+    max_base_len = 255 - len(prefix) - 1
+    if max_base_len < 1:
+        max_base_len = 1
+    safe = safe[:max_base_len]
+    # Ensure not empty and not too long total
+    sanitized = f"{prefix}_{safe}"
+    # Final cap 255
+    return sanitized[:255]
 
 
 class AssetResponse(BaseModel):
@@ -74,9 +112,10 @@ async def init_upload(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-    # Generate storage key
+    # Generate storage key - sanitize filename to prevent path traversal
+    sanitized = _sanitize_filename(upload_data.filename)
     storage_key = get_asset_storage_key(
-        current_user.organization_id, upload_data.project_id, upload_data.filename
+        current_user.organization_id, upload_data.project_id, sanitized
     )
 
     # Get presigned upload URL
@@ -84,10 +123,11 @@ async def init_upload(
         storage_key, expires=timedelta(hours=1)
     )
 
-    # Create asset record
+    # Create asset record (include filename column, sanitized)
     asset = Asset(
         organization_id=current_user.organization_id,
         project_id=upload_data.project_id,
+        filename=sanitized,
         type=asset_type,
         storage_key=storage_key,
         status=AssetStatus.UPLOADING,
@@ -130,28 +170,36 @@ async def complete_upload(
 
     # Get object info
     info = get_minio_client().get_object_info(asset.storage_key)
-    asset.metadata_json.update(
+    # Update metadata_json with flag_modified to ensure SQLAlchemy detects change
+    if asset.metadata_json is None:
+        asset.metadata_json = {}
+    # Create new dict to trigger change detection then flag
+    updated_meta = dict(asset.metadata_json)
+    updated_meta.update(
         {
             "size": info["size"],
             "etag": info["etag"],
             "content_type": info["content_type"],
         }
     )
+    asset.metadata_json = updated_meta
+    flag_modified(asset, "metadata_json")
 
     asset.status = AssetStatus.READY
     await db.commit()
     await db.refresh(asset)
 
-    # Queue asset processing (thumbnails, LODs, etc.)
-    from app.core.queue import job_queue, Job, JobPriority
+    # Queue asset processing only if needed (e.g., images/models/textures; skip OTHER)
+    if asset.type in (AssetType.MODEL_3D, AssetType.TEXTURE, AssetType.IMAGE, AssetType.AUDIO):
+        from app.core.queue import job_queue, Job, JobPriority
 
-    job = Job(
-        id=f"asset_{asset.id}_{int(asyncio.get_event_loop().time())}",
-        type="process_asset",
-        payload={"asset_id": asset.id},
-        priority=JobPriority.NORMAL,
-    )
-    await job_queue.enqueue(job, "asset")
+        job = Job(
+            id=f"asset_{asset.id}_{int(asyncio.get_event_loop().time())}",
+            type="process_asset",
+            payload={"asset_id": asset.id},
+            priority=JobPriority.NORMAL,
+        )
+        await job_queue.enqueue(job, "asset")
 
     return asset
 
@@ -162,8 +210,8 @@ async def list_assets(
     db: AsyncSession = Depends(get_db),
     project_id: Optional[int] = None,
     type: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
 ):
     query = select(Asset).where(Asset.organization_id == current_user.organization_id)
 
@@ -228,7 +276,7 @@ async def get_download_url(
     asset_id: int,
     current_user: User = Depends(require_viewer),
     db: AsyncSession = Depends(get_db),
-    expires_hours: int = 1,
+    expires_hours: int = Query(1, ge=1, le=24),
 ):
     """Get presigned download URL for asset"""
     result = await db.execute(

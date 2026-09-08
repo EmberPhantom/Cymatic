@@ -1,6 +1,6 @@
 """VoiceSession model"""
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from cymatic_shared.db import Base
 
 

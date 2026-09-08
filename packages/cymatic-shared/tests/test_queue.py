@@ -1,7 +1,5 @@
 """P1 - Queue edge cases with fakeredis"""
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, patch
 
 try:
     from fakeredis.aioredis import FakeRedis

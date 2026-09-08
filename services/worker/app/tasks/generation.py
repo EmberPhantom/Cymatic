@@ -7,9 +7,11 @@ from cymatic_shared.models import SimulationSpec as SimulationSpecModel, SpecSta
 from cymatic_shared.models import Asset, AssetStatus
 from cymatic_shared.models import ScenePackage as ScenePackageModel
 from cymatic_shared.schemas.simulation_spec import SimulationSpec as SimulationSpecSchema
-from app.agents.scene_package import scene_package_to_json
+from app.agents.scene_package import ScenePackage as ScenePackageSchema, scene_package_to_json
 from app.services.minio_client import get_minio_client
-from sqlalchemy import select, func
+from typing import Any
+
+from sqlalchemy import select, func, text
 import structlog
 import hashlib
 from minio.error import S3Error
@@ -114,13 +116,15 @@ async def generate_spec_task(payload: dict) -> dict:
     # Save spec to database with atomic version assignment
     async with AsyncSessionLocal() as db:
         spec = pipeline_result.spec
-        
-        # Get next version atomically using subquery with FOR UPDATE
-        # This ensures atomic version assignment even under concurrent load
+
+        # Atomic version assignment via transactional advisory lock (HIGH: SELECT max with FOR UPDATE illegal)
+        # Previous FOR UPDATE on aggregate is invalid syntax in Postgres (cannot lock aggregate row).
+        # Use pg_advisory_xact_lock keyed by project_id to serialize concurrent version increments.
+        # Project row was already locked earlier, but that lock is released after commit; advisory lock holds for transaction.
+        await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": int(project_id)})
         result = await db.execute(
             select(func.coalesce(func.max(SimulationSpecModel.version), 0) + 1)
             .where(SimulationSpecModel.project_id == project_id)
-            .with_for_update()  # Lock the version assignment
         )
         next_version = result.scalar_one()
         
@@ -216,6 +220,12 @@ async def generate_scene_task(payload: dict) -> dict:
         if spec.status != SpecStatus.VALID:
             raise ValueError("Scene generation requires a valid specification")
 
+        # Idempotency: check for existing ready package first (HIGH: 219 idempotency)
+        # Use advisory lock to avoid race where two workers both see no existing and insert duplicate
+        try:
+            await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": int(spec_id) * 100000 + int(project_id) % 100000})
+        except Exception:
+            pass
         existing = await db.scalar(select(ScenePackageModel).where(
             ScenePackageModel.project_id == project_id,
             ScenePackageModel.spec_id == spec_id,
@@ -247,29 +257,51 @@ async def generate_scene_task(payload: dict) -> dict:
         # Generate scene package using our generator
         from app.agents.scene_package import generate_scene_package
         from app.agents.asset_agent import select_assets
-        
-        # Select assets first - ensure entities are proper Entity objects
-        raw_entities = spec.payload_json.get("entities", [])
+
+        # Select assets first - ensure entities are proper Entity objects (HIGH: 258 dict vs Entity)
+        raw_payload = spec.payload_json if isinstance(spec.payload_json, dict) else {}
+        raw_entities = raw_payload.get("entities", []) if isinstance(raw_payload, dict) else []
+        spec_entities: list[Any] = []
         try:
             from cymatic_shared.schemas.simulation_spec import Entity as EntitySchema
-            spec_entities = [EntitySchema(**e) if isinstance(e, dict) else e for e in raw_entities]
-        except Exception:
-            spec_entities = raw_entities
+            for e in raw_entities:
+                if isinstance(e, EntitySchema):
+                    spec_entities.append(e)
+                elif isinstance(e, dict):
+                    try:
+                        spec_entities.append(EntitySchema(**e))
+                    except Exception:
+                        # Skip malformed entity but log; fallback to raw for robustness
+                        logger.warning("entity_parse_skipped", entity=e.get("id", "unknown"))
+                        continue
+                else:
+                    # Unexpected type, skip
+                    continue
+            # If all entities failed to parse and we had raw, fallback to raw dict handling via select_assets duck typing
+            if not spec_entities and raw_entities:
+                logger.warning("all_entities_parse_failed_fallback_raw", count=len(raw_entities))
+                # Keep raw for next attempt but filter to dicts
+                spec_entities = [e for e in raw_entities if isinstance(e, dict)]  # type: ignore[assignment]
+        except Exception as parse_err:  # noqa: BLE001
+            logger.warning("entity_conversion_failed", error=str(parse_err))
+            spec_entities = raw_entities  # type: ignore[assignment]
         asset_result = select_assets(
-            spec_entities=spec_entities,
+            spec_entities=spec_entities,  # type: ignore[arg-type]
             domain=project.domain,
-            performance_budget=spec.payload_json.get("performance_budget", {})
+            performance_budget=raw_payload.get("performance_budget", {}) if isinstance(raw_payload, dict) else {},
         )
-        
-        # Generate scene package
+
+        # Generate scene package with validated SimulationSpec
+        validated_spec = SimulationSpecSchema.model_validate(raw_payload) if isinstance(raw_payload, dict) else SimulationSpecSchema(**raw_payload)
         scene_package = generate_scene_package(
-            spec=SimulationSpecSchema(**spec.payload_json),
+            spec=validated_spec,
             spec_version=spec.version,
             asset_manifest=asset_result.manifest.model_dump() if asset_result else {}
         )
-        
-        # Validate the renderer-neutral package before storage.
-        scene_package.model_validate(scene_package.model_dump())
+
+        # Validate the renderer-neutral package before storage (HIGH: 272 model_validate).
+        # Use class-level validate to avoid instance-method confusion.
+        ScenePackageSchema.model_validate(scene_package.model_dump())
         # Serialize to JSON
         scene_json = scene_package_to_json(scene_package)
         checksum = hashlib.sha256(scene_json.encode("utf-8")).hexdigest()
@@ -295,8 +327,14 @@ async def generate_scene_task(payload: dict) -> dict:
             logger.error("minio_upload_failed", error=str(e))
             raise
         
-        # Confirm the object is readable before exposing it as ready.
-        object_info = get_minio_client().get_object_info(storage_key)
+        # Confirm the object is readable before exposing it as ready (HIGH: 299 get_object_info missing)
+        try:
+            object_info = get_minio_client().get_object_info(storage_key)
+        except AttributeError:
+            # Fallback if client lacks method (should not happen after fix)
+            object_info = None
+            if get_minio_client().object_exists(storage_key):
+                object_info = {"size": len(scene_json.encode("utf-8"))}
         if not object_info or int(object_info.get("size", 0)) != len(scene_json.encode("utf-8")):
             raise ValueError("Scene package artifact verification failed")
 

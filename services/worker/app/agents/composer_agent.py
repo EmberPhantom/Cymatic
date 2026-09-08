@@ -1,4 +1,5 @@
 """Scene Composer Agent - Proposes spatial layout, navigation points, lighting presets"""
+import copy
 import math
 from typing import Any
 
@@ -37,14 +38,16 @@ class SceneComposerAgent:
     
     def compose(self, input_data: ComposerInput) -> ComposerResult:  # noqa: ARG002
         """Compose scene layout."""
-        strategy = self.LAYOUT_STRATEGIES.get(input_data.domain, "grid_flow")
-        
+        # Deepcopy to avoid mutating caller-provided entities (HIGH: in-place mutation bug)
+        safe_input = copy.deepcopy(input_data)
+        strategy = self.LAYOUT_STRATEGIES.get(safe_input.domain, "grid_flow")
+
         if strategy == "grid_flow":
-            entities, nav_points, paths = self._grid_flow_layout(input_data)
+            entities, nav_points, paths = self._grid_flow_layout(safe_input)
         elif strategy == "radial_courtyard":
-            entities, nav_points, paths = self._radial_courtyard_layout(input_data)
+            entities, nav_points, paths = self._radial_courtyard_layout(safe_input)
         else:
-            entities, nav_points, paths = self._grid_flow_layout(input_data)
+            entities, nav_points, paths = self._grid_flow_layout(safe_input)
         
         # Create navigation spec
         navigation = NavigationSpec(
@@ -128,22 +131,28 @@ class SceneComposerAgent:
                 entity.position = [float((idx % 3) * 2), 0, float((idx // 3) * 2)]
             positioned_entities.append(entity)
         
-        # Create navigation paths (linear flow through rooms)
+        # Create navigation paths (linear flow through rooms) - deduplicate pairs
+        seen_pairs: set[tuple[str, str]] = set()
         for i in range(len(nav_points) - 1):
+            a, b = nav_points[i].id, nav_points[i+1].id
+            pair = tuple(sorted((a, b)))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
             paths.append(NavigationPath(
-                from_point=nav_points[i].id,
-                to=nav_points[i+1].id,
+                from_point=a,
+                to=b,
                 type="walk"
             ))
-        
-        # Add connections to nav points
+
+        # Add connections to nav points with dedup guard
         for path in paths:
             for np in nav_points:
-                if np.id == path.from_point:
+                if np.id == path.from_point and path.to not in np.connections:
                     np.connections.append(path.to)
-                if np.id == path.to:
+                if np.id == path.to and path.from_point not in np.connections:
                     np.connections.append(path.from_point)
-        
+
         return positioned_entities, nav_points, paths
     
     def _radial_courtyard_layout(self, input_data: ComposerInput) -> tuple[list[Entity], list[NavigationPoint], list[NavigationPath]]:
@@ -181,15 +190,33 @@ class SceneComposerAgent:
             )
             nav_points.append(nav_point)
         
-        # Add center courtyard point
-        center_nav = NavigationPoint(
-            id="nav_courtyard_center",
-            name="Central Courtyard",
-            position=[center_x, 1.6, center_z],
-            description="Central gathering area",
-            connections=[]
-        )
-        nav_points.insert(0, center_nav)
+        # Add center courtyard point (avoid double center if caller already has one)
+        existing_ids = {getattr(e, "id", "") for e in positioned_entities} | {p.id for p in nav_points}
+        # If spec already contained a central courtyard POI/entity, skip duplicate insertion
+        has_center_entity = any("courtyard_center" in eid or "central_courtyard" in eid for eid in existing_ids)
+        has_center_nav = any(p.id == "nav_courtyard_center" for p in nav_points)
+        if has_center_entity or has_center_nav:
+            # If duplicate would occur, reuse existing center if present, else create with unique id
+            if not has_center_nav:
+                center_nav = NavigationPoint(
+                    id="nav_courtyard_center",
+                    name="Central Courtyard",
+                    position=[center_x, 1.6, center_z],
+                    description="Central gathering area",
+                    connections=[]
+                )
+                nav_points.insert(0, center_nav)
+            else:
+                center_nav = next(p for p in nav_points if p.id == "nav_courtyard_center")
+        else:
+            center_nav = NavigationPoint(
+                id="nav_courtyard_center",
+                name="Central Courtyard",
+                position=[center_x, 1.6, center_z],
+                description="Central gathering area",
+                connections=[]
+            )
+            nav_points.insert(0, center_nav)
         
         # Position other entities
         for idx, entity in enumerate(others):
@@ -202,31 +229,47 @@ class SceneComposerAgent:
                 entity.position = [float((idx % 3) * 2), 0, float((idx // 3) * 2)]
             positioned_entities.append(entity)
         
-        # Create radial paths (center to each POI)
+        # Create radial paths (center to each POI) with dedup
+        seen: set[tuple[str, str]] = set()
         for nav_point in nav_points[1:]:  # Skip center
+            pair = tuple(sorted((center_nav.id, nav_point.id)))
+            if pair in seen:
+                continue
+            seen.add(pair)
             paths.append(NavigationPath(
                 from_point=center_nav.id,
                 to=nav_point.id,
                 type="walk"
             ))
-        
-        # Connect adjacent POIs in circle
-        for i in range(1, len(nav_points)):
-            next_i = (i % (len(nav_points) - 1)) + 1
-            paths.append(NavigationPath(
-                from_point=nav_points[i].id,
-                to=nav_points[next_i].id,
-                type="walk"
-            ))
-        
-        # Add connections
+
+        # Connect adjacent POIs in circle - deduplicate
+        n = len(nav_points) - 1  # number of outer points
+        if n > 1:
+            for i in range(1, len(nav_points)):
+                next_i = (i - 1 + 1) % n + 1  # next outer index (1-based)
+                # Equivalent to: next_i = ((i-1+1) % n) +1; simplifies to (i % n) +1
+                next_i = (i % n) + 1
+                if next_i == i:
+                    continue
+                a, b = nav_points[i].id, nav_points[next_i].id
+                pair = tuple(sorted((a, b)))
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                paths.append(NavigationPath(
+                    from_point=a,
+                    to=b,
+                    type="walk"
+                ))
+
+        # Add connections with dedup guard
         for path in paths:
             for np in nav_points:
-                if np.id == path.from_point:
+                if np.id == path.from_point and path.to not in np.connections:
                     np.connections.append(path.to)
-                if np.id == path.to:
+                if np.id == path.to and path.from_point not in np.connections:
                     np.connections.append(path.from_point)
-        
+
         return positioned_entities, nav_points, paths
     
     def _create_lighting(self, domain: str, preferences: dict[str, Any]) -> LightingSpec:

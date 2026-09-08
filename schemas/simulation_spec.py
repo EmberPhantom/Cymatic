@@ -1,6 +1,6 @@
 """Shared Simulation Specification Schemas (Python/Pydantic)"""
 from typing import Literal, Optional, List, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from datetime import datetime, timezone
 
 
@@ -20,6 +20,17 @@ NavigationPathType = Literal["walk", "teleport"]
 CustomLightType = Literal["directional", "point", "spot", "area"]
 
 
+def _coerce_vec3(v):
+    """Accept both [x, y, z] lists and {x, y, z} dicts for vector fields."""
+    if isinstance(v, dict):
+        return [
+            float(v.get("x", 0.0)),
+            float(v.get("y", 0.0)),
+            float(v.get("z", 0.0)),
+        ]
+    return v
+
+
 class SpecMetadata(BaseModel):
     title: str
     description: str
@@ -27,6 +38,11 @@ class SpecMetadata(BaseModel):
     author: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tags: List[str] = []
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def _coerce_version(cls, v):
+        return str(v)
 
 
 class Entity(BaseModel):
@@ -39,6 +55,11 @@ class Entity(BaseModel):
     properties: Dict[str, Any] = {}
     children: List["Entity"] = []
 
+    @field_validator("position", "rotation", "scale", mode="before")
+    @classmethod
+    def _vec_fields(cls, v):
+        return _coerce_vec3(v)
+
 
 class NavigationPoint(BaseModel):
     id: str
@@ -47,12 +68,31 @@ class NavigationPoint(BaseModel):
     description: Optional[str] = None
     connections: List[str] = []
 
+    @field_validator("position", mode="before")
+    @classmethod
+    def _vec_field(cls, v):
+        return _coerce_vec3(v)
+
 
 class NavigationPath(BaseModel):
-    from_point: str = Field(alias="from")
+    model_config = ConfigDict(populate_by_name=True)
+    from_point: str = Field(alias="from", serialization_alias="from")
     to: str
     type: NavigationPathType = "walk"
     waypoints: Optional[List[List[float]]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _remap_keys(cls, data):
+        if isinstance(data, dict):
+            if "to" not in data and data.get("to_point") is not None:
+                data["to"] = data["to_point"]
+            if "from" not in data and data.get("from_point") is not None and "from_point" in data:
+                # already has from_point as field name, keep
+                pass
+            if "from_point" in data and "from" not in data:
+                data["from"] = data.pop("from_point")
+        return data
 
 
 class NavigationSpec(BaseModel):
@@ -69,6 +109,11 @@ class CustomLight(BaseModel):
     range: Optional[float] = None
     angle: Optional[float] = None
 
+    @field_validator("position", "color", mode="before")
+    @classmethod
+    def _vec_fields(cls, v):
+        return _coerce_vec3(v)
+
 
 class LightingSpec(BaseModel):
     preset: LightingPreset
@@ -76,6 +121,11 @@ class LightingSpec(BaseModel):
     ambient_intensity: float = 1.0
     sun_direction: Optional[List[float]] = Field(default=None, min_length=3, max_length=3)
     custom_lights: List[CustomLight] = []
+
+    @field_validator("sun_direction", mode="before")
+    @classmethod
+    def _vec_field(cls, v):
+        return _coerce_vec3(v)
 
 
 class CopilotPolicy(BaseModel):
@@ -175,6 +225,8 @@ class AssetReference(BaseModel):
     fallback_uri: Optional[str] = None
     lod_levels: Optional[int] = None
     required: bool = True
+    estimated_triangles: int = 0
+    estimated_size_mb: float = 0.0
 
 
 class AssetManifest(BaseModel):

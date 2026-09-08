@@ -1,5 +1,5 @@
 """Intake Agent - Parses prompt and detects domain/missing fields using LLM"""
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from pydantic import BaseModel, Field
 import structlog
 import json
@@ -51,7 +51,7 @@ def sanitize_prompt(prompt: str) -> str:
     return prompt.strip()
 
 
-async def process_intake_llm(prompt: str, context: Dict[str, Any] = None) -> IntakeResult:
+async def process_intake_llm(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
     """Process user prompt using LLM for intelligent analysis."""
     prompt = sanitize_prompt(prompt)
     messages = [
@@ -133,7 +133,7 @@ DOMAIN_QUESTIONS = {
 }
 
 
-async def process_intake_fallback(prompt: str, context: Dict[str, Any] = None) -> IntakeResult:
+async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
     """Fallback keyword-based intake processing."""
     prompt_lower = prompt.lower()
 
@@ -209,7 +209,7 @@ def merge_intake_answers(intake_result: IntakeResult, answers: Dict[str, str]) -
 
 
 # Main entry point
-async def process_intake(prompt: str, context: Dict[str, Any] = None) -> IntakeResult:
+async def process_intake(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
     """Main intake processing - uses LLM with keyword fallback."""
     prompt = sanitize_prompt(prompt)
     return await process_intake_llm(prompt, context)

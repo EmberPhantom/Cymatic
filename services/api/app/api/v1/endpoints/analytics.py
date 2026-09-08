@@ -58,33 +58,49 @@ async def get_project_analytics(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Get sessions
-    sessions_result = await db.execute(
-        select(StreamSession).where(StreamSession.project_id == project_id)
+    # Aggregate sessions via SQL to avoid N+1 / loading all rows
+    total_sessions_res = await db.execute(
+        select(func.count(StreamSession.id)).where(StreamSession.project_id == project_id)
     )
-    sessions = sessions_result.scalars().all()
+    total_sessions = int(total_sessions_res.scalar() or 0)
 
-    # Get events
-    session_ids = [s.id for s in sessions]
-    events_by_type: dict[str, int] = {}
-    if session_ids:
-        events_result = await db.execute(
-            select(RuntimeEvent.event_type, func.count(RuntimeEvent.id))
-            .where(RuntimeEvent.stream_session_id.in_(session_ids))
-            .group_by(RuntimeEvent.event_type)
+    unique_users_res = await db.execute(
+        select(func.count(func.distinct(StreamSession.user_id))).where(
+            StreamSession.project_id == project_id
         )
-        events_by_type = {row[0]: row[1] for row in events_result.all()}
-
-    total_duration = sum(
-        (s.ended_at - s.started_at).total_seconds() for s in sessions if s.ended_at
     )
+    unique_users = int(unique_users_res.scalar() or 0)
+
+    duration_res = await db.execute(
+        select(
+            func.sum(
+                func.extract("epoch", StreamSession.ended_at)
+                - func.extract("epoch", StreamSession.started_at)
+            )
+        )
+        .where(StreamSession.project_id == project_id)
+        .where(StreamSession.ended_at.isnot(None))
+        .where(StreamSession.started_at.isnot(None))
+    )
+    total_duration_raw = duration_res.scalar()
+    total_duration = int(total_duration_raw or 0)
+    avg_duration = (total_duration / total_sessions) if total_sessions else 0
+
+    # Events aggregate via join (avoid IN with large list and fix column name session_id)
+    events_result = await db.execute(
+        select(RuntimeEvent.event_type, func.count(RuntimeEvent.id))
+        .join(StreamSession, RuntimeEvent.session_id == StreamSession.id)
+        .where(StreamSession.project_id == project_id)
+        .group_by(RuntimeEvent.event_type)
+    )
+    events_by_type: dict[str, int] = {row[0]: row[1] for row in events_result.all()}
 
     return ProjectAnalytics(
         project_id=project_id,
-        total_sessions=len(sessions),
-        total_duration_seconds=int(total_duration),
-        avg_session_duration_seconds=total_duration / len(sessions) if sessions else 0,
-        unique_users=len(set(s.user_id for s in sessions)),
+        total_sessions=total_sessions,
+        total_duration_seconds=total_duration,
+        avg_session_duration_seconds=avg_duration,
+        unique_users=unique_users,
         events_by_type=events_by_type,
         completion_rate=0.0,
     )
@@ -111,9 +127,9 @@ async def get_session_analytics(
     if not project or project.organization_id != current_user.organization_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Get events
+    # Get events (fix column name session_id not stream_session_id)
     events_result = await db.execute(
-        select(RuntimeEvent).where(RuntimeEvent.stream_session_id == session_id)
+        select(RuntimeEvent).where(RuntimeEvent.session_id == session_id)
     )
     events = events_result.scalars().all()
 
@@ -133,8 +149,8 @@ async def get_session_analytics(
         elif event.event_type in ["voice_session_started", "voice_session_completed"]:
             voice_interactions += 1
 
-    duration = 0
-    if session.ended_at:
+    duration: float = 0
+    if session.ended_at and session.started_at:
         duration = (session.ended_at - session.started_at).total_seconds()
 
     return SessionAnalytics(
@@ -206,6 +222,7 @@ async def get_organization_analytics(
         .join(Project, StreamSession.project_id == Project.id)
         .where(Project.organization_id == org_id)
         .where(StreamSession.ended_at.isnot(None))
+        .where(StreamSession.started_at.isnot(None))
     )
     total_duration = int(duration_result.scalar() or 0)
 

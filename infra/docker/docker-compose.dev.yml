@@ -5,26 +5,36 @@ services:
     volumes:
       - ../../services/api/app:/app/app
       - ../../packages/cymatic-shared/cymatic_shared:/app/packages/cymatic-shared/cymatic_shared
+      - ../../packages/cymatic-shared/pyproject.toml:/app/packages/cymatic-shared/pyproject.toml:ro
     environment:
       API_RELOAD: "true"
-      PYTHONPATH: /app/packages/cymatic-shared
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+      PYTHONPATH: /app:/app/packages/cymatic-shared
+      PYTHONUNBUFFERED: "1"
+      WATCHFILES_FORCE_POLLING: "true"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app", "--reload-dir", "/app/packages/cymatic-shared"]
 
   worker:
     volumes:
       - ../../services/worker/app:/app/app
       - ../../packages/cymatic-shared/cymatic_shared:/app/packages/cymatic-shared/cymatic_shared
+      - ../../packages/cymatic-shared/pyproject.toml:/app/packages/cymatic-shared/pyproject.toml:ro
     environment:
-      PYTHONPATH: /app/packages/cymatic-shared
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+      PYTHONPATH: /app:/app/packages/cymatic-shared
+      PYTHONUNBUFFERED: "1"
+      WATCHFILES_FORCE_POLLING: "true"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload", "--reload-dir", "/app/app", "--reload-dir", "/app/packages/cymatic-shared"]
 
   llm-router:
     volumes:
       - ../../services/llm-router/app:/app/app
+      - ../../packages/cymatic-shared/cymatic_shared:/app/packages/cymatic-shared/cymatic_shared
+      - ../../packages/cymatic-shared/pyproject.toml:/app/packages/cymatic-shared/pyproject.toml:ro
     environment:
       DEBUG: "true"
-      PYTHONPATH: /app/packages/cymatic-shared
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+      PYTHONPATH: /app:/app/packages/cymatic-shared
+      PYTHONUNBUFFERED: "1"
+      WATCHFILES_FORCE_POLLING: "true"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app/app", "--reload-dir", "/app/packages/cymatic-shared"]
 
   web:
     ports:
@@ -36,9 +46,15 @@ services:
       - ../../apps/web/next.config.js:/app/next.config.js
       - ../../apps/web/tsconfig.json:/app/tsconfig.json
       - ../../apps/web/tailwind.config.js:/app/tailwind.config.js
+      - ../../apps/web/postcss.config.js:/app/postcss.config.js
+      - /app/node_modules
+      - /app/.next
     environment:
       API_INTERNAL_URL: http://api:8000
       NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
       NEXT_PUBLIC_WS_URL: ws://localhost:${API_PORT:-8000}
       NEXT_PUBLIC_MINIO_URL: http://localhost:${MINIO_API_PORT:-9000}
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
     command: ["npx", "next", "dev"]

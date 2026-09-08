@@ -40,14 +40,15 @@ class DomainExpertAgent:
             "living_min": 1,
             "egress_required": ["bedroom", "basement"],
         },
+        # All clearances in METERS to match SimulationSpec Y-up meters
         "clearances": {
-            "toilet_front": 21,  # inches
-            "toilet_side": 15,
-            "sink_front": 20,
-            "shower_min": 30,
-            "tub_front": 24,
-            "kitchen_aisle": 42,
-            "kitchen_work_triangle_max": 26,  # feet total
+            "toilet_front": 0.53,  # 21 inches -> meters
+            "toilet_side": 0.38,  # 15 inches
+            "sink_front": 0.51,  # 20 inches
+            "shower_min": 0.76,  # 30 inches (minimum shower width)
+            "tub_front": 0.61,  # 24 inches
+            "kitchen_aisle": 1.07,  # 42 inches
+            "kitchen_work_triangle_max": 7.92,  # 26 feet -> meters
         },
         "plumbing_groups": {
             "bathroom": ["toilet", "sink", "shower/tub"],
@@ -83,7 +84,7 @@ class DomainExpertAgent:
             "enclosure": "four_sided_preferred",
             "center_feature": ["fountain", "tree", "platform"],
             "aspect_ratio_range": [0.8, 1.5],
-            "arcade_depth": 8,  # feet
+            "arcade_depth": 2.44,  # 8 feet -> meters
         }
     }
     
@@ -165,14 +166,17 @@ class DomainExpertAgent:
         if kitchen:
             suggestions.append("Verify kitchen work triangle (sink-stove-fridge) under 26ft total")
         
-        # Check window requirements
+        # Check window requirements - has_window defaults to None/missing so we correctly flag it.
+        # Previously default True masked missing windows.
         bedrooms = [r for r in rooms if self._identify_room_type(r) == "bedroom"]
         for bed in bedrooms:
-            if not bed.properties.get("has_window", True):
+            has_window = bed.properties.get("has_window")
+            # Treat None/missing or False as missing window; True only passes
+            if has_window is not True:
                 issues.append({
                     "entity": bed.id,
                     "field": "properties.has_window",
-                    "message": "Bedroom requires at least one window for egress",
+                    "message": "Bedroom requires at least one window for egress (has_window missing/false)",
                     "severity": "error"
                 })
                 score -= 0.1
@@ -204,12 +208,28 @@ class DomainExpertAgent:
             suggestions.append(f"Unknown heritage site type: {site_type}")
             return DomainCheckResult(valid=True, suggestions=suggestions)
         
-        # Check mandatory elements
+        # Check mandatory elements - strict word-boundary match, not raw substring.
+        # Normalizes "_" and spaces, then checks token containment to avoid false positives.
         mandatory = rules.get("mandatory_elements", [])
-        entity_names = [e.name.lower() for e in spec.entities]
-        
+        # Normalized entity names: lower, "_"->" "
+        entity_names_norm = [e.name.lower().replace("_", " ").strip() for e in spec.entities]
+        entity_tokens_list = [set(n.split()) for n in entity_names_norm]
+
         for element in mandatory:
-            found = any(element.lower() in name for name in entity_names)
+            elem_norm = element.lower().replace("_", " ").strip()
+            elem_tokens = set(elem_norm.split())
+            found = False
+            for name_norm, tokens in zip(entity_names_norm, entity_tokens_list):
+                # exact normalized equality OR token subset (all element tokens present in entity)
+                if elem_norm == name_norm or elem_tokens.issubset(tokens) or elem_norm in name_norm:
+                    # Require word-boundary containment; skip spurious short substrings (<4 chars) that could false-match
+                    if len(elem_norm) < 4:
+                        if elem_norm == name_norm or elem_norm in tokens:
+                            found = True
+                            break
+                    else:
+                        found = True
+                        break
             if not found:
                 issues.append({
                     "entity": "spec",
@@ -272,16 +292,25 @@ class DomainExpertAgent:
     def _identify_heritage_type(self, spec: SimulationSpec) -> str:
         """Identify heritage site type from entities."""
         names = " ".join(e.name.lower() for e in spec.entities)
-        
-        if "temple" in names:
+        # Also inspect properties site_type if present
+        prop_types = " ".join(str(e.properties.get("site_type", "")).lower() for e in spec.entities if isinstance(e.properties, dict))
+
+        combined = f"{names} {prop_types}"
+
+        if "temple" in combined:
             return "temple"
-        if "palace" in names or "fort" in names:
+        # Token cues for temple
+        if any(tok in combined for tok in ("garbhagriha", "mandapa", "pradakshina", "gopuram", "shikhara", "sanctum", "vimana")):
+            return "temple"
+        if "palace" in combined or "fort" in combined:
             return "palace"
-        if "courtyard" in names or "haveli" in names:
+        if any(tok in combined for tok in ("diwan", "zenana", "chhatri", "jharokha", "raj")):
+            return "palace"
+        if "courtyard" in combined or "haveli" in combined:
             return "courtyard"
-        if "monument" in names:
-            return "palace"  # Similar rules
-        
+        if "monument" in combined or "stupa" in combined:
+            return "palace"  # Similar rules for monument
+
         return "courtyard"  # Default
 
 

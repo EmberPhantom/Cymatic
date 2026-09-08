@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    command: postgres -c max_connections=100 -c shared_buffers=128MB -c effective_cache_size=512MB
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-cymatic}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cymatic}
@@ -9,23 +10,38 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    mem_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cymatic}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cymatic} -d $${POSTGRES_DB:-cymatic}"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
   redis:
     image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --save "60 1"
+      --maxmemory 512mb
+      --maxmemory-policy volatile-lru
+      --requirepass $${REDIS_PASSWORD:-cymatic_redis_pass}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-cymatic_redis_pass}
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
+    mem_limit: 512m
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   minio:
     image: minio/minio:latest
@@ -38,17 +54,48 @@ services:
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
+    restart: unless-stopped
+    mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q http://localhost:9000/minio/health/live || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
+
+  coturn:
+    image: coturn/coturn:4.6.2-alpine
+    ports:
+      - "${COTURN_PORT:-3478}:3478"
+      - "${COTURN_PORT:-3478}:3478/udp"
+      - "${COTURN_TLS_PORT:-5349}:5349"
+      - "${COTURN_TLS_PORT:-5349}:5349/udp"
+    environment:
+      TURN_REALM: ${TURN_REALM:-cymatic.local}
+    command: >
+      turnserver --log-file stdout
+      --listening-port 3478 --tls-listening-port 5349
+      --fingerprint --lt-cred-mech
+      --realm $${TURN_REALM:-cymatic.local}
+      --user=$${TURN_USERNAME:-cymatic}:$${TURN_PASSWORD:-cymatic_turn_pass}
+      --external-ip=$${COTURN_EXTERNAL_IP:-127.0.0.1}
+    restart: unless-stopped
+    mem_limit: 256m
+    profiles: ["turn"]
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_uclient -p 3478 -u $${TURN_USERNAME:-cymatic} -w $${TURN_PASSWORD:-cymatic_turn_pass} 127.0.0.1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   api:
     build:
-      context: ../..
-      dockerfile: services/api/Dockerfile
+      context: ../../services/api
+      dockerfile: Dockerfile
       target: runtime
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -63,24 +110,31 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/3
+      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/4
+      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/5
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       LLM_ROUTER_URL: http://llm-router:8001
       DEBUG: "false"
       API_RELOAD: "false"
+    restart: unless-stopped
+    mem_limit: 512m
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 20s
 
   worker:
     build:
-      context: ../..
-      dockerfile: services/worker/Dockerfile
+      context: ../../services/worker
+      dockerfile: Dockerfile
       target: runtime
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,44 +147,55 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/0
+      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/5
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       LLM_ROUTER_URL: http://llm-router:8001
       DEBUG: "false"
+    restart: unless-stopped
+    mem_limit: 512m
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8002/health').raise_for_status()"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 20s
 
   llm-router:
     build:
-      context: ../..
-      dockerfile: services/llm-router/Dockerfile
+      context: ../../services/llm-router
+      dockerfile: Dockerfile
       target: runtime
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     ports:
       - "${LLM_ROUTER_PORT:-8001}:8001"
     env_file: ../../.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/1
+      REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/1
+      REDIS_USAGE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/2
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/3
       DEBUG: "false"
+    restart: unless-stopped
+    mem_limit: 512m
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health').raise_for_status()"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 15s
 
   web:
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
       args:
-        API_INTERNAL_URL: http://api:8000
-        NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
-        NEXT_PUBLIC_WS_URL: ws://localhost:${API_PORT:-8000}
-        NEXT_PUBLIC_MINIO_URL: http://localhost:${MINIO_API_PORT:-9000}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+        NEXT_PUBLIC_MINIO_URL: ${NEXT_PUBLIC_MINIO_URL:-http://localhost:9000}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
@@ -140,17 +205,25 @@ services:
         condition: service_healthy
     environment:
       API_INTERNAL_URL: http://api:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+      NEXT_PUBLIC_MINIO_URL: ${NEXT_PUBLIC_MINIO_URL:-http://localhost:9000}
+    restart: unless-stopped
+    mem_limit: 256m
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 20s
 
   migrate:
     build:
-      context: ../..
-      dockerfile: services/api/Dockerfile
+      context: ../../services/api
+      dockerfile: Dockerfile
       target: runtime
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     entrypoint: []
     command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
     depends_on:
@@ -159,12 +232,15 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
+    restart: "no"
 
   test-api:
     build:
-      context: ../..
-      dockerfile: services/api/Dockerfile
+      context: ../../services/api
+      dockerfile: Dockerfile
       target: test
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     depends_on:
       test-migrate:
         condition: service_completed_successfully
@@ -179,7 +255,7 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_test
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -188,9 +264,11 @@ services:
 
   test-worker:
     build:
-      context: ../..
-      dockerfile: services/worker/Dockerfile
+      context: ../../services/worker
+      dockerfile: Dockerfile
       target: test
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     depends_on:
       test-migrate-worker:
         condition: service_completed_successfully
@@ -207,7 +285,7 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_worker_test
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -216,15 +294,18 @@ services:
 
   test-llm-router:
     build:
-      context: ../..
-      dockerfile: services/llm-router/Dockerfile
+      context: ../../services/llm-router
+      dockerfile: Dockerfile
       target: test
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     depends_on:
       redis:
         condition: service_healthy
     env_file: ../../.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
     profiles: ["test"]
 
   test-postgres:
@@ -237,11 +318,14 @@ services:
       - "${POSTGRES_TEST_PORT:-5433}:5432"
     volumes:
       - test_postgres_data:/var/lib/postgresql/data
+    restart: "no"
+    mem_limit: 512m
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cymatic}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cymatic}"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
     profiles: ["test"]
 
   test-db:
@@ -249,23 +333,25 @@ services:
     depends_on:
       test-postgres:
         condition: service_healthy
-    environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-cymatic}
+    env_file: ../../.env
     entrypoint: ["sh", "-c"]
     command:
       - >-
-        until pg_isready -h test-postgres -U ${POSTGRES_USER:-cymatic}; do sleep 1; done;
-        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        until pg_isready -h test-postgres -U $${POSTGRES_USER:-cymatic}; do sleep 1; done;
+        PGPASSWORD="$${POSTGRES_PASSWORD:-cymatic}" psql -h test-postgres -U $${POSTGRES_USER:-cymatic} -d $${POSTGRES_DB:-cymatic}
         -c "DROP DATABASE IF EXISTS cymatic_test;";
-        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
-        -c "CREATE DATABASE cymatic_test OWNER ${POSTGRES_USER:-cymatic};"
+        PGPASSWORD="$${POSTGRES_PASSWORD:-cymatic}" psql -h test-postgres -U $${POSTGRES_USER:-cymatic} -d $${POSTGRES_DB:-cymatic}
+        -c "CREATE DATABASE cymatic_test OWNER $${POSTGRES_USER:-cymatic};"
     profiles: ["test"]
+    restart: "no"
 
   test-migrate:
     build:
-      context: ../..
-      dockerfile: services/api/Dockerfile
+      context: ../../services/api
+      dockerfile: Dockerfile
       target: runtime
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     entrypoint: []
     command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
     depends_on:
@@ -275,29 +361,32 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_test
     profiles: ["test"]
+    restart: "no"
 
   test-db-worker:
     image: postgres:16-alpine
     depends_on:
       test-postgres:
         condition: service_healthy
-    environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-cymatic}
+    env_file: ../../.env
     entrypoint: ["sh", "-c"]
     command:
       - >-
-        until pg_isready -h test-postgres -U ${POSTGRES_USER:-cymatic}; do sleep 1; done;
-        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
+        until pg_isready -h test-postgres -U $${POSTGRES_USER:-cymatic}; do sleep 1; done;
+        PGPASSWORD="$${POSTGRES_PASSWORD:-cymatic}" psql -h test-postgres -U $${POSTGRES_USER:-cymatic} -d $${POSTGRES_DB:-cymatic}
         -c "DROP DATABASE IF EXISTS cymatic_worker_test;";
-        psql -h test-postgres -U ${POSTGRES_USER:-cymatic} -d ${POSTGRES_DB:-cymatic}
-        -c "CREATE DATABASE cymatic_worker_test OWNER ${POSTGRES_USER:-cymatic};"
+        PGPASSWORD="$${POSTGRES_PASSWORD:-cymatic}" psql -h test-postgres -U $${POSTGRES_USER:-cymatic} -d $${POSTGRES_DB:-cymatic}
+        -c "CREATE DATABASE cymatic_worker_test OWNER $${POSTGRES_USER:-cymatic};"
     profiles: ["test"]
+    restart: "no"
 
   test-migrate-worker:
     build:
-      context: ../..
-      dockerfile: services/worker/Dockerfile
+      context: ../../services/worker
+      dockerfile: Dockerfile
       target: runtime
+      additional_contexts:
+        shared: ../../packages/cymatic-shared
     entrypoint: []
     command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
     depends_on:
@@ -307,6 +396,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_worker_test
     profiles: ["test"]
+    restart: "no"
 
 volumes:
   postgres_data:

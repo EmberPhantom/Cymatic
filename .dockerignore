@@ -1,13 +1,19 @@
 # Version control
 .git
 .gitignore
+.gitattributes
 
 # Dependencies (reinstall in container)
 apps/web/node_modules
+apps/web/.next
+**/node_modules
 
 # Environment files (secrets must not enter build context)
 .env
 .env.*
+!.env.example
+*.pem
+*.key
 
 # Build artifacts
 **/*.egg-info
@@ -17,25 +23,47 @@ apps/web/node_modules
 **/.pytest_cache/
 **/.mypy_cache/
 **/.ruff_cache/
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
 
 # IDE / editor
 .vscode
 .idea
 *.swp
 *.swo
+*.swn
+*~
 
-# Documentation
+# Documentation (not needed in runtime images)
 docs/
 *.md
+!README.md
 
 # Platform-specific (not needed in containers)
 android/
 unity/
+infra/k8s/
 
-# Docker
-docker-compose*.yml
-scripts/
+# Docker compose overrides (dev only, not for prod image)
+docker-compose.dev.yml
+# Keep main compose for reference but not copied into images
+infra/docker/docker-compose*.yml
 
 # OS files
 .DS_Store
 Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# CI / local tooling
+.github/
+.husky/
+coverage.xml
+bench*.json
+benchmark_*.json
+*.log

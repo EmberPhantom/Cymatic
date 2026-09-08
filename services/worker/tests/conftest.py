@@ -13,8 +13,8 @@ import pytest
 import pytest_asyncio
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, patch
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker  # noqa: F401 - kept for fallback compat
 from sqlalchemy.pool import NullPool
 from alembic.config import Config
 from alembic import command
@@ -40,15 +40,18 @@ os.environ.setdefault("LLM_ROUTER_URL", "http://localhost:8001")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 try:
-    from services.worker.app.main import app
-    from services.worker.app.db.session import get_db
-    from services.worker.app.core.config import get_settings
-    from cymatic_shared.db import Base
+    from services.worker.app.main import app as _app_try  # noqa: F401
+    from services.worker.app.db.session import get_db as _get_db_try  # noqa: F401
+    from services.worker.app.core.config import get_settings as _get_settings_try  # noqa: F401
+    from cymatic_shared.db import Base as _Base_try  # noqa: F401
+
+    app = _app_try  # type: ignore[no-redef]
+    get_db = _get_db_try  # type: ignore[no-redef]
+    Base = _Base_try  # type: ignore[no-redef]
 except ModuleNotFoundError:
-    from app.main import app
-    from app.db.session import get_db
-    from app.core.config import get_settings
-    from cymatic_shared.db import Base
+    from app.main import app  # type: ignore[no-redef]
+    from app.db.session import get_db  # type: ignore[no-redef]
+    from cymatic_shared.db import Base  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Test engine + session factory
@@ -58,7 +61,7 @@ TEST_DATABASE_URL = to_async_db_url(
 )
 
 engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
-TestingSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+TestingSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 async def override_get_db():
@@ -165,13 +168,13 @@ def _clarification_mock(messages, task_type="copilot_chat", sensitivity="interna
 
 
 def _architect_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None):
-    """Return architect mock data - a valid SimulationSpec dict."""
+    """Return architect mock data - a valid SimulationSpec dict (includes has_window for domain compliance)."""
     return {
         "domain": "real_estate",
         "metadata": {"title": "Test Apartment", "description": "Generated spec", "version": "1.0"},
         "entities": [
-            {"id": "room1", "type": "room", "name": "Living Room", "position": [0, 0, 0], "properties": {"size": [15, 20, 10]}},
-            {"id": "room2", "type": "room", "name": "Bedroom", "position": [20, 0, 0], "properties": {"size": [12, 12, 10]}},
+            {"id": "room1", "type": "room", "name": "Living Room", "position": [0, 0, 0], "properties": {"size": [15, 20, 10], "has_window": True, "has_doors": True, "style": "modern"}},
+            {"id": "room2", "type": "room", "name": "Bedroom", "position": [20, 0, 0], "properties": {"size": [12, 12, 10], "has_window": True, "has_doors": True, "style": "modern"}},
         ],
         "navigation": {
             "points": [

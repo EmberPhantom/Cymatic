@@ -1,8 +1,9 @@
-from datetime import datetime
 import asyncio
+import copy
 import hashlib
 import json
 import uuid
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
@@ -133,9 +134,11 @@ async def intake_prompt(
 
     # Use Intake Agent and persist the result for the subsequent stages.
     intake_result = await process_intake(request.prompt, request.context)
+    # Deep copy context to avoid mutation after enqueue
+    context_copy = copy.deepcopy(request.context) if request.context else {}
     input_hash = hashlib.sha256(
         json.dumps(
-            {"prompt": request.prompt, "context": request.context}, sort_keys=True
+            {"prompt": request.prompt, "context": context_copy}, sort_keys=True
         ).encode()
     ).hexdigest()
     run = GenerationRun(
@@ -143,8 +146,8 @@ async def intake_prompt(
         project_id=project_id,
         organization_id=project.organization_id,
         prompt=request.prompt,
-        context_json=request.context,
-        intake_json=intake_result.model_dump(),
+        context_json=copy.deepcopy(context_copy),
+        intake_json=copy.deepcopy(intake_result.model_dump()),
         clarification_json={},
         input_hash=input_hash,
         stage="clarification" if intake_result.missing_fields else "spec",
@@ -206,7 +209,7 @@ async def clarify_requirements(
     )
 
     if run:
-        run.clarification_json = clarification_result.updated_fields
+        run.clarification_json = copy.deepcopy(clarification_result.updated_fields)
         run.stage = (
             "spec" if clarification_result.ready_for_generation else "clarification"
         )
@@ -219,7 +222,7 @@ async def clarify_requirements(
         await db.commit()
 
     return {
-        "updated_fields": clarification_result.updated_fields,
+        "updated_fields": copy.deepcopy(clarification_result.updated_fields),
         "ready_for_generation": clarification_result.ready_for_generation,
         "completion_percentage": clarification_result.completion_percentage,
         "remaining_questions": [
@@ -305,8 +308,10 @@ async def generate_spec(
                 project_id=project_id,
                 organization_id=project.organization_id,
                 prompt=request.prompt,
-                context_json=request.context,
-                clarification_json=request.clarification_answers,
+                context_json=copy.deepcopy(request.context) if request.context else {},
+                clarification_json=copy.deepcopy(request.clarification_answers)
+                if request.clarification_answers
+                else {},
                 input_hash=input_hash,
                 stage="spec",
                 status="queued",
@@ -315,23 +320,25 @@ async def generate_spec(
             db.add(run)
         else:
             return JobResponse(
-                job_id=f"run_{run.id}",
+                job_id=f"spec_{run.id}",
                 status=run.status,
                 message="Generation already queued",
                 run_id=run.id,
             )
 
-    # Enqueue spec generation job
+    # Enqueue spec generation job - deep copy to prevent mutation and ensure job_id matches
     job = Job(
         id=f"spec_{run.id}",
         type="generate_spec",
         payload={
             "project_id": project_id,
             "prompt": request.prompt,
-            "context": request.context,
-            "clarification_answers": request.clarification_answers
-            or run.clarification_json
-            or {},
+            "context": copy.deepcopy(request.context) if request.context else {},
+            "clarification_answers": copy.deepcopy(request.clarification_answers)
+            if request.clarification_answers
+            else copy.deepcopy(run.clarification_json)
+            if run.clarification_json
+            else {},
             "run_id": run.id,
         },
         priority=JobPriority.HIGH,
@@ -715,7 +722,7 @@ async def clarify_with_state(
         )
         if not run:
             raise HTTPException(status_code=404, detail="Generation run not found")
-        run.clarification_json = clarification_result.updated_fields
+        run.clarification_json = copy.deepcopy(clarification_result.updated_fields)
         run.stage = (
             "spec" if clarification_result.ready_for_generation else "clarification"
         )
@@ -728,7 +735,7 @@ async def clarify_with_state(
         await db.commit()
 
     return {
-        "updated_fields": clarification_result.updated_fields,
+        "updated_fields": copy.deepcopy(clarification_result.updated_fields),
         "ready_for_generation": clarification_result.ready_for_generation,
         "completion_percentage": clarification_result.completion_percentage,
         "remaining_questions": [

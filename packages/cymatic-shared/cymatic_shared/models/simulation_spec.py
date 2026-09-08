@@ -1,7 +1,7 @@
 """SimulationSpec model"""
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, JSON
+from sqlalchemy import Column, Integer, Enum, ForeignKey, DateTime, JSON
 from sqlalchemy.orm import relationship
 from cymatic_shared.db import Base
 
