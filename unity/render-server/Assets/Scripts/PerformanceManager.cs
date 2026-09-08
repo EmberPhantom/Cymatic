@@ -37,6 +37,8 @@ namespace Cymatic
         private int _currentQualityIndex = 2; // Medium
         private bool _isMonitoring = false;
         private float _lastUpdateTime = 0f;
+        private float _lastQualityChangeTime = -999f;
+        private const float QualityChangeCooldown = 5f;
         
         // Metrics
         private float _currentFPS = 0f;
@@ -48,10 +50,10 @@ namespace Cymatic
         private float _memoryUsage = 0f;
         private float _thermalLevel = 0f;
         
-        // History for averaging
+        // History for averaging - 180 frames = 3s at 60fps (60 too short, causes oscillation, increases variance)
         private Queue<float> _fpsHistory = new Queue<float>();
         private Queue<float> _frameTimeHistory = new Queue<float>();
-        private const int HistorySize = 60;
+        private const int HistorySize = 180;
         
         public int CurrentQualityIndex => _currentQualityIndex;
         public string CurrentQualityName => _qualityPresets[_currentQualityIndex].name;
@@ -137,19 +139,121 @@ namespace Cymatic
                 _avgFrameTime = sum / _frameTimeHistory.Count;
             }
             
-            // Draw calls & triangles - use ProfilerRecorder fallback for mobile
+            // Draw calls & triangles - real count (ProfilerRecorder / mesh index count), not drawCalls*1200 estimate
             try {
 #if UNITY_2022_3_OR_NEWER
                 _drawCalls = UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None).Length;
 #else
                 _drawCalls = UnityEngine.Object.FindObjectsOfType<Renderer>().Length;
 #endif
-                _triangles = _drawCalls * 1200;
+                _triangles = GetRealTriangleCount();
+#if UNITY_2022_3_OR_NEWER
+                // Attempt GPU timer via ProfilerRecorder if available (Unity 2022+ ProfilerCategory.Render) - fallback to mesh count above
+                TryUpdateTriangleCountViaProfilerRecorder(ref _triangles);
+#endif
             } catch { _drawCalls = 0; _triangles = 0; }
             
             // Memory
             _memoryUsage = Profiler.GetTotalAllocatedMemoryLong() / (1024f * 1024f); // MB
+            // GPU time approximation via frameTime if not yet measured (kept for metrics compatibility)
+            if (_gpuTime == 0) _gpuTime = _avgFrameTime * 0.6f;
+            if (_cpuTime == 0) _cpuTime = _avgFrameTime * 0.4f;
         }
+
+        private int GetRealTriangleCount()
+        {
+            int total = 0;
+            try
+            {
+#if UNITY_2022_3_OR_NEWER
+                var filters = UnityEngine.Object.FindObjectsByType<MeshFilter>(FindObjectsSortMode.None);
+#else
+                var filters = UnityEngine.Object.FindObjectsOfType<MeshFilter>();
+#endif
+                foreach (var f in filters)
+                {
+                    var m = f.sharedMesh;
+                    if (m == null) continue;
+                    // Use GetIndexCount to avoid allocating triangles array (GC)
+                    try
+                    {
+                        int sub = m.subMeshCount;
+                        if (sub > 0)
+                        {
+                            for (int i = 0; i < sub; i++) total += (int)m.GetIndexCount(i) / 3;
+                        }
+                        else total += (int)m.GetIndexCount(0) / 3;
+                    }
+                    catch
+                    {
+                        // Fallback to triangles array length if GetIndexCount fails
+                        total += m.triangles.Length / 3;
+                    }
+                }
+#if UNITY_2022_3_OR_NEWER
+                var skinned = UnityEngine.Object.FindObjectsByType<SkinnedMeshRenderer>(FindObjectsSortMode.None);
+#else
+                var skinned = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+#endif
+                foreach (var s in skinned)
+                {
+                    var m = s.sharedMesh;
+                    if (m == null) continue;
+                    try
+                    {
+                        int sub = m.subMeshCount;
+                        if (sub > 0) for (int i = 0; i < sub; i++) total += (int)m.GetIndexCount(i) / 3;
+                        else total += (int)m.GetIndexCount(0) / 3;
+                    }
+                    catch { total += m.triangles.Length / 3; }
+                }
+            }
+            catch { }
+            return total;
+        }
+
+#if UNITY_2022_3_OR_NEWER
+        private void TryUpdateTriangleCountViaProfilerRecorder(ref int triangles)
+        {
+            // Best-effort: use ProfilerRecorder for "Triangles Drawn" if domain has recorder - no GC alloc if unavailable
+            // Unity 2022+ provides UnityEngine.Profiling.ProfilerRecorder; category Render, marker "Triangles Count" / "Triangles Drawn"
+            // Reflection avoids hard dependency when scripting API changes.
+            try
+            {
+                var recorderType = System.Type.GetType("UnityEngine.Profiling.ProfilerRecorder, UnityEngine.CoreModule");
+                if (recorderType == null) return;
+                // Try common stat names
+                string[] statNames = new[] { "Triangles Drawn", "Triangles Count", "Triangles" };
+                foreach (var name in statNames)
+                {
+                    try
+                    {
+                        var startNew = recorderType.GetMethod("StartNew", new[] { System.Type.GetType("UnityEngine.Profiling.ProfilerCategory, UnityEngine.CoreModule"), typeof(string) });
+                        if (startNew == null) continue;
+                        var cat = UnityEngine.Profiling.ProfilerCategory.Render;
+                        var rec = startNew.Invoke(null, new object[] { cat, name });
+                        var prop = rec.GetType().GetProperty("LastValue");
+                        if (prop != null)
+                        {
+                            var v = prop.GetValue(rec);
+                            if (v is long lv && lv > 0) { triangles = (int)lv; }
+                            else if (v is int iv && iv > 0) { triangles = iv; }
+                            var dispose = rec.GetType().GetMethod("Dispose");
+                            dispose?.Invoke(rec, null);
+                            if (triangles > 0) break;
+                        }
+                        else
+                        {
+                            var dispose = rec.GetType().GetMethod("Dispose");
+                            dispose?.Invoke(rec, null);
+                        }
+                    }
+                    catch { continue; }
+                }
+            }
+            catch { }
+        }
+#endif
         
         private void UpdateThermal()
         {
@@ -170,7 +274,8 @@ namespace Cymatic
             if (_thermalLevel > _thermalThrottleThreshold)
             {
                 OnThermalThrottle?.Invoke(_thermalLevel);
-                if (_currentQualityIndex < _qualityPresets.Length - 1)
+                // Thermal throttle respects cooldown to avoid oscillation, but fires immediately on first breach
+                if (_currentQualityIndex < _qualityPresets.Length - 1 && Time.time - _lastQualityChangeTime >= QualityChangeCooldown)
                 {
                     SetQuality(_currentQualityIndex + 1);
                 }
@@ -180,19 +285,22 @@ namespace Cymatic
         private void CheckAdaptiveQuality()
         {
             if (!_adaptiveQuality) return;
+            // Cooldown to prevent ping-pong: must wait 5s after last quality change before next adjustment
+            if (Time.time - _lastQualityChangeTime < QualityChangeCooldown) return;
             
-            // Check if we need to adjust quality
+            // Check if we need to adjust quality - asymmetric hysteresis to avoid oscillation
             float fpsDiff = _targetFPS - _currentFPS;
-            float fpsThreshold = _targetFPS * 0.1f; // 10% threshold
+            float reduceThreshold = _targetFPS * 0.10f;  // 10% low -> reduce immediately (with cooldown)
+            float increaseThreshold = _targetFPS * 0.15f; // 15% headroom required to increase (hysteresis gap 5%)
             
-            if (fpsDiff > fpsThreshold && _currentQualityIndex < _qualityPresets.Length - 1)
+            if (fpsDiff > reduceThreshold && _currentQualityIndex < _qualityPresets.Length - 1)
             {
                 // FPS too low, reduce quality
                 SetQuality(_currentQualityIndex + 1);
             }
-            else if (fpsDiff < -fpsThreshold && _currentQualityIndex > 0)
+            else if (fpsDiff < -increaseThreshold && _currentQualityIndex > 0)
             {
-                // FPS has headroom, increase quality
+                // FPS has significant headroom, increase quality
                 SetQuality(_currentQualityIndex - 1);
             }
         }
@@ -204,6 +312,7 @@ namespace Cymatic
             if (index == _currentQualityIndex) return;
             
             _currentQualityIndex = index;
+            _lastQualityChangeTime = Time.time;
             ApplyQuality(index);
             OnQualityChanged?.Invoke(index);
             

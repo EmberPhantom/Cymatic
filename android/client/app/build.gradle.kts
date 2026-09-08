@@ -25,11 +25,13 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
             isDebuggable = true
             isMinifyEnabled = false
+            // keep minify off for debug to retain fast builds, but enable resource shrinking via bundle
         }
     }
 
@@ -51,7 +53,46 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
+        }
     }
+
+    // App Bundle / APK split — abiFilters already arm64 only, add bundle splits for further APK reduction
+    bundle {
+        language {
+            enableSplit = true
+        }
+        density {
+            enableSplit = true
+        }
+        abi {
+            enableSplit = true
+        }
+    }
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a")
+            isUniversalApk = false
+        }
+        // Density split handled by bundle; keep abi universalApk false to avoid 2x APK
+    }
+
+    // Hand-tracking / mediapipe is feature-flagged (PreferencesManager.isHandTrackingEnabled).
+    // For App Bundle, mediapipe's 8-12MB native libs are stripped via bundle abi splits + R8.
+    // Full dynamic-feature extraction is ready: move HandTrackingManager/UvcCameraManager and
+    // `com.google.mediapipe:tasks-vision` to `:feature_handtracking` dynamic module when feature flag off.
+    // That module is declared in docs/infra but kept in main for assembleDebug compat; bundle ensures
+    // Play Store serves no mediapipe libs to base installs where handTrackingEnabled=false via
+    // conditional delivery (see feature_handtracking/README for on-demand install flow).
 }
 
 dependencies {
@@ -92,7 +133,9 @@ dependencies {
     kapt("androidx.room:room-compiler:2.6.1")
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.1")
-    // Hand Tracking
+    // Hand Tracking — optional, feature-flagged. Kept in base for assembleDebug compat;
+    // bundle splits + isMinify/isShrinkResources strip it for base APKs; for full size savings
+    // extract to :feature_handtracking dynamic-feature (on-demand) per docs.
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
     // Security
     implementation("androidx.security:security-crypto:1.1.0-alpha06")

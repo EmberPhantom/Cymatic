@@ -7,7 +7,7 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY . .
 
@@ -20,7 +20,7 @@ ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 ENV NEXT_PUBLIC_MINIO_URL=$NEXT_PUBLIC_MINIO_URL
 
 RUN mkdir -p public
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache npm run build
 
 # Production stage
 FROM node:20-alpine AS runner

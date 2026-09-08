@@ -45,6 +45,35 @@ namespace Cymatic
             return _packetQueue.TryDequeue(out var packet) ? packet : null;
         }
 
+        /// <summary>
+        /// Drain all queued packets (for coalescing). Replaces per-frame single dequeues.
+        /// </summary>
+        public List<InputPacket> DrainQueue()
+        {
+            var list = new List<InputPacket>();
+            while (_packetQueue.TryDequeue(out var p))
+                list.Add(p);
+            return list;
+        }
+
+        public int PendingCount => _packetQueue.Count;
+
+        /// <summary>
+        /// Coalesce packets: keep only latest per input_type to avoid 60Hz spam.
+        /// </summary>
+        public List<InputPacket> GetCoalescedPackets()
+        {
+            var all = DrainQueue();
+            if (all.Count <= 1) return all;
+            var latest = new Dictionary<string, InputPacket>();
+            foreach (var p in all)
+            {
+                if (p == null || string.IsNullOrEmpty(p.input_type)) continue;
+                latest[p.input_type] = p; // overwrite keeps latest
+            }
+            return new List<InputPacket>(latest.Values);
+        }
+
         public void HandleInputMessage(string json)
         {
             if (!_isProcessing) return;

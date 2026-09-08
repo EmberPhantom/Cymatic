@@ -345,9 +345,14 @@ namespace Cymatic
             while (_isStreaming)
             {
                 var now = Time.realtimeSinceStartupAsDouble;
-                if (now - _lastFrameTime < _frameInterval)
+                var elapsed = now - _lastFrameTime;
+                if (elapsed < _frameInterval)
                 {
-                    await UniTask.Yield();
+                    // Fixed busy spin: use Delay instead of Yield every frame (was spinning at display refresh)
+                    var remaining = _frameInterval - (float)elapsed;
+                    int delayMs = Mathf.Clamp(Mathf.RoundToInt(remaining * 1000f), 1, 500);
+                    // Use Realtime delay so TimeScale 0 doesn't stall streaming
+                    await UniTask.Delay(delayMs, DelayType.Realtime, PlayerLoopTiming.Update, this.GetCancellationTokenOnDestroy());
                     continue;
                 }
                 
@@ -365,6 +370,8 @@ namespace Cymatic
                 }
                 
                 _framesEncoded++;
+                // Yield to allow frame pacing; if _targetFPS high, loop will Delay next iter
+                await UniTask.Yield(PlayerLoopTiming.Update, this.GetCancellationTokenOnDestroy());
             }
         }
         

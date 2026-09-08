@@ -10,10 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install --prefix=/install -r requirements.txt
 
 COPY --from=shared . ./shared/
-RUN pip install --no-cache-dir --prefix=/install ./shared
+RUN --mount=type=cache,target=/root/.cache/pip pip install --prefix=/install ./shared
 
 # ── Runtime stage ────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -21,7 +21,7 @@ FROM python:3.11-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system app && useradd --system --gid app --create-home app --home-dir /app app
+    && groupadd --system appuser && useradd --system --gid appuser --create-home appuser --home-dir /app appuser
 
 COPY --from=builder /install /usr/local
 
@@ -29,8 +29,8 @@ WORKDIR /app
 
 COPY app/ ./app/
 
-RUN chown -R app:app /app
-USER app
+RUN chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8001
 
@@ -44,10 +44,10 @@ FROM runtime AS test
 USER root
 
 COPY tests/ ./tests/
-RUN pip install --no-cache-dir pytest==8.3.5 pytest-asyncio==0.24.0 pytest-cov httpx
+RUN --mount=type=cache,target=/root/.cache/pip pip install pytest==8.3.5 pytest-asyncio==0.24.0 pytest-cov httpx
 
 ENV PYTHONPATH=/app:/usr/local/lib/python3.11/site-packages
 
-USER app
+USER appuser
 
 CMD ["pytest", "tests/", "-v", "--tb=short"]

@@ -1,10 +1,13 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Cysharp.Threading.Tasks;
 
 namespace Cymatic.Pooling
 {
     /// <summary>
     /// Generic object pool for Unity GameObjects to reduce GC allocations.
+    /// Fixed: expansion no longer checks queue.Count (was infinite expand), now tracks totalSpawned.
+    /// Fixed: 50 instantiates hitch spread across frames.
     /// </summary>
     public class ObjectPool : MonoBehaviour
     {
@@ -20,6 +23,7 @@ namespace Cymatic.Pooling
         
         public List<PoolConfig> pools = new List<PoolConfig>();
         public Dictionary<string, Queue<GameObject>> poolDictionary = new Dictionary<string, Queue<GameObject>>();
+        private Dictionary<string, int> _totalSpawned = new Dictionary<string, int>();
         
         public static ObjectPool Instance { get; private set; }
         
@@ -45,7 +49,9 @@ namespace Cymatic.Pooling
                 var parent = new GameObject($"{pool.tag}_Pool");
                 parent.transform.SetParent(transform);
                 
-                for (int i = 0; i < pool.initialSize; i++)
+                // Spread 50-instantiate hitch: only instantiate min(initialSize, 10) synchronously, remainder async
+                int syncCount = Mathf.Min(pool.initialSize, 10);
+                for (int i = 0; i < syncCount; i++)
                 {
                     var obj = Instantiate(pool.prefab, parent.transform);
                     obj.SetActive(false);
@@ -53,7 +59,36 @@ namespace Cymatic.Pooling
                 }
                 
                 poolDictionary.Add(pool.tag, objectPool);
+                _totalSpawned[pool.tag] = syncCount;
+                // Schedule remaining async to avoid frame hitch
+                if (pool.initialSize > syncCount)
+                {
+                    PrewarmRemainingAsync(pool.tag, pool.initialSize, parent.transform).Forget();
+                }
             }
+        }
+
+        private async UniTaskVoid PrewarmRemainingAsync(string tag, int targetTotal, Transform parent)
+        {
+            var config = pools.Find(p => p.tag == tag);
+            if (config == null || config.prefab == null) return;
+            if (!poolDictionary.TryGetValue(tag, out var queue)) return;
+            int spawned = _totalSpawned.ContainsKey(tag) ? _totalSpawned[tag] : queue.Count;
+            // Spread across frames: 10 per frame
+            while (spawned < targetTotal && spawned < config.maxSize)
+            {
+                int batch = Mathf.Min(10, targetTotal - spawned);
+                for (int i = 0; i < batch; i++)
+                {
+                    var obj = Instantiate(config.prefab, parent);
+                    obj.SetActive(false);
+                    queue.Enqueue(obj);
+                    spawned++;
+                }
+                _totalSpawned[tag] = spawned;
+                await UniTask.Yield(PlayerLoopTiming.Update);
+            }
+            _totalSpawned[tag] = spawned;
         }
         
         /// <summary>
@@ -76,17 +111,20 @@ namespace Cymatic.Pooling
             }
             else
             {
-                // Pool exhausted, check if we can expand
+                // Pool exhausted, check if we can expand - FIX: track totalSpawned, not queue.Count (was 0 < maxSize always -> infinite expand)
                 var config = pools.Find(p => p.tag == tag);
-                if (config != null && config.expandable && objectPool.Count < config.maxSize)
+                int total = _totalSpawned.TryGetValue(tag, out var t) ? t : 0;
+                // Fallback: if not tracked yet, estimate total = queue.Count + active (approx queue + spawned)
+                if (config != null && config.expandable && total < config.maxSize)
                 {
                     var parent = transform.Find($"{tag}_Pool");
                     var obj = Instantiate(config.prefab, parent);
                     objectToSpawn = obj;
+                    _totalSpawned[tag] = total + 1;
                 }
                 else
                 {
-                    Debug.LogWarning($"Pool {tag} exhausted and not expandable.");
+                    Debug.LogWarning($"Pool {tag} exhausted and not expandable (total {total}/{config?.maxSize}).");
                     return null;
                 }
             }
@@ -124,8 +162,15 @@ namespace Cymatic.Pooling
         
         /// <summary>
         /// Pre-warm a pool to a specific size.
+        /// Fixed: checks totalSpawned not queue.Count, spreads across frames to avoid hitch.
         /// </summary>
         public void PrewarmPool(string tag, int count)
+        {
+            // Sync version: for small counts only; large counts should use PrewarmPoolAsync
+            PrewarmPoolAsync(tag, count).Forget();
+        }
+
+        public async UniTask PrewarmPoolAsync(string tag, int count)
         {
             if (!poolDictionary.ContainsKey(tag)) return;
             
@@ -134,12 +179,20 @@ namespace Cymatic.Pooling
             
             var pool = poolDictionary[tag];
             var parent = transform.Find($"{tag}_Pool");
-            
-            while (pool.Count < count && pool.Count < config.maxSize)
+            int total = _totalSpawned.TryGetValue(tag, out var t) ? t : pool.Count;
+            count = Mathf.Min(count, config.maxSize);
+            int batch = 0;
+            while (total < count)
             {
                 var obj = Instantiate(config.prefab, parent);
                 obj.SetActive(false);
                 pool.Enqueue(obj);
+                total++;
+                _totalSpawned[tag] = total;
+                batch++;
+                // Yield every 10 to avoid 50-instantiate hitch
+                if (batch % 10 == 0)
+                    await UniTask.Yield(PlayerLoopTiming.Update);
             }
         }
         
@@ -155,15 +208,24 @@ namespace Cymatic.Pooling
                     Destroy(obj);
                 }
                 poolDictionary[tag].Clear();
+                _totalSpawned[tag] = 0;
             }
         }
         
         /// <summary>
-        /// Get current pool size.
+        /// Get current pool size (queued available).
         /// </summary>
         public int GetPoolSize(string tag)
         {
             return poolDictionary.ContainsKey(tag) ? poolDictionary[tag].Count : 0;
+        }
+
+        /// <summary>
+        /// Get total spawned count (queued + active).
+        /// </summary>
+        public int GetTotalSpawned(string tag)
+        {
+            return _totalSpawned.TryGetValue(tag, out var v) ? v : GetPoolSize(tag);
         }
     }
     

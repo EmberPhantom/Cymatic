@@ -1,10 +1,6 @@
 package com.cymatic.client.ui.vr
 
 import android.content.pm.ActivityInfo
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -14,11 +10,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
-import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -30,26 +26,21 @@ import com.cymatic.client.webrtc.WebRTCManager
 import com.cymatic.client.network.ApiClient
 import com.cymatic.client.network.ApiService
 import com.cymatic.client.network.model.StreamSessionRequest
-import com.cymatic.client.network.model.StreamSessionResponse
 import com.cymatic.client.sensor.SensorFusion
 import com.cymatic.client.input.ControllerManager
 import com.cymatic.client.input.GazeManager
 import com.cymatic.client.audio.AudioManager
 import com.cymatic.client.util.PreferencesManager
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.webrtc.EglBase
-import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
-import org.webrtc.VideoFrame
+import java.net.URLEncoder
 import java.util.concurrent.Executors
 
 @AndroidEntryPoint
-class VRActivity : AppCompatActivity(), SensorEventListener {
+class VRActivity : AppCompatActivity() {
 
-    private lateinit var sensorManager: SensorManager
     private lateinit var sensorFusion: SensorFusion
     private lateinit var gazeManager: GazeManager
     private lateinit var controllerManager: ControllerManager
@@ -76,25 +67,23 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var btnPTT: ImageView
     private lateinit var gazeReticle: ImageView
     
-    // Sensor fusion
+    // Sensor fusion — throttled to 20Hz (was 60Hz at 284)
     private val handler = Handler(Looper.getMainLooper())
     private val sensorRunnable = Runnable { updateSensors() }
     private var lastSensorUpdate = 0L
+    private var lastPoseSendTime = 0L
+    private var lastSentOrientation = FloatArray(4).apply { this[3] = 1f }
     
     // PTT
     private var isRecording = false
     private var audioRecord: AudioRecord? = null
     private val audioExecutor = Executors.newSingleThreadExecutor()
     
-    // Stats
-    private var frameCount = 0
-    private var lastFpsTime = 0L
-    private var currentFps = 0
-    
-    // Thermal monitoring
+    // Thermal monitoring — single schedule guard (311)
     private lateinit var powerManager: PowerManager
     private var thermalMonitorRunnable: Runnable? = null
     private val thermalMonitorHandler = Handler(Looper.getMainLooper())
+    private var isThermalMonitoring = false
     private val THERMAL_THRESHOLD_WARNING = 0.8f
     private val THERMAL_THRESHOLD_CRITICAL = 0.95f
     
@@ -137,12 +126,12 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
         // Setup SurfaceViewRenderer for WebRTC video rendering
         surfaceViewRenderer = findViewById(R.id.surface_view_renderer)
         surfaceViewRenderer?.setZOrderMediaOverlay(true)
-        surfaceViewRenderer?.setEnableHardwareScaler(true)
+        // 142: Disable hardware scaler on low-end — saves 3840 decode + extra blit; use software scale or fixed 1080p
+        surfaceViewRenderer?.setEnableHardwareScaler(false)
         surfaceViewRenderer?.setMirror(false)
     }
     
     private fun initManagers() {
-        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         sensorFusion = SensorFusion(this)
         gazeManager = GazeManager(this)
         controllerManager = ControllerManager(this)
@@ -188,10 +177,8 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
                 }
             },
             onRemoteVideoFrame = { frame ->
-                // Render remote video frame to SurfaceViewRenderer
-                runOnUiThread {
-                    surfaceViewRenderer?.onFrame(frame)
-                }
+                // Render remote video frame — already on correct thread via webrtc; post to UI only if needed
+                surfaceViewRenderer?.onFrame(frame)
             }
         )
         
@@ -204,14 +191,9 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     }
     
     private fun initSensors() {
-        // Register sensor listeners
-        val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        val magnetic = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-        
-        if (accelerometer != null) sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
-        if (gyroscope != null) sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME)
-        if (magnetic != null) sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_GAME)
+        // 206: Removed double registration — SensorFusion is single source at GAME/NORMAL rates.
+        // Previously this registered accel/gyro/mag again at GAME doubling to ~100Hz per sensor.
+        // SensorFusion.start() handles registration; VRActivity just drives pose polling at 20Hz.
     }
     
     private fun startStreamingSession() {
@@ -251,9 +233,20 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     }
     
     private fun connectToRenderServer(sessionId: String) {
-        val baseUrl = preferencesManager.signalingUrl
+        // 253: Sanitize signalingUrl — handle http->ws, trim slashes, encode params to avoid malformed URL
+        val raw = preferencesManager.signalingUrl.trim().trimEnd('/')
+        val baseUrl = when {
+            raw.startsWith("wss://") || raw.startsWith("ws://") -> raw
+            raw.startsWith("https://") -> raw.replaceFirst("https://", "wss://")
+            raw.startsWith("http://") -> raw.replaceFirst("http://", "ws://")
+            raw.isEmpty() -> "ws://10.0.2.2:8000"
+            else -> "ws://$raw"
+        }
         val token = preferencesManager.accessToken ?: ""
-        val signalingUrl = "${baseUrl}/v1/stream/ws/${sessionId}?token=${token}&type=android"
+        val encodedToken = try { URLEncoder.encode(token, "UTF-8") } catch (_: Exception) { token }
+        val encodedSession = try { URLEncoder.encode(sessionId, "UTF-8") } catch (_: Exception) { sessionId }
+        // Ensure no double slash: baseUrl already trimmed
+        val signalingUrl = "${baseUrl}/v1/stream/ws/${encodedSession}?token=${encodedToken}&type=android"
         webRTCManager.connect(signalingUrl, sessionId)
     }
     
@@ -282,36 +275,61 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     }
     
     private fun updateSensors() {
-        val now = System.currentTimeMillis()
-        if (now - lastSensorUpdate >= 16) { // ~60Hz
-            lastSensorUpdate = now
-            
-            // Get fused orientation
-            val orientation = sensorFusion.getOrientation()
-            val position = sensorFusion.getPosition()
-            
-            // Send head pose to render server
+        // 284: Throttled to 20Hz (50ms) vs 60Hz (16ms) — saves 60 head-pose sends/s.
+        // Also delta-suppress: only send if orientation changed > ~0.5deg to reduce websocket churn.
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastSensorUpdate < 50) {
+            handler.postDelayed(sensorRunnable, 50 - (now - lastSensorUpdate))
+            return
+        }
+        lastSensorUpdate = now
+        
+        val orientation = sensorFusion.getOrientation()
+        val position = sensorFusion.getPosition()
+        
+        // Delta check via quaternion dot (avoid spamming identical poses)
+        if (shouldSendPose(orientation, now)) {
             webRTCManager.sendHeadPose(position, orientation)
-            
-            // Update gaze
-            val gazeDirection = sensorFusion.getForwardVector()
-            gazeManager.update(gazeDirection)
-            
-            // Update reticle position
-            runOnUiThread {
-                val reticlePos = gazeManager.getReticlePosition()
-                gazeReticle.x = reticlePos.x
-                gazeReticle.y = reticlePos.y
-            }
+            lastSentOrientation = orientation.copyOf()
+            lastPoseSendTime = now
         }
         
-        handler.postDelayed(sensorRunnable, 16)
+        // Update gaze at same throttled rate — dt = 0.05 for dwell calc
+        val gazeDirection = sensorFusion.getForwardVector()
+        gazeManager.update(gazeDirection, 0.05f)
+        
+        // Update reticle position on UI thread coalesced
+        val reticlePos = gazeManager.getReticlePosition()
+        gazeReticle.x = reticlePos.x
+        gazeReticle.y = reticlePos.y
+        gazeReticle.visibility = View.VISIBLE
+        
+        handler.postDelayed(sensorRunnable, 50)
+    }
+
+    private fun shouldSendPose(orientation: FloatArray, now: Long): Boolean {
+        if (now - lastPoseSendTime > 200) return true // keepalive every 200ms even if static
+        // quaternion dot product close to 1 => almost identical
+        val dot = (orientation[0]*lastSentOrientation[0] + orientation[1]*lastSentOrientation[1] +
+                orientation[2]*lastSentOrientation[2] + orientation[3]*lastSentOrientation[3]).let { kotlin.math.abs(it) }
+        // dot > 0.99996 ~ <0.5deg change => suppress
+        return dot < 0.99996f
     }
     
-    // Thermal monitoring
+    // Thermal monitoring — guarded single schedule (311)
     private fun startThermalMonitoring() {
-        thermalMonitorRunnable = Runnable { checkThermalState() }
-        thermalMonitorHandler.postDelayed(thermalMonitorRunnable!!, 5000) // Check every 5 seconds
+        if (isThermalMonitoring) return
+        isThermalMonitoring = true
+        if (thermalMonitorRunnable == null) {
+            thermalMonitorRunnable = Runnable { checkThermalState() }
+        }
+        thermalMonitorHandler.removeCallbacks(thermalMonitorRunnable!!)
+        thermalMonitorHandler.postDelayed(thermalMonitorRunnable!!, 5000)
+    }
+
+    private fun stopThermalMonitoring() {
+        isThermalMonitoring = false
+        thermalMonitorRunnable?.let { thermalMonitorHandler.removeCallbacks(it) }
     }
     
     private fun checkThermalState() {
@@ -328,28 +346,28 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
                 else -> 0.0f
             }
             
-            // Update thermal UI
             runOnUiThread {
                 thermalText.text = "Thermal: ${(thermalLevel * 100).toInt()}%"
                 
                 if (thermalLevel >= THERMAL_THRESHOLD_CRITICAL) {
-                    thermalText.setTextColor(0xFFF44336.toInt()) // Red
+                    thermalText.setTextColor(0xFFF44336.toInt())
                     showThermalWarning("Critical thermal state - performance may be reduced")
                 } else if (thermalLevel >= THERMAL_THRESHOLD_WARNING) {
-                    thermalText.setTextColor(0xFFF44336.toInt()) // Orange/Red
+                    thermalText.setTextColor(0xFFF44336.toInt())
                 } else {
-                    thermalText.setTextColor(0xFF4CAF50.toInt()) // Green
+                    thermalText.setTextColor(0xFF4CAF50.toInt())
                 }
             }
             
-            // Auto-reduce quality if thermal state is severe
             if (thermalLevel >= THERMAL_THRESHOLD_CRITICAL) {
                 reduceStreamingQuality()
             }
         }
         
-        // Schedule next check
-        thermalMonitorHandler.postDelayed(thermalMonitorRunnable!!, 5000)
+        // 311: Only reschedule if still monitoring — avoids double schedule on recreate
+        if (isThermalMonitoring) {
+            thermalMonitorHandler.postDelayed(thermalMonitorRunnable!!, 5000)
+        }
     }
     
     private fun showThermalWarning(message: String) {
@@ -358,7 +376,6 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun reduceStreamingQuality() {
-        // Signal to WebRTC manager to reduce bitrate/resolution
         webRTCManager.reduceQuality()
     }
     
@@ -401,23 +418,17 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
         isRecording = false
         btnPTT.setImageResource(R.drawable.ic_mic)
         
-        audioRecord?.stop()
-        audioRecord?.release()
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
-    }
-    
-    override fun onSensorChanged(event: SensorEvent) {
-        sensorFusion.onSensorChanged(event)
-    }
-    
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        sensorFusion.onAccuracyChanged(sensor!!, accuracy)
     }
     
     override fun onResume() {
         super.onResume()
         sensorFusion.onResume()
+        handler.removeCallbacks(sensorRunnable)
         handler.post(sensorRunnable)
+        startThermalMonitoring()
         
         if (isStreaming) {
             webRTCManager.resume()
@@ -428,6 +439,7 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
         super.onPause()
         sensorFusion.onPause()
         handler.removeCallbacks(sensorRunnable)
+        stopThermalMonitoring()
         
         if (isStreaming) {
             webRTCManager.pause()
@@ -437,7 +449,7 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(sensorRunnable)
-        sensorManager.unregisterListener(this)
+        stopThermalMonitoring()
         
         if (isStreaming) {
             stopStreaming()
@@ -445,7 +457,7 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
         
         webRTCManager.dispose()
         audioManager.dispose()
-        eglBase?.dispose()
-        audioExecutor.shutdown()
+        try { eglBase?.release() } catch (_: Exception) {}
+        audioExecutor.shutdownNow()
     }
 }

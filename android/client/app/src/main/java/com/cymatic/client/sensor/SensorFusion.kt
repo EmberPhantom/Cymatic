@@ -5,48 +5,43 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.opengl.Matrix
-import kotlinx.coroutines.Dispatchers
 import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.copysign
 import kotlin.math.sqrt
-import kotlin.math.PI
 
 class SensorFusion(private val context: Context) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     
-    // Sensors
+    // Sensors — only register fused vector + low-rate magnetometer to save thermal/CPU
     private val rotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
     private val magnetic = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-    private val gravity = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
-    private val linearAcceleration = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val gameRotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
     
     // State
     private var orientation = FloatArray(4) // Quaternion [x, y, z, w]
     private var angularVelocity = FloatArray(3)
     private var linearAccel = FloatArray(3)
-    private var magneticField = FloatArray(3)
     private var position = FloatArray(3)
     private var velocity = FloatArray(3)
     
     // Kalman filter state for orientation (quaternion)
     private var orientationKF = KalmanFilterQuaternion()
     
-    // Kalman filter state for position (3D)
+    // Kalman filter state for position (3D) — low-end: disabled by default, high drift risk
     private var positionKF = KalmanFilterPosition3D()
     
-    // Gravity vector for reference
+    // Gravity / geomagnetic reference (low-rate)
     private var gravityVector = FloatArray(3)
     private var geomagneticVector = FloatArray(3)
     
-    // Filters
-    private var lastTimestamp = 0L
+    // Per-sensor timestamps — fixes shared lastTimestamp drift (134)
+    private var lastOrientationTimestamp = 0L
+    private var lastPositionTimestamp = 0L
     private var isRunning = false
     private var firstOrientation = true
     
@@ -66,6 +61,7 @@ class SensorFusion(private val context: Context) : SensorEventListener {
     }
     
     fun onResume() {
+        if (!isRunning) return
         registerSensors()
     }
     
@@ -74,16 +70,24 @@ class SensorFusion(private val context: Context) : SensorEventListener {
     }
     
     private fun registerSensors() {
-        // Use game rotation vector if available (no magnetic interference) - SENSOR_DELAY_GAME (50Hz) for thermal headroom
+        // Thermal-aware: gameRotationVector already fuses accel+gyro at 50Hz.
+        // Register ONLY fused vector at GAME (50Hz) + magnetometer at NORMAL (5Hz) when available.
+        // Avoids 4 sensors * 50Hz = 200Hz events (≈5% CPU thermal).
         if (gameRotationVector != null) {
             sensorManager.registerListener(this, gameRotationVector, SensorManager.SENSOR_DELAY_GAME)
-            // gameRotationVector already fuses accel+gyro, only magnetometer needed for heading
-            if (magnetic != null) sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_GAME)
+            magnetic?.let {
+                sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+            }
+        } else if (rotationVector != null) {
+            sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_GAME)
+            magnetic?.let {
+                sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+            }
         } else {
-            if (rotationVector != null) sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_GAME)
-            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
-            sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME)
-            if (magnetic != null) sensorManager.registerListener(this, magnetic, SensorManager.SENSOR_DELAY_GAME)
+            // Fallback only when no fused vector: accel+gyro at GAME, mag at NORMAL
+            accelerometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+            gyroscope?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+            magnetic?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
         }
         
         // Initialize Kalman filters
@@ -91,6 +95,8 @@ class SensorFusion(private val context: Context) : SensorEventListener {
         positionKF = KalmanFilterPosition3D()
         
         firstOrientation = true
+        lastOrientationTimestamp = 0L
+        lastPositionTimestamp = 0L
     }
     
     private fun unregisterSensors() {
@@ -104,55 +110,77 @@ class SensorFusion(private val context: Context) : SensorEventListener {
                 val q = FloatArray(4)
                 SensorManager.getQuaternionFromVector(q, event.values)
                 
-                // Apply Kalman filter to orientation
-                val dt = if (lastTimestamp > 0) (event.timestamp - lastTimestamp) / 1_000_000_000.0 else 0.016
-                lastTimestamp = event.timestamp
+                // Per-sensor dt — not shared with position path
+                val dt = if (lastOrientationTimestamp > 0) (event.timestamp - lastOrientationTimestamp) / 1_000_000_000.0 else 0.016
+                lastOrientationTimestamp = event.timestamp
                 
+                // Clamp dt to avoid jumps after pause/resume causing large integration
+                val clampedDt = dt.coerceIn(0.001, 0.05)
                 if (firstOrientation) {
                     orientation = q.copyOf()
                     orientationKF.initialize(q)
                     firstOrientation = false
                 } else {
-                    orientation = orientationKF.update(q, dt)
+                    orientation = orientationKF.update(q, clampedDt)
                 }
             }
             Sensor.TYPE_GYROSCOPE -> {
                 angularVelocity = event.values.copyOf()
-                // Angular velocity used for orientation prediction in Kalman filter
             }
             Sensor.TYPE_LINEAR_ACCELERATION -> {
                 linearAccel = event.values.copyOf()
                 updatePosition(event.timestamp)
             }
             Sensor.TYPE_ACCELEROMETER -> {
-                // Store gravity vector for reference
-                if (gravity == null) {
+                // Keep gravity reference at low rate if no fused vector
+                if (gameRotationVector == null && rotationVector == null) {
                     gravityVector = event.values.copyOf()
                 }
             }
             Sensor.TYPE_MAGNETIC_FIELD -> {
                 geomagneticVector = event.values.copyOf()
-                // Update heading correction in Kalman filter
             }
         }
     }
     
     private fun updatePosition(timestamp: Long) {
-        if (lastTimestamp == 0L) {
-            lastTimestamp = timestamp
+        if (lastPositionTimestamp == 0L) {
+            lastPositionTimestamp = timestamp
             return
         }
         
-        val dt = (timestamp - lastTimestamp) / 1_000_000_000.0
-        lastTimestamp = timestamp
+        val rawDt = (timestamp - lastPositionTimestamp) / 1_000_000_000.0
+        lastPositionTimestamp = timestamp
+        // Drop large gaps (pause/resume) to prevent integration explosion
+        if (rawDt <= 0 || rawDt > 0.1) return
+        val dt = rawDt.coerceIn(0.001, 0.05)
         
-        // Use Kalman filter for position estimation
+        // Drift mitigation: ignore position integration on low-end phone VR.
+        // For MVP we track only orientation; position is optional and heavily damped.
+        // Apply dead-zone on linear accel magnitude and zero-velocity update.
+        val accelMag = sqrt(linearAccel[0]*linearAccel[0] + linearAccel[1]*linearAccel[1] + linearAccel[2]*linearAccel[2])
+        val isStatic = accelMag < 0.15f // 0.15 m/s² noise floor for phone IMU
+        if (isStatic) {
+            // Zero-velocity update: decay velocity aggressively when device static
+            for (i in 0..2) velocity[i] *= 0.5f
+            if (sqrt(velocity[0]*velocity[0] + velocity[1]*velocity[1] + velocity[2]*velocity[2]) < 0.01f) {
+                velocity[0] = 0f; velocity[1] = 0f; velocity[2] = 0f
+            }
+            return
+        }
+        
+        // Use Kalman filter for position estimation with clamping
         position = positionKF.update(linearAccel, dt)
         velocity = positionKF.getVelocity()
+        // Hard clamp position to avoid runaway drift (phone has no position tracking)
+        for (i in 0..2) {
+            position[i] = position[i].coerceIn(-5f, 5f)
+            velocity[i] = velocity[i].coerceIn(-2f, 2f)
+        }
     }
     
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // Handle accuracy changes if needed
+        // No-op: avoid extra work
     }
     
     // Getters
@@ -180,7 +208,7 @@ class SensorFusion(private val context: Context) : SensorEventListener {
     fun getOrientationMatrix(): FloatArray {
         val m = FloatArray(16)
         val q = orientation
-        val qx = q[0], qy = q[1], qz = q[2], qw = q[3]
+        val qx = q[0]; val qy = q[1]; val qz = q[2]; val qw = q[3]
         
         m[0] = 1 - 2 * (qy * qy + qz * qz)
         m[1] = 2 * (qx * qy + qw * qz)
@@ -260,57 +288,42 @@ class KalmanFilterQuaternion {
             return state
         }
         
-        // Prediction step: integrate angular velocity (if available)
-        // For simplicity, we assume state doesn't change significantly in dt
-        // x = x (no control input)
-        
-        // Covariance prediction: P = F * P * F^T + Q
-        // F = identity for quaternion (no change without angular velocity input)
-        // P = P + Q
+        // Covariance prediction: P = P + Q
         predictCovariance()
         
-        // Update step
-        // Innovation: y = z - h(x) = z - x (measurement is quaternion)
+        // Innovation: y = z - x
         val innovation = FloatArray(4)
         for (i in 0..3) innovation[i] = measurement[i] - state[i]
         
-        // Normalize innovation (quaternion difference)
+        // Normalize innovation
         val innovationNorm = sqrt(innovation[0]*innovation[0] + innovation[1]*innovation[1] + 
                                  innovation[2]*innovation[2] + innovation[3]*innovation[3])
-        if (innovationNorm > 0.001) { // Significant difference
-            // Kalman gain: K = P * H^T * (H * P * H^T + R)^-1
-            // H = identity
-            // S = P + R
+        if (innovationNorm > 0.001) {
             val S = FloatArray(16)
             for (i in 0..15) S[i] = covariance[i] + measurementNoise[i]
             
-            // K = P * S^-1 (simplified: K = P / (P + R) for diagonal)
             val K = FloatArray(16)
             for (i in 0..3) {
                 val idx = i * 5
-                K[idx] = covariance[idx] / S[idx]
+                K[idx] = covariance[idx] / S[idx].coerceAtLeast(1e-6f)
             }
             
-            // Update state: x = x + K * innovation
             for (i in 0..3) {
                 state[i] += K[i * 5] * innovation[i]
             }
             
-            // Update covariance: P = (I - K) * P
             for (i in 0..3) {
                 val idx = i * 5
                 covariance[idx] = (1 - K[idx]) * covariance[idx]
             }
         }
         
-        // Normalize quaternion
         normalizeQuaternion(state)
         
         return state
     }
     
     private fun predictCovariance() {
-        // P = P + Q (F = I)
         for (i in 0..15) {
             covariance[i] += processNoise[i]
         }
@@ -318,41 +331,33 @@ class KalmanFilterQuaternion {
     
     private fun normalizeQuaternion(q: FloatArray) {
         val norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3])
-        if (norm > 0) {
+        if (norm > 1e-6f) {
             for (i in 0..3) q[i] /= norm
         }
     }
 }
 
-// Kalman Filter for 3D Position
+// Kalman Filter for 3D Position — damped to prevent drift (362)
 class KalmanFilterPosition3D {
     private var position = FloatArray(3) // x, y, z
     private var velocity = FloatArray(3) // vx, vy, vz
     private var covariance = FloatArray(36) // 6x6 covariance [pos, vel]
     private var processNoise = FloatArray(36)
-    private var measurementNoise = FloatArray(9) // 3x3 for position measurement
     private var initialized = false
     
     init {
-        // Process noise: position gets small noise, velocity gets larger
         for (i in 0..5) {
             for (j in 0..5) {
                 processNoise[i * 6 + j] = if (i == j) {
-                    if (i < 3) 0.01f else 0.1f // position vs velocity noise
+                    if (i < 3) 0.01f else 0.1f
                 } else 0f
             }
         }
         
-        // Measurement noise for position
-        for (i in 0..8) {
-            measurementNoise[i] = if (i % 4 == 0) 0.1f else 0f // 10cm position noise
-        }
-        
-        // Initial covariance
         for (i in 0..5) {
             for (j in 0..5) {
                 covariance[i * 6 + j] = if (i == j) {
-                    if (i < 3) 1.0f else 10.0f // Higher uncertainty in velocity
+                    if (i < 3) 1.0f else 10.0f
                 } else 0f
             }
         }
@@ -365,18 +370,23 @@ class KalmanFilterPosition3D {
             initialized = true
             return position
         }
-        
-        // Prediction step
+        // Leaky integration with drift guard (362)
         for (i in 0..2) {
-            position[i] = position[i] + velocity[i] * dtf + 0.5f * acceleration[i] * dtf * dtf
-            velocity[i] = (velocity[i] + acceleration[i] * dtf) * 0.98f // damp to limit drift (no position measurement)
+            // High-pass: ignore tiny accel
+            val a = if (abs(acceleration[i]) < 0.12f) 0f else acceleration[i]
+            position[i] = position[i] + velocity[i] * dtf + 0.5f * a * dtf * dtf
+            // Velocity decay 0.92 (was 0.98) to limit runaway; extra damping when static
+            velocity[i] = (velocity[i] + a * dtf) * 0.92f
+            // Zero-velocity clamp
+            if (abs(velocity[i]) < 0.005f) velocity[i] = 0f
+        }
+        // Slow position leak to zero for phone VR (no positional tracking)
+        for (i in 0..2) position[i] *= 0.995f
+        if (sqrt(position[0]*position[0]+position[1]*position[1]+position[2]*position[2]) < 0.005f) {
+            position[0]=0f; position[1]=0f; position[2]=0f
         }
         
-        // Covariance prediction: P = F * P * F^T + Q
         predictCovariance(dtf)
-        
-        // Note: We don't have direct position measurement, so no update step
-        // In a real implementation, you'd fuse with GPS/visual odometry here
         
         return position
     }
@@ -384,28 +394,18 @@ class KalmanFilterPosition3D {
     fun getVelocity(): FloatArray = velocity.copyOf()
     
     private fun predictCovariance(dtf: Float) {
-        // F matrix for constant velocity model:
-        // [ I  dt*I ]
-        // [ 0   I   ]
-        // P = F * P * F^T + Q
-        
         val newCov = FloatArray(36)
         
-        // Position-position block: P_pp + dt*(P_pv + P_vp) + dt^2*P_vv + Q_pp
         for (i in 0..2) {
             for (j in 0..2) {
                 var sum = covariance[i*6 + j]
-                // dt * (P_pv + P_vp)
                 sum += dtf * (covariance[i*6 + 3 + j] + covariance[(3+i)*6 + j])
-                // dt^2 * P_vv
                 sum += dtf * dtf * covariance[(3+i)*6 + 3 + j]
-                // Process noise
                 sum += processNoise[i*6 + j]
                 newCov[i*6 + j] = sum
             }
         }
         
-        // Position-velocity block: P_pv + dt*P_vv + Q_pv
         for (i in 0..2) {
             for (j in 0..2) {
                 var sum = covariance[i*6 + 3 + j]
@@ -415,14 +415,12 @@ class KalmanFilterPosition3D {
             }
         }
         
-        // Velocity-position block (symmetric)
         for (i in 0..2) {
             for (j in 0..2) {
                 newCov[(3+i)*6 + j] = newCov[i*6 + 3 + j]
             }
         }
         
-        // Velocity-velocity block: P_vv + Q_vv
         for (i in 0..2) {
             for (j in 0..2) {
                 newCov[(3+i)*6 + 3 + j] = covariance[(3+i)*6 + 3 + j] + processNoise[(3+i)*6 + 3 + j]

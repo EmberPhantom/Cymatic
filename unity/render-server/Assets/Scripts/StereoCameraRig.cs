@@ -33,8 +33,8 @@ namespace Cymatic
         private Quaternion _headRotation = Quaternion.identity;
         private Vector3 _smoothedPosition = Vector3.zero;
         private Quaternion _smoothedRotation = Quaternion.identity;
-        [SerializeField] private float _positionSmoothing = 10f;
-        [SerializeField] private float _rotationSmoothing = 15f;
+        [SerializeField] private float _positionSmoothing = 30f;
+        [SerializeField] private float _rotationSmoothing = 45f;
 
         // P0: cached material for blit (avoid per-frame alloc)
         private Material _blitMaterial;

@@ -72,8 +72,9 @@ namespace Cymatic.Editor
             light.type = LightType.Directional;
             light.intensity = 1f;
             light.color = new Color(1f, 0.95f, 0.85f); // Warm
-            light.shadows = LightShadows.Soft;
-            light.shadowStrength = 1f;
+            light.shadows = LightShadows.None; // MVP baked lighting, no realtime shadows
+            light.lightmapBakeType = LightmapBakeType.Baked;
+            light.shadowStrength = 0f;
             light.transform.rotation = Quaternion.Euler(50, -30, 0);
             
             // Ambient
