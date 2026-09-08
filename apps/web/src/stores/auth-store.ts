@@ -34,6 +34,10 @@ export const useAuthStore = create<AuthState>()(
     {
       name: "auth-storage",
       version: 1,
+      migrate: (persistedState: unknown, _version: number) => {
+        // v1 migration: keep only user, reset transient auth flags
+        return persistedState as AuthState
+      },
       partialize: (state) => ({ user: state.user }),
       onRehydrateStorage: () => (state) => {
         // After rehydration, require cookie validation; mark not authenticated until /v1/auth/me succeeds

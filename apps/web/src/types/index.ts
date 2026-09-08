@@ -68,6 +68,7 @@ export interface JobStatus {
   message?: string
   result?: Record<string, any>
   error?: string
+  progress?: number
 }
 
 export interface GenerationRun {

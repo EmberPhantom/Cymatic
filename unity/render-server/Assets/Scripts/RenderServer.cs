@@ -227,6 +227,9 @@ namespace Cymatic
             Debug.Log("[RenderServer] Streaming stopped");
         }
 
+        private float _lastInputSendTime;
+        private const float InputSendInterval = 0.05f; // 20Hz coalesce (was 60Hz per-frame spam)
+
         // P0 FIX: WebRTCStreamer OnIceCandidate NRE - provide helper to route candidate to signaling/event bridge
         public void SendIceCandidate(Unity.WebRTC.RTCIceCandidate candidate)
         {
@@ -257,14 +260,26 @@ namespace Cymatic
         {
             if (!_isStreaming) return;
             
-            // Process input
-            var inputPacket = _inputManager.GetInputPacket();
-            if (inputPacket != null)
+            // Process input - coalesce to 20Hz instead of 60Hz per-frame spam; keep only latest per type
+            if (Time.time - _lastInputSendTime >= InputSendInterval)
             {
-                _signalingClient.SendInput(_currentSessionId, inputPacket);
+                var coalesced = _inputManager.GetCoalescedPackets();
+                if (coalesced.Count > 0)
+                {
+                    foreach (var pkt in coalesced)
+                    {
+                        _signalingClient.SendInput(_currentSessionId, pkt);
+                    }
+                    _lastInputSendTime = Time.time;
+                }
+                else if (_inputManager.PendingCount > 0)
+                {
+                    // Fallback drain unlikely (GetCoalescedPackets already drains)
+                    var single = _inputManager.GetInputPacket();
+                    if (single != null) _signalingClient.SendInput(_currentSessionId, single);
+                }
             }
-            
-            // Update stereo rig with head pose
+            // Still update head pose every frame for low latency (ring already has smoothed pose)
             if (_inputManager.HasHeadPose)
             {
                 _stereoRig.UpdateHeadPose(_inputManager.HeadPosition, _inputManager.HeadRotation);

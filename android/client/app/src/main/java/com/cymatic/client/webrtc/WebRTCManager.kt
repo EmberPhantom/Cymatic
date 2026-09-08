@@ -7,7 +7,6 @@ import com.cymatic.client.network.model.InputPacket
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
 import org.webrtc.*
 import java.util.concurrent.Executors
 
@@ -16,14 +15,21 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     private val scope = CoroutineScope(Dispatchers.IO)
     private val factory: PeerConnectionFactory
     private var peerConnection: PeerConnection? = null
-    private var localVideoTrack: VideoTrack? = null
     private var audioTrack: AudioTrack? = null
-    private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
     private val cachedInputManager = InputManager()
     
     private var signalingClient: SignalingClient? = null
     private var currentSessionId: String? = null
+    
+    // Bitrate delta state (285)
+    private var lastBytesReceived = -1L
+    private var lastBitrateCalcTimeMs = 0L
+    private var lastBitrateKbps = 0
+
+    // Audio send throttling (233) — avoid log spam per 20ms chunk
+    private var audioSendCount = 0
+    private var lastAudioLogMs = 0L
     
     // Callbacks
     private var onConnected: ((String) -> Unit)? = null
@@ -36,14 +42,14 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     private val statsExecutor = Executors.newSingleThreadScheduledExecutor()
     private var statsJob: java.util.concurrent.ScheduledFuture<*>? = null
     
-    // Input channel
-    private val inputChannel = Channel<InputPacket>(100)
+    // Input channel — bounded to avoid backpressure on low-end
+    private val inputChannel = Channel<InputPacket>(10)
     
     init {
-        // Initialize WebRTC
+        // Initialize WebRTC — tracer disabled for perf
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(context)
-                .setEnableInternalTracer(true)
+                .setEnableInternalTracer(false)
                 .createInitializationOptions()
         )
         
@@ -71,6 +77,9 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     
     fun connect(signalingUrl: String, sessionId: String) {
         currentSessionId = sessionId
+        lastBytesReceived = -1L
+        lastBitrateCalcTimeMs = 0L
+        lastBitrateKbps = 0
         
         // Create peer connection
         createPeerConnection()
@@ -105,13 +114,14 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     }
     
     private fun createPeerConnection() {
-        val configuration = PeerConnection.RTCConfiguration().apply {
-            iceServers = listOf(
-                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
-            )
+        // 107 STUN LAN: Local LAN streaming should not require internet STUN (adds DNS + gathering delay).
+        // For MVP over LAN, use no STUN; host candidates suffice. WAN fallback can add STUN via config.
+        val configuration = PeerConnection.RTCConfiguration(emptyList<PeerConnection.IceServer>()).apply {
+            iceServers = emptyList<PeerConnection.IceServer>()
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             bundlePolicy = PeerConnection.BundlePolicy.MAX_BUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            // Prefer low latency: host candidates only via empty iceServers (LAN)
         }
         
         val constraints = MediaConstraints()
@@ -129,12 +139,10 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             }
             
             override fun onAddTrack(rtpReceiver: RtpReceiver, mediaStreams: Array<MediaStream>) {
-                if (rtpReceiver.track().kind() == "video") {
-                    rtpReceiver.track().addSink(object : VideoSink {
-                        override fun onFrame(frame: VideoFrame) {
-                            onRemoteVideoFrame?.invoke(frame)
-                        }
-                    })
+                if (rtpReceiver.track()?.kind() == "video") {
+                    rtpReceiver.track()?.addSink { frame ->
+                        onRemoteVideoFrame?.invoke(frame)
+                    }
                 }
             }
             
@@ -149,16 +157,32 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                         stopStatsCollection()
                         onDisconnected?.invoke("Connection state: $newState")
                     }
+                    else -> {}
                 }
             }
+            override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {}
+            override fun onSignalingChange(newState: PeerConnection.SignalingState) {}
+            override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {}
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+            override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {}
+            override fun onAddStream(stream: MediaStream) {}
+            override fun onRemoveStream(stream: MediaStream) {}
+            override fun onDataChannel(channel: DataChannel) {}
+            override fun onRenegotiationNeeded() {}
         })
         
-        // Create audio track
-        audioSource = factory.createAudioSource(MediaConstraints())
+        // Create audio track — mono for low-end (send only when PTT, not always)
+        audioSource = factory.createAudioSource(MediaConstraints().apply {
+            // Disable echo cancellation heavy processing on low-end? Keep but low cost
+            mandatory.add(MediaConstraints.KeyValuePair("echoCancellation", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("noiseSuppression", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("autoGainControl", "true"))
+        })
         audioTrack = factory.createAudioTrack("audio", audioSource)
+        // Do NOT add audio track until needed — 233 audio send: creating always wastes encoder/CPU.
+        // Keep created but set enabled false to avoid sending silence.
+        audioTrack?.setEnabled(false)
         audioTrack?.let { track -> peerConnection?.addTrack(track, listOf("stream")) }
-        
-        // Video track will be created from remote stream
     }
     
     private fun handleOffer(sdp: String) {
@@ -228,15 +252,28 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             position = position,
             rotation = rotation
         )
-        // Send head pose as input via signaling - reuse cached singleton
         val packet = cachedInputManager.createInputPacket(input, FloatArray(3))
         signalingClient?.sendInput(packet)
     }
     
     fun sendAudioData(data: ByteArray) {
-        // Send audio data through the audio track
-        // For now, log it - real implementation would encode and send via data channel
-        Log.d("WebRTC", "Audio data sent: ${data.size} bytes")
+        // 233 audio send: previously logged per 20ms chunk (50 logs/s) and blocked with no throttling.
+        // Now: enable track only when actually sending, throttle logs.
+        audioTrack?.setEnabled(true)
+        audioSendCount++
+        val now = System.currentTimeMillis()
+        if (now - lastAudioLogMs > 2000) {
+            Log.d("WebRTC", "Audio send active: bytes=${data.size} chunks=$audioSendCount")
+            lastAudioLogMs = now
+            audioSendCount = 0
+        }
+        // Real impl: push to audioSource or data channel. For MVP, routing via signaling is avoided for perf;
+        // keep cap to avoid flooding: coalesce or drop if backpressure.
+        // Signaling path for voice is handled by VoiceManager batching, not per-chunk here.
+    }
+
+    fun notifyAudioStop() {
+        audioTrack?.setEnabled(false)
     }
     
     fun sendInput(input: InputPacket) {
@@ -245,49 +282,55 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     
     fun resume() {
         peerConnection?.let { /* resume */ }
+        audioTrack?.setEnabled(false) // resume muted until PTT
     }
     
     fun pause() {
         peerConnection?.let { /* pause */ }
+        audioTrack?.setEnabled(false)
     }
     
     fun disconnect() {
         stopStatsCollection()
         signalingClient?.disconnect()
-        peerConnection?.close()
+        try { peerConnection?.close() } catch (_: Exception) {}
         peerConnection = null
         currentSessionId = null
+        audioTrack?.setEnabled(false)
     }
     
     fun reduceQuality() {
-        // Reduce video encoding bitrate and resolution
-        peerConnection?.getSenders()?.firstOrNull()?.let { sender ->
-            val parameters = sender.getParameters()
-            parameters.encodings[0].maxBitrate = 5_000_000 // Reduce to 5 Mbps
-            parameters.encodings[0].scaleResolutionDownBy = 2.0 // Reduce resolution by half
-            sender.setParameters(parameters)
+        // Guard: getSenders may be empty if remote-only; check encodings size
+        peerConnection?.getSenders()?.forEach { sender ->
+            try {
+                val params = sender.parameters
+                if (params.encodings.isNotEmpty()) {
+                    // 1.5 Mbps for thermal-low-end (was 5Mbps)
+                    @Suppress("DEPRECATION")
+                    params.encodings[0].maxBitrate = 1_500_000
+                    params.encodings[0].scaleResolutionDownBy = 2.0
+                    sender.parameters = params
+                }
+            } catch (e: Exception) {
+                Log.w("WebRTC", "reduceQuality failed", e)
+            }
         }
-        
-        // Also reduce target FPS
-        val constraints = MediaConstraints()
-        constraints.mandatory.add(MediaConstraints.KeyValuePair("maxFrameRate", "15"))
-        peerConnection?.setLocalDescription(
-            object : SdpObserver {
-                override fun onCreateSuccess(desc: SessionDescription?) {}
-                override fun onSetSuccess() {}
-                override fun onCreateFailure(error: String) {}
-                override fun onSetFailure(error: String) {}
-            },
-            peerConnection?.localDescription
-        )
     }
     
     fun dispose() {
         disconnect()
-        factory.dispose()
+        try { audioTrack?.dispose() } catch (_: Exception) {}
+        try { audioSource?.dispose() } catch (_: Exception) {}
+        try { factory.dispose() } catch (_: Exception) {}
+        try { inputChannel.close() } catch (_: Exception) {}
+        try { statsExecutor.shutdownNow() } catch (_: Exception) {}
     }
     
     private fun startStatsCollection() {
+        // Throttle to 2s vs 1s to halve CPU on low-end
+        if (statsJob != null) return
+        lastBytesReceived = -1L
+        lastBitrateCalcTimeMs = System.currentTimeMillis()
         statsJob = statsExecutor.scheduleAtFixedRate({
             try {
                 peerConnection?.getStats { report ->
@@ -295,7 +338,6 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                     onStats?.invoke(stats)
                 }
             } catch (_: Exception) {
-                // fallback for older API
                 try {
                     @Suppress("DEPRECATION")
                     peerConnection?.getStats(object : StatsObserver {
@@ -306,7 +348,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                     })
                 } catch (_: Exception) {}
             }
-        }, 0, 1, java.util.concurrent.TimeUnit.SECONDS)
+        }, 0, 2, java.util.concurrent.TimeUnit.SECONDS)
     }
     
     private fun stopStatsCollection() {
@@ -318,28 +360,43 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     private fun parseStats(report: StatsReport): StreamStats {
         var fps = 0
         var latencyMs = 0
-        var bitrateKbps = 0
         var packetsLost = 0
         var packetsReceived = 0
+        var bitrateKbpsLocal = lastBitrateKbps
         for (stat in report) {
             when (stat.type) {
                 StatsReport.Type.INBOUND_RTP -> {
                     (stat.getValue("framesPerSecond") as? Number)?.let { fps = it.toInt() }
                     (stat.getValue("roundTripTime") as? Number)?.let { latencyMs = (it.toDouble() * 1000).toInt() }
-                    (stat.getValue("bitrate") as? Number)?.let { bitrateKbps = (it.toInt() / 1000) }
                     (stat.getValue("packetsLost") as? Number)?.let { packetsLost = it.toInt() }
                     (stat.getValue("packetsReceived") as? Number)?.let { packetsReceived = it.toInt() }
+                    // 285: bitrate cumulative bug — bytesReceived is total, not rate. Use delta.
+                    (stat.getValue("bytesReceived") as? Number)?.let { bytesVal ->
+                        val bytes = bytesVal.toLong()
+                        val now = System.currentTimeMillis()
+                        if (lastBytesReceived >= 0 && lastBitrateCalcTimeMs > 0) {
+                            val deltaBytes = (bytes - lastBytesReceived).coerceAtLeast(0)
+                            val deltaMs = (now - lastBitrateCalcTimeMs).coerceAtLeast(1)
+                            bitrateKbpsLocal = ((deltaBytes * 8L * 1000L) / deltaMs / 1000L).toInt()
+                            lastBitrateKbps = bitrateKbpsLocal
+                        }
+                        lastBytesReceived = bytes
+                        lastBitrateCalcTimeMs = now
+                    }
                 }
                 StatsReport.Type.REMOTE_INBOUND_RTP -> {
                     (stat.getValue("roundTripTime") as? Number)?.let { latencyMs = (it.toDouble() * 1000).toInt() }
                 }
+                else -> {}
             }
         }
-        return StreamStats(fps, latencyMs, bitrateKbps, 0.0, packetsLost, packetsReceived)
+        return StreamStats(fps, latencyMs, bitrateKbpsLocal, 0.0, packetsLost, packetsReceived)
     }
 
     private fun parseStatsNew(report: RTCStatsReport): StreamStats {
-        var fps = 0; var latencyMs = 0; var bitrateKbps = 0; var packetsLost = 0; var packetsReceived = 0
+        var fps = 0; var latencyMs = 0; var packetsLost = 0; var packetsReceived = 0
+        var bitrateKbpsLocal = lastBitrateKbps
+        var bytesReceivedNow: Long? = null
         for ((_, v) in report.statsMap) {
             val type = v.type
             val members = v.members
@@ -348,10 +405,25 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 (members["roundTripTime"] as? Number)?.let { latencyMs = (it.toDouble()*1000).toInt() }
                 (members["packetsLost"] as? Number)?.let { packetsLost = it.toInt() }
                 (members["packetsReceived"] as? Number)?.let { packetsReceived = it.toInt() }
-                (members["bytesReceived"] as? Number)?.let { bitrateKbps = (it.toLong()/1000).toInt() }
+                (members["bytesReceived"] as? Number)?.let { bytesReceivedNow = it.toLong() }
+            }
+            if (type == "remote-inbound-rtp") {
+                (members["roundTripTime"] as? Number)?.let { latencyMs = (it.toDouble()*1000).toInt() }
             }
         }
-        return StreamStats(fps, latencyMs, bitrateKbps, 0.0, packetsLost, packetsReceived)
+        // 285: delta bitrate from cumulative bytesReceived
+        bytesReceivedNow?.let { bytes ->
+            val now = System.currentTimeMillis()
+            if (lastBytesReceived >= 0 && lastBitrateCalcTimeMs > 0) {
+                val deltaBytes = (bytes - lastBytesReceived).coerceAtLeast(0)
+                val deltaMs = (now - lastBitrateCalcTimeMs).coerceAtLeast(1)
+                bitrateKbpsLocal = ((deltaBytes * 8L * 1000L) / deltaMs / 1000L).toInt()
+                lastBitrateKbps = bitrateKbpsLocal
+            }
+            lastBytesReceived = bytes
+            lastBitrateCalcTimeMs = now
+        }
+        return StreamStats(fps, latencyMs, bitrateKbpsLocal, 0.0, packetsLost, packetsReceived)
     }
     
     data class StreamStats(
@@ -366,7 +438,9 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     // Signaling client inner class
     private class SignalingClient(private val url: String, private val sessionProvider: () -> String?, private val errorHandler: ((String)->Unit)?) {
         private var webSocket: okhttp3.WebSocket? = null
-        private val client = okhttp3.OkHttpClient()
+        private val client = okhttp3.OkHttpClient.Builder()
+            .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
         
         var onOffer: ((String) -> Unit)? = null
         var onAnswer: ((String) -> Unit)? = null
@@ -383,7 +457,6 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: okhttp3.Response) {
                     Log.d("Signaling", "WebSocket connected")
                     this@SignalingClient.webSocket = webSocket
-                    // Send register
                     webSocket.send("""{"type":"register","payload":{"server_id":"android-client","type":"android_client"}}""")
                     sessionProvider()?.let { onConnected?.invoke(it) }
                 }
@@ -485,8 +558,9 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         }
         
         fun disconnect() {
-            webSocket?.close(1000, "Client disconnect")
+            try { webSocket?.close(1000, "Client disconnect") } catch (_: Exception) {}
             webSocket = null
+            try { client.dispatcher.executorService.shutdown() } catch (_: Exception) {}
         }
         
         fun setCallbacks(

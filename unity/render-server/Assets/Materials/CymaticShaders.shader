@@ -17,11 +17,11 @@ Shader "Cymatic/Standard"
     SubShader
     {
         Tags { "RenderType"="Opaque" "Queue"="Geometry" }
-        LOD 200
+        LOD 100
         
         CGPROGRAM
-        #pragma surface surf Standard fullforwardshadows
-        #pragma target 3.0
+        #pragma surface surf Standard
+        #pragma target 2.5
         
         sampler2D _MainTex;
         sampler2D _BumpMap;

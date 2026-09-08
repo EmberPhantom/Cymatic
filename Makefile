@@ -146,12 +146,9 @@ typecheck:
 migrate:
 	cd services/api && $(VENV_BIN)/alembic upgrade head
 
-# Docker — per-service build contexts (shared via build-context)
+# Docker — parallel buildx bake with GHA cache (per-service contexts via bake)
 docker-build:
-	DOCKER_BUILDKIT=1 docker build --build-context shared=./packages/cymatic-shared -f services/api/Dockerfile -t cymatic/api:latest ./services/api
-	DOCKER_BUILDKIT=1 docker build --build-context shared=./packages/cymatic-shared -f services/worker/Dockerfile -t cymatic/worker:latest ./services/worker
-	DOCKER_BUILDKIT=1 docker build --build-context shared=./packages/cymatic-shared -f services/llm-router/Dockerfile -t cymatic/llm-router:latest ./services/llm-router
-	docker build -t cymatic/web:latest ./apps/web
+	docker buildx bake -f docker-bake.hcl --progress plain --set "*.cache-from=type=gha" --set "*.cache-to=type=gha,mode=max"
 
 docker-up:
 	docker compose -f infra/docker/docker-compose.yml up -d --build

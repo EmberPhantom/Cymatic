@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
+import { queryKeys } from "@/lib/queryKeys"
 import type { Project } from "@/types"
 
 export function useCreateProject() {
@@ -10,7 +11,7 @@ export function useCreateProject() {
       return res.data as Project
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.all })
     },
   })
 }

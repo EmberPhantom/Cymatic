@@ -13,7 +13,7 @@ namespace Cymatic.Navigation
         [Header("NavMesh Settings")]
         [SerializeField] private NavMeshData navMeshData;
         [SerializeField] private NavMeshBuildSettings buildSettings;
-        [SerializeField] private bool autoRebakeOnLoad = true;
+        [SerializeField] private bool autoRebakeOnLoad = false; // MVP: disabled to avoid 2nd NavMesh build hitch; SceneLoader builds explicitly with 50m bound
         [SerializeField] private LayerMask navigationLayers = -1;
         
         [Header("Pathfinding")]
@@ -82,10 +82,11 @@ namespace Cymatic.Navigation
             {
                 if (r.gameObject.isStatic)
                 {
+                    var mf = r.GetComponent<MeshFilter>();
                     var source = new NavMeshBuildSource
                     {
                         shape = NavMeshBuildSourceShape.Mesh,
-                        sourceObject = r.GetComponent<MeshFilter>() != null ? r.GetComponent<MeshFilter>().sharedMesh : null,
+                        sourceObject = mf != null ? mf.sharedMesh : null,
                         transform = r.transform.localToWorldMatrix,
                         area = 0
                     };
@@ -126,7 +127,7 @@ namespace Cymatic.Navigation
                 }
             }
             
-            var bounds = new Bounds(Vector3.zero, Vector3.one * 10000f);
+            var bounds = new Bounds(Vector3.zero, Vector3.one * 50f); // MVP 50m bound (was 10km³ = 10000³, froze 2-5s)
             // P0 FIX: correct signature for Unity 2022.3: BuildNavMeshData(settings, sources, bounds, pos, rot)
             var newData = NavMeshBuilder.BuildNavMeshData(buildSettings, sources, bounds, Vector3.zero, Quaternion.identity);
             

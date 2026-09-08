@@ -93,10 +93,14 @@ namespace Cymatic
                 matManagerGO.AddComponent<MaterialManager>();
             }
             
-            // Instantiate entities using object pooling
+            // Instantiate entities using object pooling - yield every 10 to avoid hitch (low-end Android)
+            int count = 0;
             foreach (var entity in package.entities)
             {
                 await InstantiateEntity(entity, _sceneRoot.transform);
+                count++;
+                if (count % 10 == 0)
+                    await UniTask.Yield(PlayerLoopTiming.Update);
             }
             
             // Setup lighting
@@ -286,6 +290,8 @@ namespace Cymatic
                     
                 case "light":
                     var light = go.AddComponent<Light>();
+                    light.shadows = LightShadows.None; // MVP baked
+                    light.lightmapBakeType = LightmapBakeType.Baked;
                     if (entity.properties != null)
                     {
                         if (entity.properties.TryGetValue("light_type", out var lt))
@@ -439,6 +445,11 @@ namespace Cymatic
             mainLight.type = LightType.Directional;
             mainLight.intensity = lighting.ambient_intensity;
             mainLight.color = Color.white;
+            // MVP low-poly baked lighting: disable realtime shadows, use baked lightmaps
+            mainLight.shadows = LightShadows.None;
+            mainLight.lightmapBakeType = LightmapBakeType.Baked;
+            mainLight.shadowBias = 0f;
+            mainLight.shadowNormalBias = 0f;
             
             if (lighting.sun_direction != null && lighting.sun_direction.Length == 3)
             {
@@ -479,7 +490,7 @@ namespace Cymatic
                     break;
             }
             
-            // Custom lights - P0 FIX: null guard
+            // Custom lights - P0 FIX: null guard, baked, no realtime shadows for MVP
             if (lighting.custom_lights != null)
             {
                 foreach (var custom in lighting.custom_lights)
@@ -495,10 +506,17 @@ namespace Cymatic
                     light.intensity = custom.intensity;
                     light.range = custom.range ?? 10f;
                     light.spotAngle = custom.angle ?? 60f;
+                    light.shadows = LightShadows.None; // baked
+                    light.lightmapBakeType = LightmapBakeType.Baked;
                     if (custom.position != null && custom.position.Length >= 3)
                         lightGO.transform.position = new Vector3(custom.position[0], custom.position[1], custom.position[2]);
                 }
             }
+            // Global baked lighting hints for MVP
+            QualitySettings.shadows = ShadowQuality.Disable;
+            QualitySettings.shadowDistance = 0f;
+            RenderSettings.reflectionBounces = 0;
+            // isStatic batching/stripEngineCode already enabled via ProjectSettings - runtime static batching automatic for isStatic objects
         }
         
         private void SetupNavigation(NavigationSpec navigation)

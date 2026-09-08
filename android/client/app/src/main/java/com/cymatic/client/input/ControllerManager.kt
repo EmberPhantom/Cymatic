@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.channels.Channel
 
 class ControllerManager(private val context: Context) {
@@ -21,10 +22,14 @@ class ControllerManager(private val context: Context) {
     private val bluetoothAdapter = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     } else {
+        @Suppress("DEPRECATION")
         BluetoothAdapter.getDefaultAdapter()
     }
     private var connectedController: BluetoothDevice? = null
     private var inputDevice: InputDevice? = null
+    private var cachedInputManager: AndroidInputManager? = null
+    private var receiverRegistered = false
+    private var hasScanned = false
     
     // Controller state
     private var selectPressed = false
@@ -51,6 +56,7 @@ class ControllerManager(private val context: Context) {
     
     init {
         registerReceivers()
+        // Single bonded-device scan guarded by BLUETOOTH_CONNECT permission — avoids double scan (144)
         scanForControllers()
     }
     
@@ -65,6 +71,7 @@ class ControllerManager(private val context: Context) {
         }
         try {
             context.registerReceiver(bluetoothReceiver, filter)
+            receiverRegistered = true
         } catch (e: SecurityException) {
             Log.w("ControllerManager", "Bluetooth permission not granted, skip receiver")
         }
@@ -75,11 +82,21 @@ class ControllerManager(private val context: Context) {
             val action = intent?.action
             when (action) {
                 BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                    val device = intent?.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    }
                     device?.let { onControllerConnected(it) }
                 }
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                    val device = intent?.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    }
                     if (device == connectedController) {
                         onControllerDisconnected()
                     }
@@ -96,16 +113,28 @@ class ControllerManager(private val context: Context) {
     }
     
     private fun scanForControllers() {
-        // Scan for paired controllers
-        bluetoothAdapter?.bondedDevices?.forEach { device ->
-            if (isControllerDevice(device)) {
-                onControllerConnected(device)
+        if (hasScanned) return
+        hasScanned = true
+        // BLUETOOTH_CONNECT guard (144) — double scan removed by hasScanned + permission check
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                Log.d("ControllerManager", "BLUETOOTH_CONNECT not granted, skipping bonded scan")
+                return
             }
+        }
+        try {
+            bluetoothAdapter?.bondedDevices?.forEach { device ->
+                if (isControllerDevice(device)) {
+                    onControllerConnected(device)
+                }
+            }
+        } catch (e: SecurityException) {
+            Log.w("ControllerManager", "BLUETOOTH_CONNECT denied during scan", e)
         }
     }
     
     private fun isControllerDevice(device: BluetoothDevice): Boolean {
-        val name = device.name?.lowercase() ?: ""
+        val name = try { device.name?.lowercase() ?: "" } catch (_: SecurityException) { "" }
         return name.contains("controller") || name.contains("daydream") || 
                name.contains("gear vr") || name.contains("oculus") ||
                name.contains("vr")
@@ -113,8 +142,7 @@ class ControllerManager(private val context: Context) {
     
     private fun onControllerConnected(device: BluetoothDevice) {
         connectedController = device
-        // In real implementation, would set up HID connection
-        Log.d("ControllerManager", "Controller connected: ${device.name}")
+        Log.d("ControllerManager", "Controller connected: ${try{device.name}catch(_:SecurityException){"unknown"}}")
     }
     
     private fun onControllerDisconnected() {
@@ -138,41 +166,44 @@ class ControllerManager(private val context: Context) {
         thumbstickY = 0f
     }
     
+    private fun getAndroidInputManager(): AndroidInputManager {
+        if (cachedInputManager == null) {
+            cachedInputManager = context.getSystemService(Context.INPUT_SERVICE) as AndroidInputManager
+        }
+        return cachedInputManager!!
+    }
+
     // Handle input from Android's InputDevice API (for Daydream, etc.)
     fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        val deviceId = event.deviceId
-        inputDevice = (context.getSystemService(Context.INPUT_SERVICE) as AndroidInputManager)
-            .getInputDevice(deviceId)
-        
+        // Resolve InputDevice from cached manager — avoid getSystemService per event
+        inputDevice = getAndroidInputManager().getInputDevice(event.deviceId)
         if (inputDevice == null) return false
-        
-        // Process axes
-        val axes = event.getAxisValue(MotionEvent.AXIS_X) to event.getAxisValue(MotionEvent.AXIS_Y)
-        touchpadX = axes.first
-        touchpadY = axes.second
-        
-        // Touchpad - use AXIS_X/Y for touchpad fallback
+
+        // Fix 151 touchpad duplicate: compute delta BEFORE overwriting touchpadX/Y
+        // Single read of AXIS_X/Y (was duplicated with zero-delta bug)
         val touchX = event.getAxisValue(MotionEvent.AXIS_X)
         val touchY = event.getAxisValue(MotionEvent.AXIS_Y)
         if (touchX != 0f || touchY != 0f) {
-            touchpadTouched = true
             touchpadDeltaX = touchX - touchpadX
             touchpadDeltaY = touchY - touchpadY
             touchpadX = touchX
             touchpadY = touchY
+            touchpadTouched = true
         } else {
             touchpadTouched = false
             touchpadDeltaX = 0f
             touchpadDeltaY = 0f
         }
         
-        // Trigger
+        // Trigger / Grip / Thumbstick — distinct axes, not aliased to touchpad
         triggerValue = event.getAxisValue(MotionEvent.AXIS_BRAKE)
         gripValue = event.getAxisValue(MotionEvent.AXIS_GAS)
         
-        // Thumbstick
-        thumbstickX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
-        thumbstickY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+        // Thumbstick on hat axes, fallback to Z/RZ if hat is zero for some controllers
+        val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
+        val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+        thumbstickX = if (hatX != 0f) hatX else event.getAxisValue(MotionEvent.AXIS_Z)
+        thumbstickY = if (hatY != 0f) hatY else event.getAxisValue(MotionEvent.AXIS_RZ)
         
         return true
     }
@@ -297,8 +328,11 @@ class ControllerManager(private val context: Context) {
     }
     
     fun dispose() {
-        context.unregisterReceiver(bluetoothReceiver)
-        controllerStateChannel.close()
+        if (receiverRegistered) {
+            try { context.unregisterReceiver(bluetoothReceiver) } catch (_: Exception) {}
+            receiverRegistered = false
+        }
+        try { controllerStateChannel.close() } catch (_: Exception) {}
     }
     
     enum class VirtualButton {

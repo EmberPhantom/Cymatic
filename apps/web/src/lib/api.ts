@@ -1,3 +1,7 @@
+// Axios retained intentionally (interceptors, refresh queue, typed errors).
+// Bundle cost ~14kB gz; tree-shaking N/A (CJS) but deduped via optimizePackageImports is not applicable.
+// Fetch-native alternative would save ~10kB but requires rewriting queue + interceptors — defer until bundle budget tightens.
+// If migrating: replace with `fetch` + custom `fetchWithRefresh` wrapper; keep same `api` export shape.
 import axios from "axios"
 
 export const api = axios.create({
