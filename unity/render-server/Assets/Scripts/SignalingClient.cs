@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
 using Cysharp.Threading.Tasks;
@@ -75,13 +77,26 @@ namespace Cymatic
             Debug.Log("[Signaling] Connected");
             OnConnected?.Invoke();
             
-            // Register as render server
+            // Register as render server - P0 FIX: 79 server_id should use RenderServerId not gameObject.name
+            string serverId = "render-server-01";
+            try
+            {
+                if (RenderServer.Instance != null)
+                {
+                    // Use RenderServerId if available, fallback to configured id
+                    serverId = RenderServer.Instance.RenderServerId;
+                    if (string.IsNullOrEmpty(serverId))
+                        serverId = RenderServer.Instance.gameObject.name;
+                }
+            }
+            catch {}
+            
             Send(new SignalingMessage
             {
                 type = "register",
                 payload = new RegisterPayload
                 {
-                    server_id = RenderServer.Instance?.gameObject.name ?? "render-server",
+                    server_id = serverId,
                     type = "render_server"
                 }
             });
@@ -105,6 +120,7 @@ namespace Cymatic
         
         private void HandleMessage(SignalingMessage msg)
         {
+            if (msg == null) return;
             switch (msg.type)
             {
                 case "offer":
@@ -144,6 +160,7 @@ namespace Cymatic
         
         private void HandleResponse(SignalingMessage msg)
         {
+            if (msg == null || string.IsNullOrEmpty(msg.id)) return;
             if (_pendingRequests.TryGetValue(msg.id, out var callback))
             {
                 _pendingRequests.Remove(msg.id);
@@ -316,7 +333,7 @@ namespace Cymatic
     }
 }
 
-// Simple WebSocket wrapper for Unity
+// Simple WebSocket wrapper for Unity - P0 FIX: buffer truncation + Send Forget
 public class WebSocket
 {
     public event Action OnOpen;
@@ -328,7 +345,7 @@ public class WebSocket
     private System.Threading.CancellationTokenSource _cts;
     private bool _isConnected = false;
     
-    public async UniTask Connect(string url)
+    public async Cysharp.Threading.Tasks.UniTask Connect(string url)
     {
         _ws = new System.Net.WebSockets.ClientWebSocket();
         _cts = new System.Threading.CancellationTokenSource();
@@ -342,27 +359,48 @@ public class WebSocket
         ReceiveLoop().Forget();
     }
     
-    private async UniTaskVoid ReceiveLoop()
+    private async Cysharp.Threading.Tasks.UniTaskVoid ReceiveLoop()
     {
-        var buffer = new byte[4096];
+        // P0 FIX: 347 buffer 4096 truncation -> use larger buffer and handle fragmentation via MemoryStream
+        var buffer = new byte[16384];
+        var messageStream = new MemoryStream();
         
-        while (_isConnected && !_cts.Token.IsCancellationRequested)
+        while (_isConnected && _cts != null && !_cts.Token.IsCancellationRequested)
         {
             try
             {
-                var result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
+                var segment = new ArraySegment<byte>(buffer);
+                var result = await _ws.ReceiveAsync(segment, _cts.Token);
                 
                 if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
                 {
                     await CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "Closed by server");
                     break;
                 }
-                
-                var message = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+                // Write fragment to stream
+                messageStream.Write(buffer, 0, result.Count);
+
+                // Only process when EndOfMessage is true (handles truncation for >16k messages via concatenation)
+                if (!result.EndOfMessage)
+                {
+                    // Continue to next fragment; if message exceeds 16k, we will keep appending
+                    // Expand if needed: if messageStream length approaches buffer, we continue accumulating
+                    continue;
+                }
+
+                // Complete message assembled
+                var messageBytes = messageStream.ToArray();
+                messageStream.SetLength(0);
+                messageStream.Position = 0;
+
+                var message = System.Text.Encoding.UTF8.GetString(messageBytes, 0, messageBytes.Length);
                 OnMessage?.Invoke(message);
             }
             catch (Exception e)
             {
+                // Check if cancellation
+                if (_cts != null && _cts.Token.IsCancellationRequested) break;
                 OnError?.Invoke(e.Message);
                 break;
             }
@@ -370,31 +408,58 @@ public class WebSocket
         
         _isConnected = false;
         OnClose?.Invoke(0, "Disconnected");
+        messageStream?.Dispose();
     }
     
     public void Send(string message)
     {
         if (!_isConnected || _ws == null) return;
+        if (_cts == null || _cts.Token.IsCancellationRequested) return;
         
         var bytes = System.Text.Encoding.UTF8.GetBytes(message);
-        _ws.SendAsync(new ArraySegment<byte>(bytes), System.Net.WebSockets.WebSocketMessageType.Text, true, _cts.Token).Forget();
+        var segment = new ArraySegment<byte>(bytes);
+        // P0 FIX: 375 Send Forget -> avoid .Forget() on Task (no UniTask extension for Task)
+        // Use discard to avoid warning and properly handle async without Forget
+        try
+        {
+#if UNITY_WEBRTC
+            // In Unity, use UniTask wrapper to allow Forget
+            Cysharp.Threading.Tasks.UniTask.Create(async () =>
+            {
+                await _ws.SendAsync(segment, System.Net.WebSockets.WebSocketMessageType.Text, true, _cts.Token);
+            }).Forget();
+#else
+            // Non-Unity compile: fire-and-forget via Task
+            _ = _ws.SendAsync(segment, System.Net.WebSockets.WebSocketMessageType.Text, true, _cts.Token);
+#endif
+        }
+        catch (Exception e)
+        {
+            UnityEngine.Debug.LogWarning($"[WebSocket] Send failed: {e.Message}");
+        }
     }
     
-    public async UniTask CloseAsync(System.Net.WebSockets.WebSocketCloseStatus status, string reason)
+    public async Cysharp.Threading.Tasks.UniTask CloseAsync(System.Net.WebSockets.WebSocketCloseStatus status, string reason)
     {
         _isConnected = false;
-        _cts?.Cancel();
+        try { _cts?.Cancel(); } catch {}
         
         if (_ws != null)
         {
-            await _ws.CloseAsync(status, reason, System.Threading.CancellationToken.None);
-            _ws.Dispose();
+            try
+            {
+                if (_ws.State == System.Net.WebSockets.WebSocketState.Open || _ws.State == System.Net.WebSockets.WebSocketState.CloseReceived)
+                    await _ws.CloseAsync(status, reason, System.Threading.CancellationToken.None);
+            }
+            catch {}
+            try { _ws.Dispose(); } catch {}
             _ws = null;
         }
     }
     
     public void Close()
     {
+        // P0 FIX: use UniTask Forget properly with CloseAsync
         CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "Client closed").Forget();
     }
 }

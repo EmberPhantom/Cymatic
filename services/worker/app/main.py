@@ -24,7 +24,7 @@ worker_task: asyncio.Task | None = None
 def verify_admin_key(x_api_key: str = Header(None)):
     """Simple API key check for admin endpoints."""
     if not settings.ADMIN_API_KEY:
-        return
+        raise HTTPException(status_code=503, detail="Admin API key not configured")
     if x_api_key != settings.ADMIN_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing admin API key")
 
@@ -61,35 +61,21 @@ async def worker_loop():
                     heartbeat_task = asyncio.create_task(_heartbeat(job))
                     try:
                         result = await asyncio.wait_for(process_job(job), timeout=settings.WORKER_JOB_TIMEOUT_SECONDS)
-                        heartbeat_task.cancel()
-                        try:
-                            await heartbeat_task
-                        except asyncio.CancelledError:
-                            pass
                         await job_queue.complete_job(job, result)
                     except asyncio.TimeoutError:
-                        heartbeat_task.cancel()
-                        try:
-                            await heartbeat_task
-                        except asyncio.CancelledError:
-                            pass
                         logger.error("job_timeout", worker_id=worker_id, job_id=job.id)
                         await job_queue.fail_job(job, f"Job timeout after {settings.WORKER_JOB_TIMEOUT_SECONDS}s", queue_name=queue_name)
                     except asyncio.CancelledError:
-                        heartbeat_task.cancel()
-                        try:
-                            await heartbeat_task
-                        except asyncio.CancelledError:
-                            pass
                         raise
                     except Exception as e:
+                        logger.error("job_failed", worker_id=worker_id, job_id=job.id, error=str(e), exc_info=True)
+                        await job_queue.fail_job(job, str(e), queue_name=queue_name)
+                    finally:
                         heartbeat_task.cancel()
                         try:
                             await heartbeat_task
                         except asyncio.CancelledError:
                             pass
-                        logger.error("job_failed", worker_id=worker_id, job_id=job.id, error=str(e))
-                        await job_queue.fail_job(job, str(e), queue_name=queue_name)
 
                     job_processed = True
                     break
@@ -99,8 +85,8 @@ async def worker_loop():
 
         except asyncio.CancelledError:
             break
-        except OSError as e:
-            logger.error("worker_error", worker_id=worker_id, error=str(e))
+        except Exception as e:
+            logger.error("worker_error", worker_id=worker_id, error=str(e), exc_info=True)
             await asyncio.sleep(5)
 
     logger.info("worker_stopped", worker_id=worker_id)

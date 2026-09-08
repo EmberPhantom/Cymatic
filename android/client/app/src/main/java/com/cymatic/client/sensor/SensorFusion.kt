@@ -7,6 +7,12 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.opengl.Matrix
 import kotlinx.coroutines.Dispatchers
+import kotlin.math.abs
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.copysign
+import kotlin.math.sqrt
+import kotlin.math.PI
 
 class SensorFusion(private val context: Context) : SensorEventListener {
 
@@ -162,7 +168,7 @@ class SensorFusion(private val context: Context) : SensorEventListener {
         val yaw = atan2(siny_cosp, cosy_cosp)
         
         val sinp = 2.0f * (q[3] * q[1] - q[2] * q[0])
-        val pitch = if (abs(sinp) >= 1.0f) copysign(PI / 2, sinp) else asin(sinp)
+        val pitch = if (abs(sinp) >= 1.0f) copysign(kotlin.math.PI.toFloat() / 2f, sinp) else asin(sinp)
         
         val sinr_cosp = 2.0f * (q[3] * q[0] + q[1] * q[2])
         val cosr_cosp = 1.0f - 2.0f * (q[0] * q[0] + q[1] * q[1])

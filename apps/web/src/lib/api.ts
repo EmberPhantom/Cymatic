@@ -8,7 +8,7 @@ export const api = axios.create({
 })
 
 let isRefreshing = false
-let failedQueue: Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }> = []
+let failedQueue: Array<{ resolve: (v: string | null) => void; reject: (e: unknown) => void }> = []
 
 function processQueue(error: unknown, token: string | null = null) {
   failedQueue.forEach((p) => (error ? p.reject(error) : p.resolve(token)))

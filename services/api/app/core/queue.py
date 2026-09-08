@@ -93,20 +93,18 @@ class JobQueue:
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
         job_json = job.model_dump_json()
 
-        await self.client.zadd(queue_key, {job_json: job.priority.value})
-
-        # Store job details in hash for quick lookup
-        await self.client.hset(
-            f"job:{job.id}",
-            mapping={
-                "data": job_json,
-                "status": job.status.value,
-                "queue": queue_name,
-            },
-        )
-
-        # Set TTL for job data (7 days)
-        await self.client.expire(f"job:{job.id}", 604800)
+        async with self.client.pipeline(transaction=True) as pipe:
+            pipe.zadd(queue_key, {job_json: job.priority.value})
+            pipe.hset(
+                f"job:{job.id}",
+                mapping={
+                    "data": job_json,
+                    "status": job.status.value,
+                    "queue": queue_name,
+                },
+            )
+            pipe.expire(f"job:{job.id}", 604800)
+            await pipe.execute()
 
         logger.info(
             "job_enqueued", job_id=job.id, queue=queue_name, priority=job.priority.name
@@ -115,7 +113,7 @@ class JobQueue:
 
     async def acquire_job_lock(
         self, job_id: str, worker_id: str, ttl: int | None = None
-    ) -> bool:
+    ) -> str | None:
         """Acquire distributed lock for job processing."""
         ttl = ttl or self.LOCK_TTL
         lock_token = str(uuid.uuid4())
@@ -136,8 +134,8 @@ class JobQueue:
                     "worker_id": worker_id,
                 },
             )
-            return True
-        return False
+            return lock_token
+        return None
 
     async def release_job_lock(self, job_id: str, lock_token: str) -> bool:
         """Release distributed lock for job."""
@@ -180,16 +178,41 @@ class JobQueue:
 
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
 
-        # Use Lua script for atomic pop and lock acquisition
+        # Atomic ZPOPMAX + lock acquisition to avoid lost jobs and requeue storms
         lua_script = """
-        local job = redis.call('ZPOPMIN', KEYS[1])
-        if job then
-            return job[1]
+        local res = redis.call('ZPOPMAX', KEYS[1], 1)
+        if not res or #res == 0 then
+            return nil
         end
-        return nil
+        local job_json = res[1]
+        local job_data = cjson.decode(job_json)
+        local job_id = job_data.id
+        local lock_key = 'job:lock:' .. job_id
+        local token = ARGV[1]
+        local ttl = tonumber(ARGV[2])
+        local worker = ARGV[3]
+        local acquired = redis.call('SET', lock_key, token, 'NX', 'EX', ttl)
+        if not acquired then
+            local prio = tonumber(job_data.priority) or tonumber(ARGV[4])
+            redis.call('ZADD', KEYS[1], prio, job_json)
+            return nil
+        end
+        redis.call('HSET', 'job:'..job_id, 'lock_token', token, 'lock_expires_at', ARGV[5], 'worker_id', worker, 'status', 'running')
+        return job_json
         """
-
-        result = await self.client.eval(lua_script, 1, queue_key)
+        lock_token = str(uuid.uuid4())
+        ttl = self.LOCK_TTL
+        expires_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        result = await self.client.eval(
+            lua_script,
+            1,
+            queue_key,
+            lock_token,
+            str(ttl),
+            worker_id or "unknown",
+            str(JobPriority.NORMAL.value),
+            expires_iso,
+        )
 
         if not result:
             return None
@@ -197,21 +220,12 @@ class JobQueue:
         job_data = json.loads(result)
         job = Job(**job_data)
 
-        # Try to acquire lock for this job
-        lock_acquired = await self.acquire_job_lock(job.id, worker_id or "unknown")
-        if not lock_acquired:
-            # Re-queue the job if we couldn't get the lock
-            await self.enqueue(job, queue_name)
-            return None
-
         job.status = JobStatus.RUNNING
         job.started_at = datetime.now(timezone.utc)
         job.worker_id = worker_id
         job.updated_at = datetime.now(timezone.utc)
-        job.lock_token = job.lock_token  # Will be set by acquire_job_lock
-        job.lock_expires_at = datetime.now(timezone.utc) + timedelta(
-            seconds=self.LOCK_TTL
-        )
+        job.lock_token = lock_token
+        job.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
 
         # Update job status with lock info
         await self.client.hset(
@@ -249,7 +263,7 @@ class JobQueue:
 
         logger.info("job_completed", job_id=job.id)
 
-    async def fail_job(self, job: Job, error: str) -> None:
+    async def fail_job(self, job: Job, error: str, queue_name: str | None = None) -> None:
         """Mark job as failed, handle retries with lock release."""
         await self.connect()
 
@@ -282,14 +296,27 @@ class JobQueue:
         )
 
         if job.status == JobStatus.RETRY:
-            # Non-blocking delayed requeue
+            # Non-blocking delayed requeue; resolve original queue to avoid fragmentation
             import asyncio
 
             delay = min(2**job.retry_count * 5, 300)  # max 5 minutes
+            stored_queue: str | None = queue_name
+            if not stored_queue:
+                try:
+                    raw = await self.client.hget(f"job:{job.id}", "queue")
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8")
+                    stored_queue = raw
+                except Exception:
+                    stored_queue = None
+            target_queue = stored_queue or job.type
 
             async def _delayed_requeue():
                 await asyncio.sleep(delay)
-                await self.enqueue(job, job.type)
+                try:
+                    await self.enqueue(job, target_queue)
+                except Exception as e:
+                    logger.error("delayed_requeue_failed", job_id=job.id, error=str(e))
 
             asyncio.create_task(_delayed_requeue())
 

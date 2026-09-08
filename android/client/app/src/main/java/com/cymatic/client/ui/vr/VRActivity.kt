@@ -352,6 +352,11 @@ class VRActivity : AppCompatActivity(), SensorEventListener {
         thermalMonitorHandler.postDelayed(thermalMonitorRunnable!!, 5000)
     }
     
+    private fun showThermalWarning(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        Log.w("VRActivity", message)
+    }
+
     private fun reduceStreamingQuality() {
         // Signal to WebRTC manager to reduce bitrate/resolution
         webRTCManager.reduceQuality()

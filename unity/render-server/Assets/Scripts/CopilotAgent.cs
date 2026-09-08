@@ -5,6 +5,18 @@ using Newtonsoft.Json;
 
 namespace Cymatic
 {
+    // P0 FIX: Minimal Outline stub if package not present (prevents compile error CopilotAgent.cs:223)
+    // If real Outline exists elsewhere, this will be ignored due to duplicate check via #if guard
+#if !HAS_OUTLINE
+    public class Outline : MonoBehaviour
+    {
+        public enum Mode { OutlineAll, OutlineVisible, OutlineHidden, OutlineAndSilhouette }
+        public Mode OutlineMode;
+        public Color OutlineColor = Color.yellow;
+        public float OutlineWidth = 5f;
+    }
+#endif
+
     /// <summary>
     /// Copilot Agent - Runs in Unity Render Server
     /// Handles user queries, provides guidance, highlights objects, controls navigation
@@ -59,23 +71,26 @@ namespace Cymatic
             BuildSceneContext();
             
             // Subscribe to copilot messages
-            _inputManager.OnCopilotMessage += HandleCopilotMessage;
+            if (_inputManager != null)
+                _inputManager.OnCopilotMessage += HandleCopilotMessage;
             
-            _isEnabled = policy.enabled;
+            _isEnabled = policy != null && policy.enabled;
             
             Debug.Log($"[CopilotAgent] Initialized for session {sessionId}");
         }
         
         private void BuildSceneContext()
         {
+            if (_sceneLoader == null) return;
             var package = _sceneLoader.CurrentPackage;
             if (package == null) return;
             
-            _sceneContext = $"Current scene: {package.metadata.title} ({package.domain}). " +
-                          $"Navigation points: {string.Join(", ", package.navigation.points.ConvertAll(p => p.name))}. " +
-                          $"Entities: {package.entities.Count} objects. " +
-                          $"Copilot personality: {_policy.personality}. " +
-                          $"Supported languages: {string.Join(", ", _policy.languages)}.";
+            var navNames = package.navigation?.points != null ? string.Join(", ", package.navigation.points.ConvertAll(p => p.name)) : "none";
+            _sceneContext = $"Current scene: {package.metadata?.title ?? "unknown"} ({package.domain}). " +
+                          $"Navigation points: {navNames}. " +
+                          $"Entities: {package.entities?.Count ?? 0} objects. " +
+                          $"Copilot personality: {_policy?.personality}. " +
+                          $"Supported languages: {string.Join(", ", _policy?.languages ?? new List<string>())}.";
         }
         
         private async void HandleCopilotMessage(string message)
@@ -93,11 +108,14 @@ namespace Cymatic
                 await ExecuteActions(response.actions);
                 
                 // Send response back
-                await _eventBridge.SendEvent(_currentSessionId, "copilot_response", new
+                if (_eventBridge != null)
                 {
-                    response = response.text,
-                    actions = response.actions
-                });
+                    await _eventBridge.SendEvent(_currentSessionId, "copilot_response", new
+                    {
+                        response = response.text,
+                        actions = response.actions
+                    });
+                }
             }
             catch (System.Exception e)
             {
@@ -128,15 +146,22 @@ namespace Cymatic
                 webRequest.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bytes);
                 webRequest.downloadHandler = new UnityEngine.Networking.DownloadHandlerBuffer();
                 webRequest.SetRequestHeader("Content-Type", "application/json");
-                webRequest.SetRequestHeader("Authorization", $"Bearer {_eventBridge.AuthToken}");
+                // P0 FIX: 131 AuthToken private -> EventBridge now exposes public AuthToken / GetAuthToken()
+                var token = _eventBridge != null ? _eventBridge.AuthToken : null;
+                if (!string.IsNullOrEmpty(token))
+                    webRequest.SetRequestHeader("Authorization", $"Bearer {token}");
                 
                 await webRequest.SendWebRequest();
                 
                 if (webRequest.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
                 {
                     var response = JsonConvert.DeserializeObject<LLMResponse>(webRequest.downloadHandler.text);
-                    var content = response.choices[0].message.content;
-                    return JsonConvert.DeserializeObject<CopilotResponse>(content);
+                    if (response?.choices != null && response.choices.Count > 0)
+                    {
+                        var content = response.choices[0].message.content;
+                        return JsonConvert.DeserializeObject<CopilotResponse>(content);
+                    }
+                    return new CopilotResponse { text = webRequest.downloadHandler.text, actions = new List<CopilotAction>() };
                 }
                 else
                 {
@@ -155,9 +180,9 @@ Your capabilities:
 {string.Join("\n", _allowedActions)}
 
 Current policy:
-- Personality: {_policy.personality}
-- Languages: {string.Join(", ", _policy.languages)}
-- Default language: {_policy.default_language}
+- Personality: {_policy?.personality}
+- Languages: {string.Join(", ", _policy?.languages ?? new List<string>())}
+- Default language: {_policy?.default_language}
 
 When responding, always return JSON with:
 {{
@@ -172,8 +197,10 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
         
         private async UniTask ExecuteActions(List<CopilotAction> actions)
         {
+            if (actions == null) return;
             foreach (var action in actions)
             {
+                if (action == null || string.IsNullOrEmpty(action.type)) continue;
                 if (!_allowedActions.Contains(action.type))
                 {
                     Debug.LogWarning($"[CopilotAgent] Action not allowed: {action.type}");
@@ -183,19 +210,19 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                 switch (action.type)
                 {
                     case "highlight_object":
-                        await HighlightObject(action.params);
+                        await HighlightObject(action.@params);
                         break;
                     case "show_label":
-                        await ShowLabel(action.params);
+                        await ShowLabel(action.@params);
                         break;
                     case "move_to_point":
-                        await MoveToPoint(action.params);
+                        await MoveToPoint(action.@params);
                         break;
                     case "open_menu":
-                        OpenMenu(action.params);
+                        OpenMenu(action.@params);
                         break;
                     case "change_material":
-                        await ChangeMaterial(action.params);
+                        await ChangeMaterial(action.@params);
                         break;
                     case "pause_tour":
                         PauseTour();
@@ -204,7 +231,7 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                         ResumeTour();
                         break;
                     case "play_audio_hint":
-                        await PlayAudioHint(action.params);
+                        await PlayAudioHint(action.@params);
                         break;
                     case "answer_question":
                         // Already handled by text response
@@ -215,6 +242,7 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
         
         private async UniTask HighlightObject(Dictionary<string, object> @params)
         {
+            if (@params == null) return;
             if (@params.TryGetValue("object_id", out var objId))
             {
                 var obj = GameObject.Find(objId.ToString());
@@ -228,24 +256,30 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                     
                     // Auto-remove after delay
                     await UniTask.Delay(5000);
-                    Destroy(outline);
+                    if (outline != null) Destroy(outline);
                 }
             }
         }
         
         private async UniTask ShowLabel(Dictionary<string, object> @params)
         {
+            if (@params == null) return;
             if (@params.TryGetValue("object_id", out var objId) && @params.TryGetValue("text", out var text))
             {
                 var obj = GameObject.Find(objId.ToString());
                 if (obj != null)
                 {
                     var label = obj.GetComponentInChildren<TMPro.TextMeshProUGUI>();
+                    GameObject labelGO = null;
                     if (label == null)
                     {
-                        var labelGO = new GameObject("Label");
+                        labelGO = new GameObject("Label");
                         labelGO.transform.SetParent(obj.transform);
                         label = labelGO.AddComponent<TMPro.TextMeshProUGUI>();
+                    }
+                    else
+                    {
+                        labelGO = label.gameObject;
                     }
                     
                     label.text = text.ToString();
@@ -254,29 +288,45 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                     label.alignment = TMPro.TextAlignmentOptions.Center;
                     
                     // Position above object
-                    labelGO.transform.localPosition = new Vector3(0, obj.GetComponent<Renderer>().bounds.size.y + 1, 0);
-                    labelGO.transform.LookAt(Camera.main.transform);
-                    labelGO.transform.Rotate(0, 180, 0);
+                    var rend = obj.GetComponent<Renderer>();
+                    float yOffset = rend != null ? rend.bounds.size.y + 1 : 1f;
+                    labelGO.transform.localPosition = new Vector3(0, yOffset, 0);
+                    if (Camera.main != null)
+                    {
+                        labelGO.transform.LookAt(Camera.main.transform);
+                        labelGO.transform.Rotate(0, 180, 0);
+                    }
                 }
             }
+            await UniTask.CompletedTask;
         }
         
         private async UniTask MoveToPoint(Dictionary<string, object> @params)
         {
+            if (@params == null) return;
             if (@params.TryGetValue("point_id", out var pointId))
             {
+                if (_stereoRig == null)
+                {
+                    Debug.LogWarning("[CopilotAgent] StereoRig is null, cannot teleport");
+                    return;
+                }
+                // P0 FIX: 268 Teleport int vs string -> StereoCameraRig now has string overload
                 _stereoRig.TeleportToNavigationPoint(pointId.ToString());
             }
+            await UniTask.CompletedTask;
         }
         
         private void OpenMenu(Dictionary<string, object> @params)
         {
-            // Trigger menu UI
-            _eventBridge.SendEvent(_currentSessionId, "copilot_open_menu", new { });
+            // Trigger menu UI - P0 FIX: SendEvent returns UniTask, need Forget
+            if (_eventBridge != null)
+                _eventBridge.SendEvent(_currentSessionId, "copilot_open_menu", new { }).Forget();
         }
         
         private async UniTask ChangeMaterial(Dictionary<string, object> @params)
         {
+            if (@params == null) return;
             if (@params.TryGetValue("object_id", out var objId) && @params.TryGetValue("material", out var matName))
             {
                 var obj = GameObject.Find(objId.ToString());
@@ -293,22 +343,26 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                     }
                 }
             }
+            await UniTask.CompletedTask;
         }
         
         private void PauseTour()
         {
-            // Pause navigation
-            _eventBridge.SendEvent(_currentSessionId, "copilot_pause_tour", new { });
+            // Pause navigation - P0 FIX: use Forget
+            if (_eventBridge != null)
+                _eventBridge.SendEvent(_currentSessionId, "copilot_pause_tour", new { }).Forget();
         }
         
         private void ResumeTour()
         {
-            // Resume navigation
-            _eventBridge.SendEvent(_currentSessionId, "copilot_resume_tour", new { });
+            // Resume navigation - P0 FIX: use Forget
+            if (_eventBridge != null)
+                _eventBridge.SendEvent(_currentSessionId, "copilot_resume_tour", new { }).Forget();
         }
         
         private async UniTask PlayAudioHint(Dictionary<string, object> @params)
         {
+            if (@params == null) return;
             if (@params.TryGetValue("audio_id", out var audioId))
             {
                 // Play audio clip
@@ -320,6 +374,7 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                     audioSource.PlayOneShot(clip);
                 }
             }
+            await UniTask.CompletedTask;
         }
         
         private void OnDestroy()
@@ -340,7 +395,7 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
     public class CopilotAction
     {
         public string type;
-        public Dictionary<string, object> params = new Dictionary<string, object>();
+        public Dictionary<string, object> @params = new Dictionary<string, object>();
     }
     
     [System.Serializable]

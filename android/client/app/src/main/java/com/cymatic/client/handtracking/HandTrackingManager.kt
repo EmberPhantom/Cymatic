@@ -4,20 +4,16 @@ import android.content.Context
 import android.graphics.PointF
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
-import android.media.Image
 import android.media.ImageReader
-import android.os.Build
 import android.util.Log
-import android.util.Size
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerOptions
+import com.google.mediapipe.tasks.components.containers.Category
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
-import com.google.mediapipe.framework.image.MPImage
-import kotlinx.coroutines.Dispatchers
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerOptions
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
-import java.nio.ByteBuffer
 
 class HandTrackingManager(private val context: Context) {
 
@@ -26,7 +22,7 @@ class HandTrackingManager(private val context: Context) {
     private var usbCamera: UsbDevice? = null
     private var isTracking = false
     private var isUvcSupported = false
-    
+
     // Hand data
     private var leftHandLandmarks: List<PointF>? = null
     private var rightHandLandmarks: List<PointF>? = null
@@ -34,66 +30,77 @@ class HandTrackingManager(private val context: Context) {
     private var rightHandConfidence = 0f
     private var leftHandGesture = HandGesture.NONE
     private var rightHandGesture = HandGesture.NONE
-    
+
     // Callbacks
     private val handDataChannel = Channel<HandTrackingData>(10)
     private var onHandDataUpdate: ((HandTrackingData) -> Unit)? = null
-    
-    // MediaPipe model path
+
+    // MediaPipe model path - optional asset, guard missing
     private val modelPath = "hand_landmarker.task"
-    
+
     enum class HandGesture {
         NONE, PINCH, OPEN_PALM, FIST, POINT, SWIPE_LEFT, SWIPE_RIGHT, SWIPE_UP, SWIPE_DOWN
     }
-    
+
     data class HandTrackingData(
         val leftHand: HandData?,
         val rightHand: HandData?,
         val timestamp: Long
     )
-    
+
     data class HandData(
         val landmarks: List<PointF>,  // 21 landmarks
         val confidence: Float,
         val gesture: HandGesture,
         val worldPosition: PointF? = null
     )
-    
+
     init {
         checkUvcSupport()
+        // Hand tracking is optional - only init if UVC available and model present
         if (isUvcSupported) {
             initializeHandLandmarker()
         }
     }
-    
+
     private fun checkUvcSupport() {
-        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-        val deviceList = usbManager.deviceList
-        
-        for (device in deviceList.values) {
-            // Check if device is a UVC camera
-            if (isUvcCamera(device)) {
-                usbCamera = device
-                isUvcSupported = true
-                Log.d("HandTracking", "UVC Camera found: ${device.deviceName}")
-                break
-            }
-        }
-        
-        if (!isUvcSupported) {
-            Log.w("HandTracking", "No UVC camera found. Hand tracking disabled.")
-        }
-    }
-    
-    private fun isUvcCamera(device: UsbDevice): Boolean {
-        // Check USB class for Video class (0x0E)
-        return device.deviceClass == 0x0E || 
-               device.deviceName.lowercase().contains("uvc") ||
-               device.deviceName.lowercase().contains("camera")
-    }
-    
-    private fun initializeHandLandmarker() {
         try {
+            val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+            val deviceList = usbManager.deviceList
+            for (device in deviceList.values) {
+                if (isUvcCamera(device)) {
+                    usbCamera = device
+                    isUvcSupported = true
+                    Log.d("HandTracking", "UVC Camera found: ${device.deviceName}")
+                    break
+                }
+            }
+        } catch (e: SecurityException) {
+            Log.w("HandTracking", "USB permission not granted, UVC check skipped")
+        } catch (e: Exception) {
+            Log.w("HandTracking", "UVC check failed", e)
+        }
+        if (!isUvcSupported) {
+            Log.w("HandTracking", "No UVC camera found. Hand tracking disabled (optional).")
+        }
+    }
+
+    private fun isUvcCamera(device: UsbDevice): Boolean {
+        return device.deviceClass == 0x0E ||
+                device.deviceName.lowercase().contains("uvc") ||
+                device.deviceName.lowercase().contains("camera")
+    }
+
+    private fun initializeHandLandmarker() {
+        // Guard: model asset may be missing in debug builds - fail gracefully
+        try {
+            // Check asset exists before creating landmarker
+            try {
+                context.assets.open(modelPath).close()
+            } catch (e: Exception) {
+                Log.w("HandTracking", "Model asset missing: $modelPath, hand tracking disabled (optional)")
+                return
+            }
             val options = HandLandmarkerOptions.builder()
                 .setBaseOptions(
                     BaseOptions.builder()
@@ -105,149 +112,160 @@ class HandTrackingManager(private val context: Context) {
                 .setMinHandDetectionConfidence(0.5f)
                 .setMinHandPresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
-                .setResultListener { result, image, timestampMs ->
+                .setResultListener { result, _, timestampMs ->
                     onHandLandmarksDetected(result, timestampMs)
                 }
                 .build()
-            
             handLandmarker = HandLandmarker.createFromOptions(context, options)
             Log.d("HandTracking", "MediaPipe Hand Landmarker initialized")
         } catch (e: Exception) {
-            Log.e("HandTracking", "Failed to initialize hand landmarker", e)
+            Log.e("HandTracking", "Failed to initialize hand landmarker (optional)", e)
+            handLandmarker = null
         }
     }
-    
+
     private fun onHandLandmarksDetected(
-        result: com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult,
+        result: HandLandmarkerResult,
         timestampMs: Long
     ) {
-        val leftHand = result.handLandmarks.firstOrNull { it.handedness == "Left" }
-        val rightHand = result.handLandmarks.firstOrNull { it.handedness == "Right" }
-        
-        // Convert landmarks to PointF list
-        leftHandLandmarks = leftHand?.let { convertLandmarks(it) }
-        rightHandLandmarks = rightHand?.let { convertLandmarks(it) }
-        
-        // Get confidence scores
-        leftHandConfidence = leftHand?.let { calculateConfidence(it) } ?: 0f
-        rightHandConfidence = rightHand?.let { calculateConfidence(it) } ?: 0f
-        
-        // Detect gestures
-        leftHandGesture = leftHand?.let { detectGesture(it) } ?: HandGesture.NONE
-        rightHandGesture = rightHand?.let { detectGesture(it) } ?: HandGesture.NONE
-        
-        // Send update
-        val data = HandTrackingData(
-            leftHand = leftHandLandmarks?.let { HandData(it, leftHandConfidence, leftHandGesture) },
-            rightHand = rightHandLandmarks?.let { HandData(it, rightHandConfidence, rightHandGesture) },
-            timestamp = timestampMs
-        )
-        
-        handDataChannel.trySend(data)
-        onHandDataUpdate?.invoke(data)
+        try {
+            // Correct API: result.landmarks() and result.handedness() (or deprecated handednesses())
+            val allLandmarks: List<List<NormalizedLandmark>> = try {
+                result.landmarks()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val allHandedness: List<List<Category>> = try {
+                result.handedness()
+            } catch (_: Exception) {
+                @Suppress("DEPRECATION")
+                try { result.handednesses() } catch (_: Exception) { emptyList() }
+            }
+
+            var leftLandmarks: List<NormalizedLandmark>? = null
+            var rightLandmarks: List<NormalizedLandmark>? = null
+
+            for (i in allLandmarks.indices) {
+                val categories = allHandedness.getOrNull(i) ?: continue
+                val top = categories.firstOrNull() ?: continue
+                val label = try { top.categoryName() } catch (_: Exception) { "" }
+                val lm = allLandmarks[i]
+                when {
+                    label.equals("Left", ignoreCase = true) -> leftLandmarks = lm
+                    label.equals("Right", ignoreCase = true) -> rightLandmarks = lm
+                }
+            }
+
+            leftHandLandmarks = leftLandmarks?.let { convertLandmarks(it) }
+            rightHandLandmarks = rightLandmarks?.let { convertLandmarks(it) }
+
+            leftHandConfidence = leftLandmarks?.let { calculateConfidence(it) } ?: 0f
+            rightHandConfidence = rightLandmarks?.let { calculateConfidence(it) } ?: 0f
+
+            leftHandGesture = leftLandmarks?.let { detectGesture(it) } ?: HandGesture.NONE
+            rightHandGesture = rightLandmarks?.let { detectGesture(it) } ?: HandGesture.NONE
+
+            val data = HandTrackingData(
+                leftHand = leftHandLandmarks?.let { HandData(it, leftHandConfidence, leftHandGesture) },
+                rightHand = rightHandLandmarks?.let { HandData(it, rightHandConfidence, rightHandGesture) },
+                timestamp = timestampMs
+            )
+            handDataChannel.trySend(data)
+            onHandDataUpdate?.invoke(data)
+        } catch (e: Exception) {
+            Log.e("HandTracking", "Failed to parse hand landmarks", e)
+        }
     }
-    
-    private fun convertLandmarks(landmarks: com.google.mediapipe.tasks.components.containers.NormalizedLandmarkList): List<PointF> {
-        return landmarks.landmarks.map { PointF(it.x, it.y) }
+
+    private fun convertLandmarks(landmarks: List<NormalizedLandmark>): List<PointF> {
+        return landmarks.map { PointF(it.x(), it.y()) }
     }
-    
-    private fun calculateConfidence(landmarks: com.google.mediapipe.tasks.components.containers.NormalizedLandmarkList): Float {
-        return landmarks.landmarks.map { it.score ?: 0f }.average()
+
+    // Legacy overload for NormalizedLandmarkList (kept for compatibility, not used after fix)
+    @Suppress("unused")
+    private fun convertLandmarksLegacy(landmarks: com.google.mediapipe.tasks.components.containers.NormalizedLandmarkList): List<PointF> {
+        return landmarks.landmarks.map { PointF(it.x(), it.y()) }
     }
-    
-    private fun detectGesture(landmarks: com.google.mediapipe.tasks.components.containers.NormalizedLandmarkList): HandGesture {
-        val points = landmarks.landmarks
-        
-        // Thumb tip (4), Index tip (8), Middle tip (12), Ring tip (16), Pinky tip (20)
-        val thumbTip = points[4]
-        val indexTip = points[8]
-        val middleTip = points[12]
-        val ringTip = points[16]
-        val pinkyTip = points[20]
-        
-        // Thumb IP (3), Index PIP (6), Middle PIP (10), Ring PIP (14), Pinky PIP (18)
-        val thumbIp = points[3]
-        val indexPip = points[6]
-        val middlePip = points[10]
-        val ringPip = points[14]
-        val pinkyPip = points[18]
-        
-        // Calculate distances
+
+    private fun calculateConfidence(landmarks: List<NormalizedLandmark>): Float {
+        // NormalizedLandmark has no score; use visibility/presence if available, else average 1f
+        if (landmarks.isEmpty()) return 0f
+        // Use presence as proxy if present, else return 1f scaled
+        var sum = 0f
+        var count = 0
+        for (lm in landmarks) {
+            val vis = try { lm.visibility().orElse(1.0f) } catch (_: Exception) { 1.0f }
+            sum += vis
+            count++
+        }
+        return if (count > 0) (sum / count).coerceIn(0f, 1f) else 0f
+    }
+
+    private fun detectGesture(landmarks: List<NormalizedLandmark>): HandGesture {
+        if (landmarks.size < 21) return HandGesture.NONE
+        val thumbTip = landmarks[4]
+        val indexTip = landmarks[8]
+        val middleTip = landmarks[12]
+        val ringTip = landmarks[16]
+        val pinkyTip = landmarks[20]
+
+        val thumbIp = landmarks[3]
+        val indexPip = landmarks[6]
+        val middlePip = landmarks[10]
+        val ringPip = landmarks[14]
+        val pinkyPip = landmarks[18]
+
         val thumbIndexDist = distance(thumbTip, indexTip)
-        val thumbMiddleDist = distance(thumbTip, middleTip)
-        
-        // Finger extended checks (tip above PIP = extended)
-        val thumbExtended = thumbTip.y < thumbIp.y
-        val indexExtended = indexTip.y < indexPip.y
-        val middleExtended = middleTip.y < middlePip.y
-        val ringExtended = ringTip.y < ringPip.y
-        val pinkyExtended = pinkyTip.y < pinkyPip.y
-        
+
+        val thumbExtended = thumbTip.y() < thumbIp.y()
+        val indexExtended = indexTip.y() < indexPip.y()
+        val middleExtended = middleTip.y() < middlePip.y()
+        val ringExtended = ringTip.y() < ringPip.y()
+        val pinkyExtended = pinkyTip.y() < pinkyPip.y()
+
         val extendedCount = listOf(indexExtended, middleExtended, ringExtended, pinkyExtended).count { it }
-        
-        // Pinch: thumb and index tips close
-        if (thumbIndexDist < 0.05f) {
-            return HandGesture.PINCH
-        }
-        
-        // Fist: all fingers curled
-        if (extendedCount == 0 && !thumbExtended) {
-            return HandGesture.FIST
-        }
-        
-        // Open palm: all fingers extended
-        if (extendedCount >= 4 && indexExtended && middleExtended) {
-            return HandGesture.OPEN_PALM
-        }
-        
-        // Point: only index extended
-        if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
-            return HandGesture.POINT
-        }
-        
-        // Swipe detection would need temporal analysis
-        // For now, return based on static pose
-        
+
+        if (thumbIndexDist < 0.05f) return HandGesture.PINCH
+        if (extendedCount == 0 && !thumbExtended) return HandGesture.FIST
+        if (extendedCount >= 4 && indexExtended && middleExtended) return HandGesture.OPEN_PALM
+        if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) return HandGesture.POINT
         return HandGesture.NONE
     }
-    
-    private fun distance(p1: com.google.mediapipe.tasks.components.containers.NormalizedLandmark, p2: com.google.mediapipe.tasks.components.containers.NormalizedLandmark): Float {
-        val dx = p1.x - p2.x
-        val dy = p1.y - p2.y
-        val dz = p1.z - p2.z
-        return Math.sqrt(dx * dx + dy * dy + dz * dz).toFloat()
+
+    private fun distance(p1: NormalizedLandmark, p2: NormalizedLandmark): Float {
+        val dx = p1.x() - p2.x()
+        val dy = p1.y() - p2.y()
+        val dz = p1.z() - p2.z()
+        return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
     }
-    
+
     fun startTracking() {
         if (!isUvcSupported || handLandmarker == null) {
-            Log.w("HandTracking", "Cannot start: UVC not supported or landmarker not initialized")
+            Log.w("HandTracking", "Cannot start: UVC not supported or landmarker not initialized (optional)")
             return
         }
-        
         isTracking = true
-        // Start camera preview and feed frames to handLandmarker
-        // This would require CameraX integration with ImageReader
         Log.d("HandTracking", "Hand tracking started")
     }
-    
+
     fun stopTracking() {
         isTracking = false
         Log.d("HandTracking", "Hand tracking stopped")
     }
-    
+
     fun setOnHandDataUpdate(listener: (HandTrackingData) -> Unit) {
         onHandDataUpdate = listener
     }
-    
+
     fun getLeftHandData(): HandData? = leftHandLandmarks?.let { HandData(it, leftHandConfidence, leftHandGesture) }
     fun getRightHandData(): HandData? = rightHandLandmarks?.let { HandData(it, rightHandConfidence, rightHandGesture) }
-    
+
     fun isTracking(): Boolean = isTracking
     fun isUvcAvailable(): Boolean = isUvcSupported
-    
+
     fun dispose() {
         stopTracking()
-        handLandmarker?.close()
-        imageReader?.close()
+        try { handLandmarker?.close() } catch (_: Exception) {}
+        try { imageReader?.close() } catch (_: Exception) {}
     }
 }

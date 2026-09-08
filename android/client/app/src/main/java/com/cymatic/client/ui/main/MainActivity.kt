@@ -47,8 +47,7 @@ class MainActivity : AppCompatActivity() {
     private fun checkPermissions() {
         val requiredPermissions = arrayOf(
             android.Manifest.permission.CAMERA,
-            android.Manifest.permission.RECORD_AUDIO,
-            android.Manifest.permission.ACCESS_FINE_LOCATION
+            android.Manifest.permission.RECORD_AUDIO
         )
         
         val missingPermissions = requiredPermissions.filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }

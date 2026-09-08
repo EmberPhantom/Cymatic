@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEngine;
 using UnityEngine.Networking;
 using Cysharp.Threading.Tasks;
@@ -10,6 +11,9 @@ using Cymatic.Pooling;
 using Cymatic.Prefabs;
 using Cymatic.Materials;
 using Cymatic.Navigation;
+#if UNITY_WEBRTC
+using Unity.WebRTC;
+#endif
 
 public class Vector3Converter : JsonConverter<Vector3>
 {
@@ -163,26 +167,80 @@ namespace Cymatic
             }
         }
         
+        // P0 FIX: whitelist allowed components to prevent arbitrary Type.GetType code execution
+        private static readonly HashSet<string> AllowedComponents = new HashSet<string>
+        {
+            "MeshRenderer", "MeshFilter", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider",
+            "Rigidbody", "Light", "AudioSource", "AudioListener", "Camera", "Animator",
+            "LineRenderer", "ParticleSystem", "Canvas", "Outline", "TextMesh", "TextMeshPro", "TextMeshProUGUI"
+        };
+
         private void AddComponent(GameObject go, ComponentData comp)
         {
+            if (comp == null || string.IsNullOrEmpty(comp.type)) return;
+            // P0 FIX: 166 arbitrary component Type.GetType whitelist
+            if (!AllowedComponents.Contains(comp.type))
+            {
+                Debug.LogWarning($"[SceneLoader] Component type not in whitelist, skipping: {comp.type}");
+                return;
+            }
+
             var type = Type.GetType($"UnityEngine.{comp.type}, UnityEngine.CoreModule")
                          ?? Type.GetType($"UnityEngine.{comp.type}, UnityEngine");
-            if (type == null) type = System.AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => a.GetTypes()).FirstOrDefault(t => t.Name == comp.type);
+            if (type == null)
+            {
+                // Fallback: search only in UnityEngine assemblies, still whitelist-checked
+                try
+                {
+                    type = System.AppDomain.CurrentDomain.GetAssemblies()
+                        .Where(a => a.FullName.StartsWith("UnityEngine"))
+                        .SelectMany(a => { try { return a.GetTypes(); } catch { return new Type[0]; } })
+                        .FirstOrDefault(t => t.Name == comp.type);
+                }
+                catch {}
+            }
             if (type != null)
             {
-                var component = go.AddComponent(type);
-                foreach (var prop in comp.properties)
+                // Ensure type is Component
+                if (!typeof(Component).IsAssignableFrom(type))
                 {
-                    var field = type.GetField(prop.Key) ?? type.GetProperty(prop.Key)?.GetGetMethod() != null ? type.GetProperty(prop.Key) : null;
-                    try {
-                        var targetType = (field as System.Reflection.FieldInfo)?.FieldType ?? (field as System.Reflection.PropertyInfo)?.PropertyType;
-                        if (targetType != null) {
-                            object val = prop.Value is JToken jt ? jt.ToObject(targetType) : Convert.ChangeType(prop.Value, targetType);
-                            if (field is System.Reflection.FieldInfo fi) fi.SetValue(component, val);
-                            else if (field is System.Reflection.PropertyInfo pi) pi.SetValue(component, val);
-                        }
-                    } catch {}
+                    Debug.LogWarning($"[SceneLoader] Type {comp.type} is not a Component, skipping");
+                    return;
                 }
+                var component = go.AddComponent(type);
+                if (comp.properties != null)
+                {
+                    foreach (var prop in comp.properties)
+                    {
+                        try
+                        {
+                            var fieldInfo = type.GetField(prop.Key, BindingFlags.Public | BindingFlags.Instance);
+                            var propInfo = fieldInfo == null ? type.GetProperty(prop.Key, BindingFlags.Public | BindingFlags.Instance) : null;
+                            Type targetType = null;
+                            if (fieldInfo != null) targetType = fieldInfo.FieldType;
+                            else if (propInfo != null) targetType = propInfo.PropertyType;
+
+                            if (targetType != null && prop.Value != null)
+                            {
+                                object val = null;
+                                if (prop.Value is JToken jt)
+                                    val = jt.ToObject(targetType);
+                                else
+                                    val = Convert.ChangeType(prop.Value, targetType);
+                                if (fieldInfo != null) fieldInfo.SetValue(component, val);
+                                else if (propInfo != null && propInfo.CanWrite) propInfo.SetValue(component, val);
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogWarning($"[SceneLoader] Failed to set property {prop.Key} on {comp.type}: {e.Message}");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"[SceneLoader] Could not resolve component type: {comp.type}");
             }
         }
         
@@ -206,8 +264,8 @@ namespace Cymatic
                     roomComp.name = entity.name;
                     if (entity.properties != null)
                     {
-                        roomComp.isFurnished = entity.properties.GetValueOrDefault("furnished", true);
-                        roomComp.style = entity.properties.GetValueOrDefault("style", "modern");
+                        roomComp.isFurnished = TryGetDictValue(entity.properties, "furnished", true);
+                        roomComp.style = TryGetDictValue(entity.properties, "style", "modern");
                     }
                     break;
                     
@@ -216,14 +274,14 @@ namespace Cymatic
                     poiComp.name = entity.name;
                     if (entity.properties != null)
                     {
-                        poiComp.description = entity.properties.GetValueOrDefault("description", "");
-                        poiComp.hasNarration = entity.properties.GetValueOrDefault("has_narration", true);
+                        poiComp.description = TryGetDictValue(entity.properties, "description", "");
+                        poiComp.hasNarration = TryGetDictValue(entity.properties, "has_narration", true);
                     }
                     break;
                     
                 case "navigation_point":
                     var navPoint = go.AddComponent<NavigationPoint>();
-                    navPoint.Initialize(entity.id, entity.name, entity.properties?.GetValueOrDefault("description", ""), new List<string>());
+                    navPoint.Initialize(entity.id, entity.name, TryGetDictValue(entity.properties, "description", ""), new List<string>());
                     break;
                     
                 case "light":
@@ -360,8 +418,18 @@ namespace Cymatic
         
         private void SetupLighting(LightingData lighting)
         {
-            // Find or create main light
+            // P0 FIX: 415 custom_lights null - add null guard for lighting itself
+            if (lighting == null)
+            {
+                Debug.LogWarning("[SceneLoader] LightingData is null, using defaults");
+                lighting = new LightingData { preset = "neutral", ambient_intensity = 1f, sun_direction = new float[]{50,-30,0}, custom_lights = null };
+            }
+            // Find or create main light - P0 FIX: use non-obsolete API for 2022.3, fallback to FindObjectOfType if needed
+#if UNITY_2022_3_OR_NEWER
+            var mainLight = UnityEngine.Object.FindFirstObjectByType<Light>();
+#else
             var mainLight = FindObjectOfType<Light>();
+#endif
             if (mainLight == null)
             {
                 var lightGO = new GameObject("MainLight");
@@ -411,17 +479,25 @@ namespace Cymatic
                     break;
             }
             
-            // Custom lights
-            foreach (var custom in lighting.custom_lights)
+            // Custom lights - P0 FIX: null guard
+            if (lighting.custom_lights != null)
             {
-                var lightGO = new GameObject($"CustomLight_{custom.type}");
-                var light = lightGO.AddComponent<Light>();
-                light.type = Enum.TryParse<LightType>(custom.type, true, out var lt) ? lt : LightType.Point;
-                light.color = new Color(custom.color[0], custom.color[1], custom.color[2]);
-                light.intensity = custom.intensity;
-                light.range = custom.range ?? 10f;
-                light.spotAngle = custom.angle ?? 60f;
-                lightGO.transform.position = new Vector3(custom.position[0], custom.position[1], custom.position[2]);
+                foreach (var custom in lighting.custom_lights)
+                {
+                    if (custom == null) continue;
+                    var lightGO = new GameObject($"CustomLight_{custom.type ?? "Point"}");
+                    var light = lightGO.AddComponent<Light>();
+                    light.type = Enum.TryParse<LightType>(custom.type, true, out var lt) ? lt : LightType.Point;
+                    if (custom.color != null && custom.color.Length >= 3)
+                        light.color = new Color(custom.color[0], custom.color[1], custom.color[2]);
+                    else
+                        light.color = Color.white;
+                    light.intensity = custom.intensity;
+                    light.range = custom.range ?? 10f;
+                    light.spotAngle = custom.angle ?? 60f;
+                    if (custom.position != null && custom.position.Length >= 3)
+                        lightGO.transform.position = new Vector3(custom.position[0], custom.position[1], custom.position[2]);
+                }
             }
         }
         
@@ -479,6 +555,20 @@ namespace Cymatic
             copilotGO.transform.SetParent(_sceneRoot.transform);
             var dataComp = copilotGO.AddComponent<CopilotPolicyComponent>();
             dataComp.policy = copilot;
+        }
+
+        // P0 FIX: helper for safe dict lookup (avoids GetValueOrDefault missing on older .NET Standard)
+        private static T TryGetDictValue<T>(Dictionary<string, object> dict, string key, T defaultValue)
+        {
+            if (dict == null) return defaultValue;
+            if (!dict.TryGetValue(key, out var val) || val == null) return defaultValue;
+            try
+            {
+                if (val is T typed) return typed;
+                if (val is JToken jt) return jt.ToObject<T>();
+                return (T)Convert.ChangeType(val, typeof(T));
+            }
+            catch { return defaultValue; }
         }
         
         public async UniTask UnloadScene()

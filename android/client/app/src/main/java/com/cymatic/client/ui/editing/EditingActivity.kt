@@ -60,7 +60,7 @@ class EditingActivity : AppCompatActivity() {
     private fun loadSpec() {
         lifecycleScope.launch {
             try {
-                val response = ApiClient.apiService.getSpecById(projectId, specId)
+                val response = ApiClient.apiService.getSpec(projectId, specId)
                 
                 if (response.isSuccessful) {
                     val spec = response.body()!!

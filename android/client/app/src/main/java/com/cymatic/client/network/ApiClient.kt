@@ -144,7 +144,4 @@ interface ApiService {
 
     @POST("v1/projects/{id}/specs/{spec_id}/edit")
     suspend fun editSpec(@Path("id") projectId: Int, @Path("spec_id") specId: Int, @Body request: EditRequest): retrofit2.Response<EditResponse>
-
-    @GET("v1/projects/{id}/specs/{spec_id}")
-    suspend fun getSpecById(@Path("id") projectId: Int, @Path("spec_id") specId: Int): retrofit2.Response<SpecResponse>
 }
