@@ -199,9 +199,57 @@ class BenchmarkRunner:
             self.base_url = orig_base
         return results
 
-    async def run_websocket_benchmark(self, iterations: int = 100) -> Dict[str, Any]:
+    async def run_websocket_benchmark(
+        self,
+        session_id: int | None = None,
+        token: str | None = None,
+        iterations: int = 100,
+    ) -> Dict[str, Any]:
         """Benchmark WebSocket connection and message latency."""
-        return {"note": "WebSocket benchmark not yet implemented"}
+        if not HAS_AIOHTTP:
+            return {"error": "WebSocket benchmark requires aiohttp"}
+        if session_id is None or not token:
+            return {
+                "error": (
+                    "WebSocket benchmark requires a published stream session and "
+                    "access token"
+                )
+            }
+
+        ws_url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = f"{ws_url}/v1/stream/ws/{session_id}?type=benchmark&token={token}"
+        latencies: List[float] = []
+        errors = 0
+        timeout = aiohttp.ClientTimeout(total=5)  # type: ignore[union-attr]
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:  # type: ignore[union-attr]
+            try:
+                async with session.ws_connect(ws_url) as websocket:  # type: ignore[union-attr]
+                    for index in range(iterations):
+                        started = time.perf_counter()
+                        try:
+                            await websocket.send_json({"type": "ping", "id": str(index)})
+                            message = await websocket.receive()
+                            if message.type != aiohttp.WSMsgType.TEXT:  # type: ignore[union-attr]
+                                errors += 1
+                                continue
+                            latencies.append((time.perf_counter() - started) * 1000)
+                        except Exception:
+                            errors += 1
+            except Exception as exc:
+                return {"error": f"WebSocket unavailable: {exc}"}
+
+        if not latencies:
+            return {"error": "WebSocket benchmark received no successful messages", "errors": errors}
+        return {
+            "iterations": iterations,
+            "successful": len(latencies),
+            "errors": errors,
+            "mean_ms": statistics.mean(latencies),
+            "median_ms": statistics.median(latencies),
+            "p95_ms": latencies[min(len(latencies) - 1, int(len(latencies) * 0.95))],
+            "success_rate": len(latencies) / iterations * 100,
+        }
 
     def generate_report(self, results: Dict[str, Any]) -> str:
         """Generate benchmark report."""

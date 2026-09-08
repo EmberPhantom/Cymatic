@@ -1,6 +1,7 @@
 package com.cymatic.client.ui.main
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
@@ -40,7 +41,12 @@ class MainActivity : AppCompatActivity() {
         }
         
         binding.btnSettings.setOnClickListener {
-            // TODO: Open settings
+            startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:$packageName"),
+                )
+            )
         }
     }
     

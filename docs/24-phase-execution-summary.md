@@ -16,5 +16,12 @@
 - [x] Security: EncryptedSharedPreferences fallback, BODY log only DEBUG, ADMIN_API_KEY on /metrics, bcrypt 3.2.2, gitleaks allowlist, rate_limit stubs
 
 ## Remaining Follow-ups (de-prioritized, not blocking MVP)
-- Unity WebRTC full VideoEncoder API still hypothetical (stub SetBitrate added), PerformanceManager ProfilerRecorder exact drawCalls approximate, Mobile ControllerManager still needs BLUETOOTH_CONNECT runtime request flow.
-- Heritage template full wiring (template_id) added but not exercised in e2e, manual editing UI still flag-gated server-side only.
+- Unity WebRTC runtime/build validation, exact PerformanceManager profiler measurements, and physical Android controller/Bluetooth validation remain hardware-gated.
+- Heritage template full wiring (`template_id`) is present but not exercised in end-to-end tests; manual editing UI remains flag-gated server-side.
+- Asset thumbnails/LOD processing and richer analytics aggregation remain MVP follow-ups.
+
+## Latest backlog fixes
+- Streaming candidate and input forwarding now return explicit 503/504/502/500 responses when the render server cannot process the request.
+- Project analytics now derives completion rate from completion runtime events instead of returning a constant zero.
+- Android Settings opens the application settings screen.
+- The benchmark runner now measures WebSocket ping/pong latency when `aiohttp` is available.

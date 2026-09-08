@@ -95,6 +95,21 @@ async def get_project_analytics(
     )
     events_by_type: dict[str, int] = {row[0]: row[1] for row in events_result.all()}
 
+    completed_sessions_res = await db.execute(
+        select(func.count(func.distinct(RuntimeEvent.session_id)))
+        .join(StreamSession, RuntimeEvent.session_id == StreamSession.id)
+        .where(StreamSession.project_id == project_id)
+        .where(
+            RuntimeEvent.event_type.in_(
+                ["tour_completed", "session_completed", "walkthrough_completed"]
+            )
+        )
+    )
+    completed_sessions = int(completed_sessions_res.scalar() or 0)
+    completion_rate = (
+        completed_sessions / total_sessions if total_sessions else 0.0
+    )
+
     return ProjectAnalytics(
         project_id=project_id,
         total_sessions=total_sessions,
@@ -102,7 +117,7 @@ async def get_project_analytics(
         avg_session_duration_seconds=avg_duration,
         unique_users=unique_users,
         events_by_type=events_by_type,
-        completion_rate=0.0,
+        completion_rate=completion_rate,
     )
 
 

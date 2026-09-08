@@ -1,6 +1,32 @@
 """P2 - Streaming edge cases"""
 import pytest
-from unittest.mock import AsyncMock, patch
+import httpx
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from app.models.project import ProjectStatus
+from app.models.stream_session import StreamSession, StreamSessionStatus
+
+
+async def _published_stream_session(db_session, test_project, test_user):
+    test_project.status = ProjectStatus.PUBLISHED
+    session = StreamSession(
+        project_id=test_project.id,
+        user_id=test_user.id,
+        status=StreamSessionStatus.CONNECTING,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+    return session
+
+
+def _failing_render_client():
+    response = MagicMock()
+    response.raise_for_status.side_effect = httpx.ConnectError("render unavailable")
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    return client
+
 
 @pytest.mark.asyncio
 async def test_create_stream_session_requires_published_project(client, auth_headers, test_project):
@@ -41,3 +67,37 @@ async def test_stream_copilot_fallback(client, auth_headers, test_project):
     # Copilot message should fallback to 503 if LLM router down
     resp = await client.post("/v1/stream/sessions/99999/agent/message", json={"message": "hello"}, headers=auth_headers)
     assert resp.status_code in (404, 400, 503, 502)
+
+
+@pytest.mark.asyncio
+async def test_candidate_forward_failure_is_not_reported_as_success(
+    client, auth_headers, db_session, test_project, test_user
+):
+    session = await _published_stream_session(db_session, test_project, test_user)
+    with patch(
+        "app.api.v1.endpoints.streaming._get_http_client",
+        return_value=_failing_render_client(),
+    ):
+        resp = await client.post(
+            f"/v1/stream/sessions/{session.id}/candidate",
+            json={"candidate": "candidate", "sdp_mid": "0", "sdp_mline_index": 0},
+            headers=auth_headers,
+        )
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_input_forward_failure_is_not_reported_as_success(
+    client, auth_headers, db_session, test_project, test_user
+):
+    session = await _published_stream_session(db_session, test_project, test_user)
+    with patch(
+        "app.api.v1.endpoints.streaming._get_http_client",
+        return_value=_failing_render_client(),
+    ):
+        resp = await client.post(
+            f"/v1/stream/sessions/{session.id}/input",
+            json={"input_type": "controller", "payload": {}, "timestamp": 1.0},
+            headers=auth_headers,
+        )
+    assert resp.status_code == 503

@@ -301,7 +301,7 @@ async def handle_candidate(
 
     try:
         client = _get_http_client()
-        await client.post(
+        resp = await client.post(
             f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/candidate",
             json={
                 "candidate": candidate.candidate,
@@ -310,14 +310,27 @@ async def handle_candidate(
             },
             timeout=httpx.Timeout(5.0, connect=3.0),
         )
+        resp.raise_for_status()
     except httpx.ConnectError:
         logger.warning(
             "candidate_forward_failed_render_unavailable", session_id=session_id
         )
+        raise HTTPException(status_code=503, detail="Render server unavailable")
     except httpx.TimeoutException:
         logger.warning("candidate_forward_timeout", session_id=session_id)
-    except (httpx.HTTPStatusError, OSError) as e:
+        raise HTTPException(status_code=504, detail="Render server timeout")
+    except httpx.HTTPStatusError as e:
+        logger.warning(
+            "candidate_forward_http_error",
+            session_id=session_id,
+            status=e.response.status_code,
+        )
+        raise HTTPException(
+            status_code=502, detail=f"Render server error: {e.response.status_code}"
+        )
+    except OSError as e:
         logger.warning("candidate_forward_error", session_id=session_id, error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to forward candidate")
 
     return {"status": "candidate_forwarded", "session_id": session_id}
 
@@ -348,7 +361,7 @@ async def handle_input(
 
     try:
         client = _get_http_client()
-        await client.post(
+        resp = await client.post(
             f"{settings.RENDER_SERVER_URL}/api/sessions/{session_id}/input",
             json={
                 "input_type": input_packet.input_type,
@@ -357,12 +370,25 @@ async def handle_input(
             },
             timeout=httpx.Timeout(5.0, connect=3.0),
         )
+        resp.raise_for_status()
     except httpx.ConnectError:
         logger.warning("input_forward_failed_render_unavailable", session_id=session_id)
+        raise HTTPException(status_code=503, detail="Render server unavailable")
     except httpx.TimeoutException:
         logger.warning("input_forward_timeout", session_id=session_id)
-    except (httpx.HTTPStatusError, OSError) as e:
+        raise HTTPException(status_code=504, detail="Render server timeout")
+    except httpx.HTTPStatusError as e:
+        logger.warning(
+            "input_forward_http_error",
+            session_id=session_id,
+            status=e.response.status_code,
+        )
+        raise HTTPException(
+            status_code=502, detail=f"Render server error: {e.response.status_code}"
+        )
+    except OSError as e:
         logger.warning("input_forward_error", session_id=session_id, error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to forward input")
 
     return {"status": "input_received", "session_id": session_id}
 
