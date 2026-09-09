@@ -16,3 +16,18 @@ async def get_job_status(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@router.post("/{job_id}/cancel")
+async def cancel_job(
+    job_id: str,
+    current_user: User = Depends(require_viewer),
+):
+    """Cancel a queued or running job (called by the builder Cancel button)"""
+    cancelled = await job_queue.cancel_job(job_id)
+    if not cancelled:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found or already in a terminal state",
+        )
+    return {"job_id": job_id, "status": "cancelled"}

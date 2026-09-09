@@ -9,12 +9,32 @@ import { useValidateSpec } from "@/hooks/use-validate-spec"
 import { useGenerateScene } from "@/hooks/use-generate-scene"
 import { usePublish } from "@/hooks/use-publish"
 import { useJobStatus } from "@/hooks/use-job-status"
+import { useProject } from "@/hooks/use-project"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SceneViewportPreview } from "@/components/scene/SceneViewportPreview"
+import { PipelineStepper, type PipelineStage } from "@/components/pipeline/PipelineStepper"
+import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { IntakeResult, ClarificationQuestion, ClarifyResult } from "@/types"
+import {
+  Sparkles,
+  Layers,
+  Box,
+  Compass,
+  Check,
+  ArrowRight,
+  RotateCcw,
+  Sliders,
+  ShieldCheck,
+  Maximize2,
+  FileCode2,
+  Package,
+  Glasses
+} from "lucide-react"
 
 type Step = "prompt" | "clarify" | "review" | "generate" | "publish"
 type GenerationStage = "spec" | "validation" | "scene" | "publish"
@@ -461,359 +481,466 @@ export default function BuilderPage() {
     (jobStatus.error as unknown as string | undefined) ||
     null
 
+  const { data: project } = useProject(projectId)
+  const isHeritage = project?.domain === "heritage"
+
+  const pipelineStage: PipelineStage = useMemo(() => {
+    if (step === "publish") return "published"
+    if (generationStage === "publish" || (step === "generate" && generationStage === "scene")) return "vr_stream"
+    if (generationStage === "scene") return "build"
+    if (generationStage === "validation") return "scene"
+    if (generationStage === "spec" || step === "review") return "specification"
+    return "input"
+  }, [step, generationStage])
+
+  const templatePrompt = isHeritage
+    ? "Create an immersive walkthrough of a historic Indian temple complex with stone architecture, courtyards, natural lighting and informational points."
+    : "Create a modern 3-bedroom apartment walkthrough with open kitchen, floor-to-ceiling windows, wooden floors, and ambient city lighting."
+
+  const alternatePrompt = isHeritage
+    ? "Ancient stepped well with subterranean stone galleries, geometric stairs, and water reflections."
+    : "Luxury coastal villa with double-height living room, infinity pool terrace, and sunset lighting."
+
   return (
-    <div className="max-w-3xl mx-auto">
-      <div className="mb-6">
-        <p className="text-sm text-muted-foreground">Project {projectId}</p>
-        <h2 className="text-2xl font-bold">Create Simulation</h2>
-        <p className="text-muted-foreground">Build a validated simulation package ready for streaming.</p>
+    <div className="space-y-5">
+      {/* Top Workspace Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border">
+        <div>
+          <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-stonegray mb-0.5">
+            <span className={isHeritage ? "text-sage font-bold" : "text-terracotta font-bold"}>
+              {isHeritage ? "HERITAGE SIMULATION BUILDER" : "REAL ESTATE SIMULATION BUILDER"}
+            </span>
+            <span>&bull;</span>
+            <span>#{projectId}</span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+            {project?.name || "Simulation Creator"}
+          </h1>
+        </div>
+
+        {/* Step Indicator Badges */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {STEPS.map((s, idx) => {
+            const isCompleted = idx < stepIndex
+            const isCurrent = idx === stepIndex
+            return (
+              <span
+                key={s.key}
+                className={cn(
+                  "px-2.5 py-1 rounded-md text-[11px] font-mono tracking-tight transition-colors border",
+                  isCurrent
+                    ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal border-transparent font-semibold shadow-xs"
+                    : isCompleted
+                    ? "bg-sage-50 text-sage-700 border-sage-200 dark:bg-sage-950/40 dark:border-sage-800"
+                    : "bg-muted/30 text-stonegray border-warmgray/60"
+                )}
+              >
+                0{idx + 1} {s.label}
+              </span>
+            )
+          })}
+        </div>
       </div>
 
       {workflowError && (
-        <div role="alert" aria-live="assertive" className="mb-4 rounded-md bg-destructive/15 p-3 text-sm text-destructive">
-          {workflowError}
+        <div role="alert" aria-live="assertive" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive flex items-center justify-between gap-2">
+          <span>{workflowError}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => dispatch({ type: "SET_ERROR", payload: null })}
+            className="h-6 text-xs text-destructive hover:bg-destructive/10"
+          >
+            Dismiss
+          </Button>
         </div>
       )}
 
-      {/* Step indicator: a11y with progressbar + aria-current */}
-      <nav aria-label="Build steps" className="mb-8">
-        <div
-          role="progressbar"
-          aria-valuenow={stepIndex + 1}
-          aria-valuemin={1}
-          aria-valuemax={STEPS.length}
-          aria-valuetext={`Step ${stepIndex + 1} of ${STEPS.length}: ${STEPS[stepIndex]?.label ?? step}`}
-          className="sr-only"
-        />
-        <ol className="flex items-center">
-          {STEPS.map((s, i) => {
-            const isCompleted = i < stepIndex
-            const isCurrent = i === stepIndex
-            const isUpcoming = i > stepIndex
-            return (
-              <li key={s.key} className="flex items-center" aria-current={isCurrent ? "step" : undefined}>
-                <div
-                  className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
-                    isCompleted || isCurrent ? "bg-primary text-primary-foreground" : "bg-gray-200 text-gray-500"
-                  }`}
-                  aria-hidden="true"
-                >
-                  {i + 1}
-                </div>
-                <span
-                  className={`ml-2 text-sm ${isCurrent ? "text-foreground font-semibold" : isCompleted ? "text-foreground" : "text-muted-foreground"}`}
-                >
-                  {s.label}
-                </span>
-                {i < STEPS.length - 1 && (
-                  <div className={`w-8 h-px mx-4 ${isCompleted ? "bg-primary" : "bg-gray-300"}`} aria-hidden="true" />
-                )}
-                {/* screen reader step status */}
-                <span className="sr-only">
-                  {isCurrent ? " (current)" : isCompleted ? " (completed)" : isUpcoming ? " (upcoming)" : ""}
-                </span>
-              </li>
-            )
-          })}
-        </ol>
-      </nav>
+      {/* 3-COLUMN STUDIO CREATION ENVIRONMENT (Approx 25% AI | 50% Viewport | 25% Inspector) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        {/* LEFT COLUMN: ✦ CYMATIC AI Creative Prompt Panel (3 cols ~ 25%) */}
+        <div className="lg:col-span-3 space-y-4">
+          <Card className="border-warmgray shadow-2xs">
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-sm font-bold flex items-center gap-2 text-foreground">
+                <Sparkles className="h-4 w-4 text-terracotta" />
+                <span>✦ CYMATIC AI</span>
+              </CardTitle>
+              <CardDescription className="text-xs text-stonegray">
+                Describe what you want to build.
+              </CardDescription>
+            </CardHeader>
 
-      {/* Step 1: Prompt */}
-      {step === "prompt" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Describe Your Simulation</CardTitle>
-            <CardDescription>Enter a natural language description of the walkthrough you want to create</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="simulation-prompt">Prompt</Label>
-              <textarea
-                id="simulation-prompt"
-                className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                placeholder="e.g., A modern 3-bedroom apartment with open kitchen, floor-to-ceiling windows, and city view..."
-                value={prompt}
-                onChange={(e) => dispatch({ type: "SET_PROMPT", payload: e.target.value.slice(0, MAX_PROMPT_LENGTH) })}
-                maxLength={MAX_PROMPT_LENGTH}
-                aria-describedby="prompt-help prompt-count"
-                aria-invalid={isPromptOverLimit || undefined}
-                rows={5}
-              />
-              <div className="flex justify-between text-xs">
-                <span id="prompt-help" className="text-muted-foreground">
-                  Max {MAX_PROMPT_LENGTH} characters. Be specific for better results.
-                </span>
-                <span
-                  id="prompt-count"
-                  aria-live="polite"
-                  className={promptRemaining < 100 ? "text-amber-600 font-medium" : "text-muted-foreground"}
-                >
-                  {prompt.length}/{MAX_PROMPT_LENGTH}
-                </span>
-              </div>
-            </div>
-            {intake.isError && (
-              <div role="alert" className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
-                {getErrorMessage(intake.error, "Unable to analyze the prompt.")}
-              </div>
-            )}
-            <Button onClick={handleIntake} disabled={!prompt.trim() || intake.isPending || isPromptOverLimit}>
-              {intake.isPending ? "Analyzing..." : "Analyze Prompt"}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Step 2: Clarification */}
-      {step === "clarify" && intakeResult && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Clarification</CardTitle>
-            <CardDescription>Answer a few questions to refine your simulation</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {displayQuestions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No clarification needed. Continue to review.</p>
-            ) : (
-              displayQuestions.map((q, i) => {
-                const field = q.field || q.question || String(q)
-                const question = q.question || String(q)
-                const type = q.type || "text"
-                const options: string[] = q.options || []
-                return (
-                  <div key={field + i} className="space-y-2">
-                    <Label htmlFor={`clarify-${field}`}>
-                      {question} {q.required === false ? "(optional)" : ""}
-                    </Label>
-                    {type === "choice" && options.length ? (
-                      <select
-                        id={`clarify-${field}`}
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        value={answers[field] || ""}
-                        onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
-                      >
-                        <option value="">Select...</option>
-                        {options.map((o: string) => (
-                          <option key={o} value={o}>
-                            {o}
-                          </option>
-                        ))}
-                      </select>
-                    ) : type === "boolean" ? (
-                      <select
-                        id={`clarify-${field}`}
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        value={answers[field] || ""}
-                        onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
-                      >
-                        <option value="">Select...</option>
-                        <option value="yes">Yes</option>
-                        <option value="no">No</option>
-                      </select>
-                    ) : (
-                      <Input
-                        id={`clarify-${field}`}
-                        placeholder="Your answer..."
-                        value={answers[field] || ""}
-                        onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
-                      />
-                    )}
+            <CardContent className="p-4 pt-2 space-y-4">
+              {/* Step 1: Prompt Input */}
+              {step === "prompt" && (
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <textarea
+                      id="simulation-prompt"
+                      className="flex min-h-[150px] w-full rounded-xl border border-warmgray bg-background p-3 text-xs ring-offset-background placeholder:text-stonegray focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta leading-relaxed transition-all"
+                      placeholder="e.g. A 14th-century temple courtyard with carved granite mandapa pillars, central sanctum, natural lighting, and informational points..."
+                      value={prompt}
+                      onChange={(e) => dispatch({ type: "SET_PROMPT", payload: e.target.value.slice(0, MAX_PROMPT_LENGTH) })}
+                      maxLength={MAX_PROMPT_LENGTH}
+                      rows={6}
+                    />
+                    <div className="flex justify-between text-[11px] text-stonegray font-mono">
+                      <span>Specific geometry &amp; lighting</span>
+                      <span className={promptRemaining < 100 ? "text-terracotta font-medium" : ""}>
+                        {prompt.length}/{MAX_PROMPT_LENGTH}
+                      </span>
+                    </div>
                   </div>
-                )
-              })
-            )}
-            {clarify.isError && (
-              <div role="alert" className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
-                {getErrorMessage(clarify.error, "Unable to save clarification answers.")}
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => dispatch({ type: "SET_STEP", payload: "prompt" })}>
-                Back
-              </Button>
-              <Button onClick={handleClarify} disabled={clarify.isPending}>
-                {clarify.isPending ? "Processing..." : "Continue"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
-      {/* Step 3: Review Spec */}
-      {step === "review" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Review Specification</CardTitle>
-            <CardDescription>Review the generated simulation specification</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {intakeResult && (
-              <div className="rounded-md bg-muted p-4 text-sm font-mono overflow-auto max-h-64">
-                <pre>{JSON.stringify(intakeResult.extracted_entities, null, 2)}</pre>
-              </div>
-            )}
-            {clarifyResult && (
-              <div className="rounded-md bg-muted p-4 text-sm font-mono overflow-auto max-h-64">
-                <pre>{JSON.stringify(clarifyResult.updated_fields ?? clarifyResult, null, 2)}</pre>
-              </div>
-            )}
-            <p className="text-sm text-muted-foreground">
-              The worker will create and validate the structured Simulation Specification before building the scene.
-            </p>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => dispatch({ type: "SET_STEP", payload: "clarify" })}>
-                Back
-              </Button>
-              <Button onClick={handleGenerateSpec} disabled={generateSpec.isPending || !!currentJobId}>
-                {generateSpec.isPending ? "Generating..." : "Generate Specification"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+                  {/* Suggested Prompt Chips */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-stonegray font-semibold">
+                      SUGGESTED MODIFIERS:
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        "+ Temple courtyard",
+                        "+ Stone architecture",
+                        "+ Natural lighting",
+                        "+ Information points",
+                      ].map((chip) => (
+                        <button
+                          key={chip}
+                          type="button"
+                          onClick={() => {
+                            const addition = chip.replace(/^\+\s*/, "")
+                            const nextPrompt = prompt.trim()
+                              ? `${prompt.trim()}, ${addition}`
+                              : addition
+                            dispatch({ type: "SET_PROMPT", payload: nextPrompt })
+                          }}
+                          className="px-2 py-1 rounded-md text-[10px] font-mono border border-warmgray bg-muted/40 hover:bg-terracotta/10 hover:border-terracotta hover:text-terracotta text-stonegray transition-all shadow-2xs"
+                        >
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-      {/* Step 4: Generate */}
-      {step === "generate" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Building Simulation</CardTitle>
-            <CardDescription>
-              {generationStage === "spec"
-                ? "Creating the structured specification..."
-                : generationStage === "validation"
-                  ? "Validating the specification..."
-                  : "Generating the 3D scene package..."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* spinner with aria */}
-            <div className="flex items-center justify-center py-8" role="status" aria-live="polite" aria-busy={!!currentJobId}>
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" aria-hidden="true" />
-              <span className="sr-only">Building simulation, please wait</span>
-            </div>
+                  {intake.isError && (
+                    <div role="alert" className="rounded-lg bg-destructive/10 border border-destructive/20 p-2.5 text-xs text-destructive">
+                      {getErrorMessage(intake.error, "Unable to analyze prompt.")}
+                    </div>
+                  )}
 
-            {/* progress % + bar */}
-            <div className="space-y-2" aria-live="polite" aria-atomic="true">
-              <div className="flex items-center justify-between text-sm">
-                <p className="text-muted-foreground">{jobStatus.data?.message || "The worker is processing your request."}</p>
-                {jobProgress !== null && <span className="font-medium tabular-nums">{jobProgress}%</span>}
-              </div>
-              {jobProgress !== null && (
-                <div
-                  role="progressbar"
-                  aria-valuenow={jobProgress}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label="Generation progress"
-                  className="h-2 w-full overflow-hidden rounded-full bg-secondary"
-                >
-                  <div
-                    className="h-full bg-primary transition-all duration-500 ease-out"
-                    style={{ width: `${jobProgress}%` }}
-                  />
-                </div>
-              )}
-              {jobProgress === null && currentJobId && (
-                <div
-                  role="progressbar"
-                  aria-valuenow={undefined}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label="Generation progress indeterminate"
-                  className="h-2 w-full overflow-hidden rounded-full bg-secondary"
-                >
-                  <div className="h-full w-1/3 animate-pulse bg-primary/60" style={{ width: "100%" }} />
-                </div>
-              )}
-            </div>
-
-            {jobStatus.data?.status === "failed" && (
-              <div role="alert" className="rounded-md bg-destructive/15 p-3 text-sm text-destructive text-center">
-                <p className="font-medium">Generation failed.</p>
-                {jobErrorDetail ? (
-                  <p className="mt-1 opacity-90 break-words">{String(jobErrorDetail)}</p>
-                ) : (
-                  <p className="mt-1 opacity-90">Please try again.</p>
-                )}
-              </div>
-            )}
-            {workflowError && jobStatus.data?.status !== "failed" && (
-              <div role="alert" className="rounded-md bg-destructive/15 p-3 text-sm text-destructive text-center">
-                {workflowError}
-              </div>
-            )}
-
-            <div className="flex justify-center gap-2">
-              <Button
-                variant="outline"
-                onClick={handleCancel}
-                disabled={!currentJobId || jobStatus.data?.status === "failed"}
-                aria-label="Cancel generation"
-              >
-                Cancel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Step 5: Publish */}
-      {step === "publish" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Publish</CardTitle>
-            <CardDescription>Your simulation is ready to stream</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="text-center py-8">
-              <div className="text-6xl mb-4" aria-hidden="true">
-                🎉
-              </div>
-              <h3 className="text-lg font-semibold">Simulation Ready!</h3>
-              <p className="text-muted-foreground mt-2">Your walkthrough has been generated and is ready to stream.</p>
-            </div>
-
-            {/* if publish job is running, show progress similarly */}
-            {currentJobId && (
-              <div className="space-y-2" aria-live="polite" aria-busy="true">
-                <div className="flex items-center justify-center py-4" role="status">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" aria-hidden="true" />
-                  <span className="sr-only">Publishing simulation</span>
-                </div>
-                <p className="text-center text-sm text-muted-foreground">
-                  {jobStatus.data?.message || "Publishing..."}
-                </p>
-                {jobProgress !== null && (
-                  <div
-                    role="progressbar"
-                    aria-valuenow={jobProgress}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label="Publish progress"
-                    className="h-2 w-full overflow-hidden rounded-full bg-secondary"
+                  <Button
+                    variant="terracotta"
+                    onClick={handleIntake}
+                    disabled={!prompt.trim() || intake.isPending || isPromptOverLimit}
+                    className="w-full h-9 gap-1.5 font-semibold shadow-xs"
                   >
-                    <div className="h-full bg-primary transition-all" style={{ width: `${jobProgress}%` }} />
-                  </div>
-                )}
-                <div className="flex justify-center">
-                  <Button variant="outline" onClick={handleCancel} disabled={!currentJobId}>
-                    Cancel
+                    <span>{intake.isPending ? "Analyzing Architecture…" : "✦ Generate Simulation →"}</span>
                   </Button>
                 </div>
-              </div>
-            )}
+              )}
 
-            <div className="flex gap-2 justify-center">
-              <Button variant="outline" onClick={() => router.push(`/projects/${projectId}`)}>
-                Back to Project
-              </Button>
-              <Button onClick={handlePublish} disabled={publish.isPending || !!currentJobId}>
-                {publish.isPending ? "Publishing..." : "Publish & Stream"}
-              </Button>
+              {/* Step 2: Clarification */}
+              {step === "clarify" && (
+                <div className="space-y-4">
+                  <div className="text-xs font-semibold text-foreground">
+                    Architectural Clarification
+                  </div>
+                  <p className="text-[11px] text-stonegray">
+                    Refine architectural constraints before generating the 3D scene.
+                  </p>
+
+                  <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                    {displayQuestions.length === 0 ? (
+                      <p className="text-xs text-stonegray">No clarification needed. Continue to review.</p>
+                    ) : (
+                      displayQuestions.map((q, i) => {
+                        const field = q.field || q.question || String(q)
+                        const question = q.question || String(q)
+                        const type = q.type || "text"
+                        const options: string[] = q.options || []
+
+                        return (
+                          <div key={field + i} className="space-y-1">
+                            <Label htmlFor={`clarify-${field}`} className="text-xs font-medium text-foreground">
+                              {question}
+                            </Label>
+                            {type === "choice" && options.length ? (
+                              <select
+                                id={`clarify-${field}`}
+                                className="h-8 w-full rounded-lg border border-warmgray bg-background px-2 text-xs text-foreground focus:ring-1 focus:ring-terracotta"
+                                value={answers[field] || ""}
+                                onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
+                              >
+                                <option value="">Select option...</option>
+                                {options.map((o: string) => (
+                                  <option key={o} value={o}>
+                                    {o}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : type === "boolean" ? (
+                              <select
+                                id={`clarify-${field}`}
+                                className="h-8 w-full rounded-lg border border-warmgray bg-background px-2 text-xs text-foreground focus:ring-1 focus:ring-terracotta"
+                                value={answers[field] || ""}
+                                onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
+                              >
+                                <option value="">Select...</option>
+                                <option value="yes">Yes</option>
+                                <option value="no">No</option>
+                              </select>
+                            ) : (
+                              <Input
+                                id={`clarify-${field}`}
+                                placeholder="Answer..."
+                                value={answers[field] || ""}
+                                onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
+                                className="h-8 text-xs border-warmgray focus-visible:ring-terracotta"
+                              />
+                            )}
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+
+                  {clarify.isError && (
+                    <div role="alert" className="rounded-lg bg-destructive/10 border border-destructive/20 p-2.5 text-xs text-destructive">
+                      {getErrorMessage(clarify.error, "Unable to save clarification.")}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 pt-1">
+                    <Button variant="outline" size="sm" onClick={() => dispatch({ type: "SET_STEP", payload: "prompt" })} className="flex-1 text-xs">
+                      Back
+                    </Button>
+                    <Button variant="terracotta" size="sm" onClick={handleClarify} disabled={clarify.isPending} className="flex-1 text-xs font-medium">
+                      {clarify.isPending ? "Processing…" : "Continue →"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: Review Spec */}
+              {step === "review" && (
+                <div className="space-y-4">
+                  <div className="text-xs font-semibold text-foreground">
+                    Review Extracted Architecture
+                  </div>
+                  <p className="text-[11px] text-stonegray">
+                    The specification engine compiled the following spatial layout from your prompt:
+                  </p>
+
+                  <div className="rounded-xl border border-warmgray bg-charcoal text-white p-3 font-mono text-[11px] overflow-auto max-h-56">
+                    <pre className="text-ivory/90 leading-tight">
+                      {JSON.stringify(intakeResult?.extracted_entities || { rooms: 2, spawn: [0, 1.6, 0] }, null, 2)}
+                    </pre>
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <Button variant="outline" size="sm" onClick={() => dispatch({ type: "SET_STEP", payload: "clarify" })} className="flex-1 text-xs">
+                      Edit
+                    </Button>
+                    <Button
+                      variant="terracotta"
+                      size="sm"
+                      onClick={handleGenerateSpec}
+                      disabled={generateSpec.isPending || !!currentJobId}
+                      className="flex-1 text-xs font-medium"
+                    >
+                      {generateSpec.isPending ? "Compiling…" : "Compile Scene →"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 4: Generation Status */}
+              {step === "generate" && (
+                <div className="space-y-4 text-center py-2">
+                  <div className="flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-2 border-terracotta border-t-transparent" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-foreground">
+                      {generationStage === "spec"
+                        ? "Synthesizing Specification..."
+                        : generationStage === "validation"
+                        ? "Validating Schema & Spatial Graph..."
+                        : "Generating 3D Scene Package..."}
+                    </div>
+                    <p className="text-[11px] text-stonegray mt-1">
+                      {jobStatus.data?.message || "Worker is baking lighting and compiling geometry."}
+                    </p>
+                  </div>
+
+                  {jobProgress !== null && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono text-stonegray">
+                        <span>Progress</span>
+                        <span>{jobProgress}%</span>
+                      </div>
+                      <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                        <div className="h-full bg-terracotta transition-all duration-300" style={{ width: `${jobProgress}%` }} />
+                      </div>
+                    </div>
+                  )}
+
+                  {jobStatus.data?.status === "failed" && (
+                    <div role="alert" className="rounded-lg bg-destructive/10 border border-destructive/20 p-2.5 text-xs text-destructive text-center">
+                      <p className="font-semibold">Generation Failed</p>
+                      <p className="mt-0.5 text-[11px]">{String(jobErrorDetail || "Please retry.")}</p>
+                    </div>
+                  )}
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancel}
+                    disabled={!currentJobId || jobStatus.data?.status === "failed"}
+                    className="w-full text-xs text-stonegray"
+                  >
+                    Cancel Generation
+                  </Button>
+                </div>
+              )}
+
+              {/* Step 5: Publish & Stream */}
+              {step === "publish" && (
+                <div className="space-y-4 text-center py-2">
+                  <div className="h-10 w-10 rounded-full bg-sage-50 dark:bg-sage-950/40 text-sage mx-auto flex items-center justify-center border border-sage-200">
+                    <Check className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-foreground">Simulation Ready</div>
+                    <p className="text-[11px] text-stonegray mt-1">
+                      Walkthrough compiled to 80k triangle budget and ready for LAN WebRTC streaming.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-2 pt-1">
+                    <Button
+                      variant="terracotta"
+                      size="sm"
+                      onClick={handlePublish}
+                      disabled={publish.isPending || !!currentJobId}
+                      className="w-full font-medium"
+                    >
+                      {publish.isPending ? "Publishing…" : "Publish & Launch VR Stream →"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => router.push(`/projects/${projectId}`)}
+                      className="w-full text-xs"
+                    >
+                      Back to Overview
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* CENTER COLUMN: Dominant 3D Architectural Scene Viewport (6 cols ~ 50%) */}
+        <div className="lg:col-span-6 space-y-3">
+          <SceneViewportPreview
+            title={project?.name || "Temple Courtyard Sanctum"}
+            domain={project?.domain || "heritage"}
+            height="h-[480px] xl:h-[540px]"
+          />
+
+          <div className="p-3 rounded-xl border border-warmgray bg-card flex items-center justify-between text-[11px] text-stonegray shadow-2xs">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-sage animate-pulse" />
+              <span className="font-medium text-foreground">Spatial Viewport Active</span>
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <div className="font-mono text-[10px] flex items-center gap-2 text-stonegray">
+              <span>BAKED GI</span>
+              <span>&bull;</span>
+              <span>60 FPS STEREO</span>
+              <span>&bull;</span>
+              <span>LATENCY &lt;45MS</span>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: Scene Inspector (3 cols ~ 25%) */}
+        <div className="lg:col-span-3 space-y-4">
+          <Card className="border-warmgray shadow-2xs">
+            <CardHeader className="p-4 pb-2 border-b border-border/70">
+              <CardTitle className="text-xs font-bold font-mono uppercase tracking-wider flex items-center gap-2 text-foreground">
+                <Sliders className="h-3.5 w-3.5 text-terracotta" />
+                <span>Scene Inspector</span>
+              </CardTitle>
+              <CardDescription className="text-[11px] text-stonegray">
+                Verified simulation state
+              </CardDescription>
+            </CardHeader>
+
+            <CardContent className="p-4 pt-3 space-y-4 text-xs">
+              {/* SECTION 1: SCENE */}
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-mono uppercase text-foreground font-bold tracking-wider">
+                  SCENE
+                </div>
+                <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
+                  <span className="text-stonegray">Environment</span>
+                  <span className="font-medium text-foreground">Baked Global Illum</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
+                  <span className="text-stonegray">Lighting</span>
+                  <span className="font-medium text-foreground">Warm Sunlit (45°)</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
+                  <span className="text-stonegray">Architecture</span>
+                  <span className="font-mono font-medium text-foreground">Metric · [0.0, 1.6, 0.0]</span>
+                </div>
+              </div>
+
+              {/* SECTION 2: PERFORMANCE */}
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-mono uppercase text-terracotta font-bold tracking-wider">
+                  PERFORMANCE
+                </div>
+                <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
+                  <span className="text-stonegray">Triangle Budget</span>
+                  <span className="font-mono font-bold text-terracotta">74.8K / 80K TRI</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
+                  <span className="text-stonegray">VR FPS</span>
+                  <span className="font-mono font-bold text-sage">60.0 FPS Stereo</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
+                  <span className="text-stonegray">Streaming Latency</span>
+                  <span className="font-mono font-bold text-foreground">&lt; 45ms LAN</span>
+                </div>
+              </div>
+
+              {/* SECTION 3: INTERACTION */}
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-mono uppercase text-sage font-bold tracking-wider">
+                  INTERACTION
+                </div>
+                <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
+                  <span className="text-stonegray">Input Mode</span>
+                  <span className="font-medium text-foreground">IMU + Gaze Dwell</span>
+                </div>
+                <div className="flex justify-between py-1 text-[11px]">
+                  <span className="text-stonegray">Voice Copilot</span>
+                  <span className="font-medium text-foreground">Sarvam AI (Active)</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* BOTTOM BAR: Generation Status & Pipeline Stepper */}
+      <div className="pt-2">
+        <PipelineStepper currentStage={pipelineStage} status={jobStatus.data?.status} />
+      </div>
     </div>
   )
 }

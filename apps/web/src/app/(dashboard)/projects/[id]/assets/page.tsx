@@ -1,39 +1,82 @@
 "use client"
 
 import { useParams } from "next/navigation"
-import { useRef, useState, useCallback } from "react"
+import { useRef, useState, useCallback, useMemo } from "react"
 import { useAssets } from "@/hooks/use-assets"
 import { useUploadAsset } from "@/hooks/use-upload-asset"
 import { config } from "@/lib/config"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Upload,
+  Box,
+  Image as ImageIcon,
+  Music,
+  FileText,
+  Check,
+  HardDrive,
+  FolderOpen,
+  Plus
+} from "lucide-react"
 
-function getAssetVisual(asset: { type?: string; content_type?: string; metadata_json?: Record<string, unknown>; filename?: string; storage_key?: string }) {
+type AssetCategory = "all" | "models" | "textures" | "audio" | "docs"
+
+function getAssetVisual(asset: {
+  type?: string
+  content_type?: string
+  metadata_json?: Record<string, unknown>
+  filename?: string
+  storage_key?: string
+}) {
   const meta = (asset.metadata_json || {}) as Record<string, unknown>
-  const ctype = (asset.content_type as string) || (meta.content_type as string) || (meta.original_content_type as string) || ""
+  const ctype =
+    (asset.content_type as string) ||
+    (meta.content_type as string) ||
+    (meta.original_content_type as string) ||
+    ""
   const lowerCtype = ctype.toLowerCase()
-  const filename = (asset.filename as string) || (meta.original_filename as string) || (meta.filename as string) || (asset.storage_key?.split("/").pop() as string) || "asset"
+  const filename =
+    (asset.filename as string) ||
+    (meta.original_filename as string) ||
+    (meta.filename as string) ||
+    (asset.storage_key?.split("/").pop() as string) ||
+    "asset"
   const lowerName = filename.toLowerCase()
   const type = (asset.type as string) || ""
 
-  // image
-  if (lowerCtype.startsWith("image/") || /\.(png|jpg|jpeg|webp|hdr|exr|gif|bmp)$/i.test(lowerName)) {
-    return { kind: "image" as const, icon: "🖼️", label: "Image", filename, ctype }
+  // 3D Model
+  if (
+    type === "model_3d" ||
+    lowerCtype.includes("model") ||
+    lowerCtype === "model/gltf-binary" ||
+    lowerCtype.includes("gltf") ||
+    /\.(glb|gltf|fbx|obj)$/i.test(lowerName)
+  ) {
+    return { kind: "model" as const, label: "3D Model", filename, ctype, category: "models" as const }
   }
-  // audio
-  if (lowerCtype.startsWith("audio/") || type === "audio" || /\.(mp3|wav|ogg|m4a|flac)$/i.test(lowerName)) {
-    return { kind: "audio" as const, icon: "🎵", label: "Audio", filename, ctype }
+  // Audio
+  if (
+    lowerCtype.startsWith("audio/") ||
+    type === "audio" ||
+    /\.(mp3|wav|ogg|m4a|flac)$/i.test(lowerName)
+  ) {
+    return { kind: "audio" as const, label: "Audio", filename, ctype, category: "audio" as const }
   }
-  // model_3d — must check extension because Android file.type is "" for .glb and ctype may be octet-stream
-  if (type === "model_3d" || lowerCtype.includes("model") || lowerCtype === "model/gltf-binary" || lowerCtype.includes("gltf") || /\.(glb|gltf|fbx|obj)$/i.test(lowerName)) {
-    return { kind: "model" as const, icon: "📦", label: "3D Model", filename, ctype }
+  // Texture
+  if (type === "texture") {
+    return { kind: "texture" as const, label: "Texture", filename, ctype, category: "textures" as const }
   }
-  // texture fallback
-  if (type === "texture" || /\.(png|jpg|jpeg|webp)$/i.test(lowerName)) {
-    return { kind: "image" as const, icon: "🖼️", label: "Texture", filename, ctype }
+  // Image
+  if (
+    lowerCtype.startsWith("image/") ||
+    /\.(png|jpg|jpeg|webp|hdr|exr|gif|bmp)$/i.test(lowerName)
+  ) {
+    return { kind: "image" as const, label: "Image", filename, ctype, category: "textures" as const }
   }
-  return { kind: "other" as const, icon: "📄", label: "File", filename, ctype }
+
+  return { kind: "other" as const, label: "Document", filename, ctype, category: "docs" as const }
 }
 
 export default function AssetsPage() {
@@ -45,20 +88,18 @@ export default function AssetsPage() {
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
+  const [category, setCategory] = useState<AssetCategory>("all")
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
       const fileArray = Array.from(files)
       if (fileArray.length === 0) return
-      // clear previous status
       setUploadError(null)
       setUploadSuccess(null)
-      // No duplicate size check here vs hook: delegate to useUploadAsset which uses config.maxUploadMB.
-      // We still provide friendly batch validation using config for early feedback without hardcoding 50MB.
+
       const tooLarge = fileArray.filter((f) => f.size > config.maxUploadMB * 1024 * 1024)
       if (tooLarge.length > 0) {
-        setUploadError(`Some files exceed ${config.maxUploadMB}MB: ${tooLarge.map((f) => f.name).join(", ")}`)
-        // still attempt to upload the valid ones rather than blocking all
+        setUploadError(`Files exceeding ${config.maxUploadMB}MB limit: ${tooLarge.map((f) => f.name).join(", ")}`)
       }
       const validFiles = fileArray.filter((f) => f.size <= config.maxUploadMB * 1024 * 1024)
       if (validFiles.length === 0) {
@@ -75,7 +116,7 @@ export default function AssetsPage() {
           setUploadError((prev) => (prev ? `${prev}; ${file.name}: ${msg}` : `${file.name}: ${msg}`))
         }
       }
-      if (successCount > 0) setUploadSuccess(`Uploaded ${successCount} file(s)`)
+      if (successCount > 0) setUploadSuccess(`Uploaded ${successCount} asset file(s) to MinIO`)
       if (fileInputRef.current) fileInputRef.current.value = ""
     },
     [upload]
@@ -104,18 +145,31 @@ export default function AssetsPage() {
     if (files && files.length > 0) await handleFiles(files)
   }
 
-  const handleKeyActivate = (e: React.KeyboardEvent, filename: string) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault()
-      // focusable card: could open preview in future; for now announce
-      // keep keyboard accessible
-    }
-  }
+  // Filter assets by selected category
+  const filteredAssets = useMemo(() => {
+    if (!assets) return []
+    if (category === "all") return assets
+    return assets.filter((asset: any) => {
+      const visual = getAssetVisual(asset)
+      return visual.category === category
+    })
+  }, [assets, category])
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold">Assets</h3>
+    <div className="space-y-6">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border">
+        <div>
+          <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-stonegray mb-0.5">
+            <span className="text-terracotta font-bold">SPATIAL ASSET LIBRARY</span>
+            <span>&bull;</span>
+            <span>MINIO REPOSITORY</span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+            Asset Repository
+          </h1>
+        </div>
+
         <div>
           <input
             ref={fileInputRef}
@@ -126,76 +180,127 @@ export default function AssetsPage() {
             multiple
             aria-label="Upload assets"
           />
-          <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={upload.isPending}>
-            {upload.isPending ? "Uploading..." : "Upload Asset"}
+          <Button
+            variant="terracotta"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={upload.isPending}
+            className="gap-1.5 font-medium shadow-xs"
+          >
+            <Plus className="h-4 w-4" />
+            <span>{upload.isPending ? "Uploading…" : "+ Upload Asset"}</span>
           </Button>
         </div>
       </div>
 
-      {/* drag-drop zone + aria-live */}
+      {/* Drag & Drop Upload Zone */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         role="region"
         aria-label="Upload drop zone"
-        className={`mb-4 rounded-lg border-2 border-dashed p-6 text-center transition-colors ${isDragOver ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-muted-foreground/50"} ${upload.isPending ? "opacity-60 pointer-events-none" : ""}`}
+        className={`rounded-2xl border-2 border-dashed p-8 text-center transition-all ${
+          isDragOver
+            ? "border-terracotta bg-terracotta-50/40 dark:bg-terracotta-950/20 shadow-xs"
+            : "border-warmgray bg-muted/20 hover:border-foreground/40 hover:bg-muted/30"
+        } ${upload.isPending ? "opacity-60 pointer-events-none" : ""}`}
       >
-        <p className="text-sm text-muted-foreground">
-          Drag & drop files here, or click Upload Asset. Supports multiple files. Max {config.maxUploadMB}MB per file.
+        <div className="h-10 w-10 rounded-xl bg-card border border-warmgray text-terracotta mx-auto flex items-center justify-center mb-2 shadow-2xs">
+          <Upload className="h-5 w-5" />
+        </div>
+        <p className="text-xs font-semibold text-foreground">
+          Drag &amp; drop 3D models, textures, or audio narration files here
         </p>
-        <p className="text-xs text-muted-foreground mt-1">Accepted: .glb .gltf .fbx .obj .png .jpg .webp .mp3 .wav .ogg</p>
+        <p className="text-[11px] text-stonegray mt-1">
+          Supports .glb, .gltf, .fbx, .obj, .png, .jpg, .webp, .hdr, .mp3, .wav (Max {config.maxUploadMB}MB per file)
+        </p>
       </div>
 
-      <div aria-live="polite" aria-atomic="true" className="sr-only" role="status">
-        {uploadError ? `Upload error: ${uploadError}` : ""}
-        {uploadSuccess ? uploadSuccess : ""}
-        {upload.isPending ? "Uploading..." : ""}
-      </div>
       {uploadError && (
-        <div role="alert" className="mb-3 rounded-md bg-destructive/15 p-3 text-sm text-destructive">
+        <div role="alert" className="rounded-xl bg-destructive/10 border border-destructive/20 p-3 text-xs text-destructive">
           {uploadError}
         </div>
       )}
       {uploadSuccess && (
-        <div role="status" className="mb-3 rounded-md bg-green-50 p-3 text-sm text-green-700 border border-green-200">
-          {uploadSuccess}
+        <div role="status" className="rounded-xl bg-sage-50 dark:bg-sage-950/30 border border-sage-200 dark:border-sage-800 p-3 text-xs text-sage flex items-center gap-2">
+          <Check className="h-4 w-4" />
+          <span>{uploadSuccess}</span>
         </div>
       )}
 
+      {/* Category Tabs */}
+      <div className="flex items-center gap-1.5 border-b border-border pb-2 overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => setCategory("all")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            category === "all" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+          }`}
+        >
+          All Assets ({assets?.length || 0})
+        </button>
+        <button
+          type="button"
+          onClick={() => setCategory("models")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            category === "models" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+          }`}
+        >
+          3D Models (.glb, .obj)
+        </button>
+        <button
+          type="button"
+          onClick={() => setCategory("textures")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            category === "textures" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+          }`}
+        >
+          Textures &amp; Images
+        </button>
+        <button
+          type="button"
+          onClick={() => setCategory("audio")}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            category === "audio" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+          }`}
+        >
+          Audio &amp; Narration
+        </button>
+      </div>
+
+      {/* Assets Grid */}
       {isLoading ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
-            <Card key={i}>
+            <Card key={i} className="border-warmgray">
               <CardContent className="p-4">
-                <Skeleton className="h-20 w-full rounded mb-2" />
+                <Skeleton className="h-24 w-full rounded-lg mb-3" />
                 <Skeleton className="h-4 w-3/4 rounded" />
                 <Skeleton className="h-3 w-1/2 rounded mt-2" />
               </CardContent>
             </Card>
           ))}
         </div>
-      ) : assets && assets.length > 0 ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {assets.map((asset: { id: string | number; metadata_json?: Record<string, unknown>; content_type?: string; size?: number; filename?: string; storage_key?: string; status?: string; type?: string }) => {
+      ) : filteredAssets && filteredAssets.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+          {filteredAssets.map((asset: any) => {
             const meta = (asset.metadata_json || {}) as Record<string, unknown>
             const size = (asset.size as number) || (meta.size as number) || (meta.original_size as number) || null
-            const visual = getAssetVisual(asset as unknown as { type?: string; content_type?: string; metadata_json?: Record<string, unknown>; filename?: string; storage_key?: string })
+            const visual = getAssetVisual(asset)
             const filename = visual.filename
-            const isImage = visual.kind === "image"
+            const isImage = visual.kind === "image" || visual.kind === "texture"
+            const isModel = visual.kind === "model"
+            const isAudio = visual.kind === "audio"
 
-            // Try to resolve image URL: storage_key may be minio key; if image, construct preview URL via minioUrl if available
-            // Fallback to emoji if no URL; alt handled for image.
+            const badgeVariant = isModel ? "sage" : isImage ? "terracotta" : isAudio ? "gold" : "outline"
+
             const imageUrl = (() => {
               if (!isImage) return null
-              // prefer explicit url fields if backend provides them
               const urlFromMeta = (meta.url as string) || (meta.preview_url as string) || (meta.storage_url as string)
               if (urlFromMeta) return urlFromMeta
-              // storage_key like "project/123/asset.glb" — join with minioUrl if present
               if (asset.storage_key && config.minioUrl) {
-                // MinIO bucket assumed from key first segment? Use direct key path.
                 const base = config.minioUrl.replace(/\/$/, "")
-                // Heuristic: bucket may be part of key; just append key
                 return `${base}/${String(asset.storage_key).replace(/^\//, "")}`
               }
               return null
@@ -205,13 +310,11 @@ export default function AssetsPage() {
               <Card
                 key={asset.id}
                 tabIndex={0}
-                role="group"
-                aria-label={`${visual.label}: ${filename}`}
-                onKeyDown={(e) => handleKeyActivate(e, filename)}
-                className="hover:shadow-md transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="border-warmgray bg-card hover:border-foreground/40 hover:shadow-xs transition-all overflow-hidden flex flex-col justify-between"
               >
-                <CardContent className="p-4">
-                  <div className="h-20 bg-muted rounded flex items-center justify-center text-2xl mb-2 overflow-hidden">
+                <CardContent className="p-3.5 space-y-3">
+                  {/* Thumbnail / Graphic representation */}
+                  <div className="h-28 bg-charcoal text-white rounded-xl flex items-center justify-center overflow-hidden relative border border-warmgray/40">
                     {isImage && imageUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -220,35 +323,56 @@ export default function AssetsPage() {
                         className="h-full w-full object-cover"
                         loading="lazy"
                         onError={(e) => {
-                          // fallback to icon on load failure
                           ;(e.currentTarget as HTMLImageElement).style.display = "none"
-                          const fallback = e.currentTarget.nextElementSibling as HTMLElement | null
-                          if (fallback) fallback.style.display = "flex"
                         }}
                       />
-                    ) : null}
-                    {/* fallback / default visual */}
-                    <span
-                      aria-hidden="true"
-                      className={isImage && imageUrl ? "hidden items-center justify-center w-full h-full" : "flex items-center justify-center w-full h-full"}
-                    >
-                      {visual.icon}
-                    </span>
+                    ) : isModel ? (
+                      <div className="flex flex-col items-center justify-center text-sage">
+                        <Box className="h-8 w-8" />
+                        <span className="text-[9px] font-mono text-stonegray-300 mt-1">LOD0 3D MESH</span>
+                      </div>
+                    ) : isAudio ? (
+                      <div className="flex flex-col items-center justify-center text-gold">
+                        <Music className="h-8 w-8" />
+                        <span className="text-[9px] font-mono text-stonegray-300 mt-1">VOICE TRACK</span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-stonegray">
+                        <FileText className="h-8 w-8" />
+                        <span className="text-[9px] font-mono text-stonegray-300 mt-1">DOCUMENT</span>
+                      </div>
+                    )}
+
+                    <div className="absolute top-2 right-2">
+                      <Badge variant={badgeVariant} className="text-[9px] font-mono uppercase px-1.5 py-0">
+                        {visual.label}
+                      </Badge>
+                    </div>
                   </div>
-                  <p className="text-sm font-medium truncate" title={filename}>
-                    {filename}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {size ? `${(Number(size) / 1024).toFixed(1)} KB` : String(asset.status ?? visual.label)}
-                    {visual.kind !== "other" ? ` · ${visual.label}` : ""}
-                  </p>
+
+                  {/* Asset Metadata */}
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold truncate text-foreground" title={filename}>
+                      {filename}
+                    </p>
+                    <div className="flex items-center justify-between text-[10px] font-mono text-stonegray">
+                      <span>{size ? `${(Number(size) / 1024).toFixed(1)} KB` : "Stored"}</span>
+                      <span className="text-sage font-medium">Used in Scene</span>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             )
           })}
         </div>
       ) : (
-        <p className="text-muted-foreground">No assets uploaded yet.</p>
+        <div className="rounded-xl border border-dashed border-warmgray p-10 text-center max-w-md mx-auto my-6">
+          <FolderOpen className="h-8 w-8 text-stonegray mx-auto mb-2 opacity-50" />
+          <h3 className="text-sm font-bold text-foreground">No Assets in Category</h3>
+          <p className="text-xs text-stonegray mt-1">
+            Upload 3D models or textures to populate the spatial repository for this project.
+          </p>
+        </div>
       )}
     </div>
   )

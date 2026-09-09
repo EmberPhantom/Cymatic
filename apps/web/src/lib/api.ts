@@ -3,12 +3,31 @@
 // Fetch-native alternative would save ~10kB but requires rewriting queue + interceptors — defer until bundle budget tightens.
 // If migrating: replace with `fetch` + custom `fetchWithRefresh` wrapper; keep same `api` export shape.
 import axios from "axios"
+import { useAuthStore } from "@/stores/auth-store"
 
 export const api = axios.create({
   baseURL: "",
   withCredentials: true,
   headers: { "Content-Type": "application/json" },
   timeout: 30_000,
+})
+
+// Attach the in-memory access token as a fallback for deployments where the
+// HttpOnly cookie has not propagated yet (e.g. immediately after login) or
+// where rewrites strip cookies. Cookies remain the primary mechanism.
+api.interceptors.request.use((config) => {
+  try {
+    const token = useAuthStore.getState().token
+    const url = config.url || ""
+    const isAuthRoute = url.includes("/v1/auth/login") || url.includes("/v1/auth/register") || url.includes("/api/auth/")
+    if (token && !isAuthRoute && !config.headers?.Authorization && !config.headers?.authorization) {
+      config.headers = config.headers ?? {}
+      ;(config.headers as Record<string, string>).Authorization = `Bearer ${token}`
+    }
+  } catch {
+    // store unavailable (SSR) — fall through to cookie auth
+  }
+  return config
 })
 
 let isRefreshing = false

@@ -8,6 +8,11 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        terracotta: "bg-terracotta text-white hover:bg-terracotta-600 shadow-xs transition-all active:translate-y-px",
+        charcoal: "bg-charcoal text-white hover:bg-charcoal-50 shadow-xs transition-all active:translate-y-px",
+        gold: "bg-gold text-white hover:bg-gold-600 shadow-xs transition-all",
+        sage: "bg-sage text-white hover:bg-sage-600 shadow-xs transition-all",
+        "outline-terracotta": "border border-terracotta/40 text-terracotta hover:bg-terracotta-50 dark:hover:bg-terracotta/10 transition-colors",
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
@@ -15,10 +20,10 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-9 rounded-md px-3",
-        lg: "h-11 rounded-md px-8",
-        icon: "h-10 w-10",
+        default: "h-9 px-4 py-2 text-xs",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-6 text-sm font-medium",
+        icon: "h-8 w-8",
       },
     },
     defaultVariants: {

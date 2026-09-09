@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.6
 # ── Build stage ──────────────────────────────────────────────
 FROM python:3.11-slim AS builder
 

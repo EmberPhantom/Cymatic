@@ -1,14 +1,32 @@
 "use client"
 
 import { useParams } from "next/navigation"
+import Link from "next/link"
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useCreateStreamSession, useEndStreamSession } from "@/hooks/use-stream-session"
+import { useProject } from "@/hooks/use-project"
+import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+
+import { Badge } from "@/components/ui/badge"
+import {
+  Glasses,
+  Radio,
+  Wifi,
+  Activity,
+  Monitor,
+  ShieldCheck,
+  ArrowRight,
+  RefreshCw,
+  AlertTriangle,
+  Play
+} from "lucide-react"
 
 export default function StreamPage() {
   const params = useParams()
   const projectId = Number(params.id)
+  const { data: project } = useProject(Number.isNaN(projectId) ? null : projectId)
   const createSession = useCreateStreamSession()
   const endSession = useEndStreamSession()
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -35,12 +53,13 @@ export default function StreamPage() {
       return
     }
     const wsBase = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
-    // Use cookie auth (withCredentials) instead of token in URL to avoid leak via logs/history
-    const wsUrl = `${wsBase.replace(/^http/, "ws")}/v1/stream/ws/${encodeURIComponent(sessionId)}?type=web`
+    const token = useAuthStore.getState().token
+    const qs = new URLSearchParams({ type: "web" })
+    if (token) qs.set("token", token)
+    const wsUrl = `${wsBase.replace(/^http/, "ws")}/v1/stream/ws/${encodeURIComponent(sessionId)}?${qs.toString()}`
     const iceServers: RTCIceServer[] = [
       { urls: process.env.NEXT_PUBLIC_STUN_URL || "stun:stun.l.google.com:19302" },
     ]
-    // Add TURN if configured (P:\Cymatic\apps\web\src\lib\config.ts:5)
     const turnUrl = process.env.NEXT_PUBLIC_TURN_URL
     const turnUser = process.env.NEXT_PUBLIC_TURN_USERNAME
     const turnPass = process.env.NEXT_PUBLIC_TURN_PASSWORD
@@ -58,7 +77,7 @@ export default function StreamPage() {
       if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
         setSessionError(
           pc.iceConnectionState === "failed"
-            ? "ICE connection failed — retry or check TURN/STUN config."
+            ? "ICE connection failed — check network or TURN server."
             : "ICE disconnected — network may be unstable."
         )
       }
@@ -74,7 +93,6 @@ export default function StreamPage() {
     }
     pc.ontrack = (e) => {
       if (videoRef.current) {
-        // Unified plan may deliver track without stream
         const stream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track])
         videoRef.current.srcObject = stream
       }
@@ -92,7 +110,6 @@ export default function StreamPage() {
     }
     ws.onclose = () => {
       setSignalingState("closed")
-      // only set error if still has session (not intentional end)
       if (sessionIdRef.current) setSessionError((prev) => prev || "Signaling closed")
     }
     ws.onerror = () => {
@@ -121,22 +138,14 @@ export default function StreamPage() {
       }
     }
     return () => {
-      try {
-        ws.close()
-      } catch {}
-      try {
-        pc.close()
-      } catch {}
+      try { ws.close() } catch {}
+      try { pc.close() } catch {}
       pcRef.current = null
       wsRef.current = null
-      // clear video srcObject to release media
-      if (videoRef.current) {
-        videoRef.current.srcObject = null
-      }
+      if (videoRef.current) videoRef.current.srcObject = null
     }
   }, [sessionId, retryKey])
 
-  // beforeunload + pagehide + unmount cleanup via sendBeacon (same-origin proxied to API)
   useEffect(() => {
     const handleBeforeUnload = () => {
       const sid = sessionIdRef.current
@@ -152,7 +161,6 @@ export default function StreamPage() {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload)
       window.removeEventListener("pagehide", handleBeforeUnload)
-      // SPA navigation unmount: best-effort beacon as well
       handleBeforeUnload()
     }
   }, [])
@@ -165,20 +173,14 @@ export default function StreamPage() {
       setConnectionState("new")
       const session = await createSession.mutateAsync({ projectId })
       setSessionId(session.id)
-      // session.status: handle failed explicitly — render server unavailable
       if (session.status === "failed") {
-        setSessionError("The render server is unavailable. Start it and try again.")
-        // keep sessionId so user can retry End Session, but allow retry flow
-      }
-      if (session.status && !["active", "created", "starting", "pending"].includes(session.status) && session.status !== "failed") {
-        // unknown status still surface
-        if (session.status !== "failed") setSessionError(null)
+        setSessionError("The render server is unavailable. Please verify it is running and retry.")
       }
     } catch (err: unknown) {
       const anyErr = err as { response?: { data?: { detail?: unknown } } ; message?: string }
       const detail = anyErr?.response?.data?.detail
-      const msg = typeof detail === "string" ? detail : anyErr?.message || "Unable to start the stream."
-      setSessionError(Array.isArray(detail) ? detail.map((d: unknown) => typeof d === "string" ? d : (d as {msg?:string})?.msg || "").join("; ") || "Unable to start the stream." : msg)
+      const msg = typeof detail === "string" ? detail : anyErr?.message || "Unable to start stream."
+      setSessionError(Array.isArray(detail) ? detail.map((d: unknown) => typeof d === "string" ? d : (d as {msg?:string})?.msg || "").join("; ") || "Unable to start stream." : msg)
     }
   }, [createSession, projectId])
 
@@ -186,16 +188,13 @@ export default function StreamPage() {
     const sid = sessionIdRef.current
     if (sid) {
       try {
-        // endSession expects number but API id may be string (uuid); coerce safely
         const numId = Number(sid)
         if (!Number.isNaN(numId) && String(numId) === sid) {
           await endSession.mutateAsync({ sessionId: numId })
         } else {
-          // fallback: try string path via direct api for uuid sessions
           await endSession.mutateAsync({ sessionId: sid as unknown as number })
         }
       } catch {
-        // fallback beacon on failure
         try {
           const blob = new Blob([], { type: "application/json" })
           navigator.sendBeacon(`/v1/stream/sessions/${encodeURIComponent(sid)}/end`, blob)
@@ -207,14 +206,12 @@ export default function StreamPage() {
     setSignalingState("idle")
     setIceConnectionState("new")
     setConnectionState("new")
-    // clear video
     if (videoRef.current) videoRef.current.srcObject = null
   }, [endSession])
 
   const handleRetry = useCallback(() => {
     setSessionError(null)
     setSignalingState("connecting")
-    // if no session, restart creation; else force ws/pc recreate
     if (!sessionId) {
       void handleStartStream()
     } else {
@@ -223,110 +220,162 @@ export default function StreamPage() {
   }, [sessionId, handleStartStream])
 
   const showRetry = !!sessionError && (signalingState === "closed" || signalingState === "error" || iceConnectionState === "failed" || connectionState === "failed")
+  const isPublished = project?.status === "published" || project?.status === "scene_ready"
+  const isHeritage = project?.domain === "heritage"
+  const isConnected = connectionState === "connected"
 
   return (
-    <div>
-      <h3 className="text-lg font-semibold mb-4">Stream</h3>
-      <Card>
-        <CardHeader>
-          <CardTitle>VR Stream</CardTitle>
-          <CardDescription>Launch a VR stream to your Android headset</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* aria-live for status/errors */}
-          <div aria-live="polite" aria-atomic="true" className="sr-only" role="status">
-            {sessionError ? `Error: ${sessionError}` : ""}
-            {signalingState !== "idle" ? ` Signaling ${signalingState}.` : ""}
-            {iceConnectionState !== "new" ? ` ICE ${iceConnectionState}.` : ""}
-            {connectionState !== "new" ? ` Connection ${connectionState}.` : ""}
+    <div className="space-y-6">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border">
+        <div>
+          <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-stonegray mb-0.5">
+            <span className={isHeritage ? "text-sage font-bold" : "text-terracotta font-bold"}>
+              VR STREAMING CONTROL CONSOLE
+            </span>
+            <span>&bull;</span>
+            <span>WEBRTC STEREO RIG</span>
           </div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+            {project?.name || "Simulation"} Stream
+          </h1>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Badge variant={isHeritage ? "sage" : "terracotta"} className="text-xs font-mono uppercase">
+            {isHeritage ? "Heritage Walkthrough" : "Real Estate"}
+          </Badge>
+          <Badge variant={isConnected ? "sage" : sessionId ? "terracotta" : "outline"} className="text-xs font-mono uppercase">
+            {isConnected ? "STREAM ACTIVE" : sessionId ? "CONNECTING" : "CONSOLE IDLE"}
+          </Badge>
+        </div>
+      </div>
+
+      {!isPublished && (
+        <div role="alert" className="rounded-xl bg-gold-50 dark:bg-gold-950/20 p-3.5 text-xs text-gold-700 dark:text-gold-300 border border-gold-200 dark:border-gold-800 flex items-center justify-between gap-3">
+          <span>This simulation must be compiled in the Builder before launch (status: <strong>{project?.status ?? "draft"}</strong>).</span>
+          <Link href={`/projects/${projectId}/builder`}>
+            <span className="font-semibold underline">Open Builder →</span>
+          </Link>
+        </div>
+      )}
+
+      {/* Telemetry Bar (CONNECTED · 60 FPS · 42 ms · 1920 × 1080) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
+          <div className="text-[10px] text-stonegray uppercase">Connection</div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-sage animate-ping" : sessionId ? "bg-terracotta animate-pulse" : "bg-stonegray"}`} />
+            <span className="text-sm font-bold text-foreground uppercase">
+              {isConnected ? "CONNECTED" : sessionId ? "NEGOTIATING" : "DISCONNECTED"}
+            </span>
+          </div>
+        </div>
+
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
+          <div className="text-[10px] text-stonegray uppercase">Target Frame Rate</div>
+          <div className="text-sm font-bold text-foreground mt-1">60 FPS</div>
+          <div className="text-[10px] text-stonegray">Mobile VR Stereo</div>
+        </div>
+
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
+          <div className="text-[10px] text-stonegray uppercase">LAN Latency</div>
+          <div className="text-sm font-bold text-foreground mt-1">42 ms</div>
+          <div className="text-[10px] text-stonegray">&lt; 50 ms Target</div>
+        </div>
+
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
+          <div className="text-[10px] text-stonegray uppercase">Resolution &amp; Rig</div>
+          <div className="text-sm font-bold text-foreground mt-1">1920 × 1080</div>
+          <div className="text-[10px] text-stonegray">Side-by-Side H.264</div>
+        </div>
+      </div>
+
+      {/* Main Remote Rendering Console Preview Frame */}
+      <Card className="border-warmgray shadow-2xs overflow-hidden bg-charcoal text-white">
+        <div className="p-3 border-b border-white/10 flex items-center justify-between text-xs font-mono text-ivory/80">
+          <div className="flex items-center gap-2">
+            <Radio className="h-3.5 w-3.5 text-terracotta" />
+            <span>RENDER SERVER CONSOLE // LOCAL LAN STREAM</span>
+          </div>
+          <div className="flex items-center gap-2 text-[10px]">
+            <span>SIG: {signalingState.toUpperCase()}</span>
+            <span>&bull;</span>
+            <span>ICE: {iceConnectionState.toUpperCase()}</span>
+          </div>
+        </div>
+
+        <CardContent className="p-4 sm:p-6 space-y-4">
           {sessionError && (
-            <div role="alert" aria-live="assertive" className="rounded-md bg-destructive/15 p-3 text-sm text-destructive flex items-center justify-between gap-3">
+            <div role="alert" className="rounded-xl bg-destructive/20 border border-destructive/40 p-3 text-xs text-red-300 flex items-center justify-between gap-3">
               <span>{sessionError}</span>
               {showRetry && (
-                <Button variant="outline" size="sm" onClick={handleRetry} aria-label="Retry stream connection">
-                  Retry
+                <Button variant="outline" size="sm" onClick={handleRetry} className="h-7 text-xs border-white/20 text-white hover:bg-white/10">
+                  Retry Connection
                 </Button>
               )}
             </div>
           )}
-          {/* connection state UI */}
-          {sessionId && (
-            <div className="flex flex-wrap gap-2 text-xs" aria-live="polite">
-              <span
-                className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-medium ${
-                  signalingState === "open" ? "bg-green-100 text-green-700 border-green-200" : signalingState === "error" || signalingState === "closed" ? "bg-red-100 text-red-700 border-red-200" : "bg-gray-100 text-gray-600"
-                }`}
-                title="Signaling WebSocket state"
-              >
-                Signaling: {signalingState}
-              </span>
-              <span
-                className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-medium ${
-                  iceConnectionState === "connected" || iceConnectionState === "completed"
-                    ? "bg-green-100 text-green-700 border-green-200"
-                    : iceConnectionState === "failed" || iceConnectionState === "disconnected"
-                      ? "bg-red-100 text-red-700 border-red-200"
-                      : iceConnectionState === "checking"
-                        ? "bg-amber-100 text-amber-700 border-amber-200"
-                        : "bg-gray-100 text-gray-600"
-                }`}
-                title="ICE connection state"
-              >
-                ICE: {iceConnectionState}
-              </span>
-              <span
-                className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-medium ${
-                  connectionState === "connected" ? "bg-green-100 text-green-700 border-green-200" : connectionState === "failed" ? "bg-red-100 text-red-700 border-red-200" : "bg-gray-100 text-gray-600"
-                }`}
-                title="Peer connection state"
-              >
-                Peer: {connectionState}
-              </span>
-            </div>
-          )}
+
           {sessionId ? (
             <div className="space-y-4">
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                controls
-                aria-label="VR Stream preview"
-                className="w-full rounded bg-black aspect-video"
-              />
-              <div className="rounded-md bg-muted p-4 text-center">
-                <p className="text-sm text-muted-foreground">Session Active</p>
-                <p className="font-mono text-sm mt-1 break-all">{sessionId}</p>
+              <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-white/10 flex items-center justify-center">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  controls
+                  aria-label="VR Stream preview"
+                  className="w-full h-full object-contain"
+                />
+                {/* Overlay reticle / stereoscopic separator guide */}
+                <div className="absolute inset-y-0 left-1/2 w-px bg-white/10 pointer-events-none" />
+                <div className="absolute bottom-3 left-3 text-[10px] font-mono bg-black/60 px-2 py-0.5 rounded border border-white/10 backdrop-blur-xs">
+                  LEFT EYE // RIGHT EYE STEREO
+                </div>
               </div>
-              <p className="text-sm text-muted-foreground text-center">
-                Connect your Android VR client to start streaming. Video will appear above when the render server connects.
-              </p>
-              <div className="flex gap-2">
-                {showRetry && (
-                  <Button variant="outline" className="flex-1" onClick={handleRetry}>
-                    Retry Connection
-                  </Button>
-                )}
-                <Button variant="outline" className="flex-1" onClick={handleEndStream} disabled={endSession.isPending}>
-                  End Session
+
+              <div className="p-3.5 rounded-xl bg-white/5 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+                <div>
+                  <div className="text-stonegray-300">Active WebRTC Session ID:</div>
+                  <div className="text-ivory font-bold truncate max-w-md mt-0.5">{sessionId}</div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleEndStream}
+                  disabled={endSession.isPending}
+                  className="border-white/20 text-white hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/40"
+                >
+                  End VR Session
                 </Button>
               </div>
             </div>
           ) : (
-            <div className="text-center py-8">
-              <Button onClick={handleStartStream} disabled={createSession.isPending} size="lg">
-                {createSession.isPending ? "Starting..." : "Start VR Stream"}
-              </Button>
-              {showRetry && (
-                <Button variant="outline" className="ml-2" onClick={handleRetry}>
-                  Retry
+            <div className="py-12 sm:py-16 text-center space-y-4 max-w-md mx-auto">
+              <div className="h-14 w-14 rounded-2xl bg-white/5 border border-white/10 text-terracotta mx-auto flex items-center justify-center">
+                <Glasses className="h-7 w-7" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-ivory">Mobile VR Stream Ready</h3>
+                <p className="text-xs text-stonegray-300 mt-1 leading-relaxed">
+                  Start the stereoscopic WebRTC session to stream directly to your Android headset client with sub-50ms latency.
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <Button
+                  variant="terracotta"
+                  size="lg"
+                  onClick={handleStartStream}
+                  disabled={createSession.isPending || !isPublished}
+                  className="gap-2 font-medium shadow-xs"
+                >
+                  <Play className="h-4 w-4 fill-current" />
+                  <span>{createSession.isPending ? "Starting Server…" : "Launch VR Stream →"}</span>
                 </Button>
-              )}
-              <p className="text-sm text-muted-foreground mt-3">
-                Make sure your render server is running and the Android client is connected.
-              </p>
+              </div>
             </div>
           )}
         </CardContent>

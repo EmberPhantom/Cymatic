@@ -1,32 +1,61 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { useRouter } from "next/navigation"
-import { useEffect, useRef, useState, useCallback } from "react"
+import { usePathname, useRouter } from "next/navigation"
+import { useEffect, useRef, useState, useCallback, useMemo } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { useAuthStore } from "@/stores/auth-store"
+import { useProjects } from "@/hooks/use-projects"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
+import { HistoryNav } from "@/components/navigation/HistoryNav"
+import { ThemeToggle } from "@/components/ui/theme-toggle"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
-
-const navItems = [
-  { href: "/dashboard", label: "Projects" },
-  { href: "/", label: "Home" },
-]
+import { isActivePath, getBreadcrumbs, projectIdFromPath, routes } from "@/lib/routes"
+import {
+  LayoutGrid,
+  Compass,
+  Sparkles,
+  FileCode2,
+  Package,
+  Glasses,
+  LogOut,
+  ChevronDown,
+  Search,
+  Menu,
+  X,
+  Check
+} from "lucide-react"
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
+  const queryClient = useQueryClient()
   const { user, setAuth, logout, authReady } = useAuthStore()
   const [authError, setAuthError] = useState<string | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  const [switcherOpen, setSwitcherOpen] = useState(false)
   const sidebarRef = useRef<HTMLElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
+  const switcherRef = useRef<HTMLDivElement>(null)
+
+  const { data: projects } = useProjects()
 
   const handleLogout = useCallback(async () => {
-    try { await api.post("/v1/auth/logout") } finally { logout(); router.replace("/login") }
-  }, [logout, router])
+    if (signingOut) return
+    setSigningOut(true)
+    try { await api.post("/v1/auth/logout") } catch { /* best effort */ }
+    finally {
+      logout()
+      queryClient.clear()
+      setSigningOut(false)
+      router.replace(routes.login)
+    }
+  }, [logout, queryClient, router, signingOut])
 
+  // Validate session once on mount
   useEffect(() => {
     let active = true
     const controller = new AbortController()
@@ -37,19 +66,29 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         if (!active || err?.name === "CanceledError" || (err as { code?: string })?.code === "ERR_CANCELED") return
         if (err.response?.status === 401) {
           logout()
-          router.replace(`/login?next=${encodeURIComponent(pathname)}`)
+          queryClient.clear()
+          router.replace(`${routes.login}?next=${encodeURIComponent(pathname)}`)
         }
         else setAuthError("Unable to load your session. Please retry.")
       })
     return () => { active = false; controller.abort() }
-  }, [pathname, router, setAuth, logout])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Close switcher dropdown on outside click
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) {
+        setSwitcherOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleOutsideClick)
+    return () => document.removeEventListener("mousedown", handleOutsideClick)
+  }, [])
 
   // Focus trap for mobile drawer
   useEffect(() => {
-    if (!mobileOpen) {
-      // return focus to toggle when closing
-      return
-    }
+    if (!mobileOpen) return
     const sidebar = sidebarRef.current
     if (!sidebar) return
     const focusable = sidebar.querySelectorAll<HTMLElement>(
@@ -57,7 +96,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     )
     const first = focusable[0]
     const last = focusable[focusable.length - 1]
-    // Focus first element when opening
     requestAnimationFrame(() => first?.focus())
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -76,7 +114,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     }
     document.addEventListener("keydown", handleKeyDown)
-    // prevent background scroll
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = "hidden"
     return () => {
@@ -85,96 +122,302 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [mobileOpen])
 
-  if (!authReady) {
-    return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground" role="status" aria-live="polite">Loading your workspace…</div>
-  }
+  const projectId = projectIdFromPath(pathname)
 
-  if (authError) {
-    return <div className="flex min-h-screen items-center justify-center"><div className="space-y-3 text-center"><p role="alert" className="text-sm text-destructive">{authError}</p><Button onClick={() => window.location.reload()}>Retry</Button></div></div>
-  }
+  const activeProject = useMemo(() => {
+    if (!projectId || !projects) return null
+    return projects.find((p) => p.id === projectId) || null
+  }, [projectId, projects])
 
-  const segments = pathname.split("/").filter(Boolean)
-  const breadcrumbItems = segments.map((seg, idx) => {
-    const href = "/" + segments.slice(0, idx + 1).join("/")
-    const label = decodeURIComponent(seg)
-    return { href, label }
-  })
+  // Breadcrumbs placed in the page body, not in navbar
+  const breadcrumbItems = getBreadcrumbs(pathname, activeProject?.name)
+
+  const projectNavItems = projectId
+    ? [
+        { href: routes.project(projectId), label: "Overview", icon: Compass },
+        { href: routes.builder(projectId), label: "Builder", icon: Sparkles },
+        { href: routes.specs(projectId), label: "Specifications", icon: FileCode2 },
+        { href: routes.assets(projectId), label: "Assets", icon: Package },
+        { href: routes.stream(projectId), label: "VR Stream", icon: Glasses },
+      ]
+    : []
 
   return (
-    <div className="flex min-h-screen">
-      {/* Mobile toggle */}
+    <div className="flex min-h-screen bg-background text-foreground">
+      {/* Mobile toggle button */}
       <button
         ref={toggleRef}
         aria-label="Toggle navigation"
         aria-expanded={mobileOpen}
         aria-controls="sidebar-nav"
-        className="md:hidden fixed top-4 left-4 z-40 rounded-md bg-background border p-2"
+        className="md:hidden fixed top-3 left-4 z-40 rounded-md bg-background border border-border p-1.5 shadow-xs"
         onClick={() => setMobileOpen((v) => !v)}
       >
-        ☰
+        {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
       </button>
-      {/* Sidebar */}
+
+      {/* Minimal Sidebar */}
       <aside
         id="sidebar-nav"
         ref={sidebarRef}
         aria-hidden={!mobileOpen && typeof window !== "undefined" && window.innerWidth < 768 ? true : undefined}
-        className={cn("w-64 border-r bg-gray-50/50 flex flex-col fixed md:static inset-y-0 left-0 z-30 transform transition-transform md:translate-x-0", mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0")}
+        className={cn(
+          "w-60 border-r border-border bg-card flex flex-col fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 md:translate-x-0",
+          mobileOpen ? "translate-x-0 shadow-lg" : "-translate-x-full md:translate-x-0"
+        )}
         role="navigation"
         aria-label="Main"
       >
-        <div className="p-6 border-b">
-          <h1 className="text-xl font-bold">CYMATIC</h1>
-          <p className="text-xs text-muted-foreground mt-1">Simulation Builder</p>
+        {/* Brand header */}
+        <div className="p-4 border-b border-border flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-2.5 group">
+            <div className="h-7 w-7 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-xs transition-transform group-hover:scale-105">
+              CY
+            </div>
+            <div className="flex flex-col">
+              <span className="font-bold text-sm tracking-tight text-foreground leading-none">
+                CYMATIC
+              </span>
+              <span className="text-[9px] font-mono text-stonegray tracking-widest mt-0.5">
+                SPATIAL ENGINE
+              </span>
+            </div>
+          </Link>
         </div>
-        <nav className="flex-1 p-4 space-y-1">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-current={pathname.startsWith(item.href) ? "page" : undefined}
-              onClick={() => setMobileOpen(false)}
+
+        {/* Workspace section */}
+        <div className="p-3 pb-1">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-stonegray px-2 mb-1.5 font-medium">
+            WORKSPACE
+          </div>
+          <Link
+            href={routes.dashboard}
+            aria-current={!projectId && isActivePath(pathname, routes.dashboard) ? "page" : undefined}
+            onClick={() => setMobileOpen(false)}
+            className={cn(
+              "flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150",
+              !projectId && isActivePath(pathname, routes.dashboard)
+                ? "bg-darkmineral text-white dark:bg-charcoal dark:text-white font-semibold shadow-2xs"
+                : "text-stonegray hover:text-foreground hover:bg-muted/50"
+            )}
+          >
+            <LayoutGrid
               className={cn(
-                "block px-3 py-2 rounded-md text-sm transition-colors",
-                pathname.startsWith(item.href)
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-gray-100"
+                "h-4 w-4 shrink-0 transition-colors",
+                !projectId && isActivePath(pathname, routes.dashboard)
+                  ? "text-terracotta"
+                  : "text-stonegray"
               )}
+            />
+            <span>All Projects</span>
+          </Link>
+        </div>
+
+        {/* Project Switcher Dropdown (Shown when inside a project) */}
+        {projectId && (
+          <div className="px-3 py-2 border-t border-border/70 relative" ref={switcherRef}>
+            <div className="text-[10px] font-mono uppercase tracking-wider text-stonegray px-2 mb-1.5 flex items-center justify-between font-medium">
+              <span>PROJECT</span>
+              {activeProject?.domain === "heritage" ? (
+                <span className="text-[9px] text-sage font-bold font-mono">HERITAGE</span>
+              ) : (
+                <span className="text-[9px] text-terracotta font-bold font-mono">REAL ESTATE</span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSwitcherOpen((v) => !v)}
+              className="w-full flex items-center justify-between p-2 rounded-lg bg-muted/40 border border-border text-xs hover:bg-muted/70 transition-colors text-left"
             >
-              {item.label}
-            </Link>
-          ))}
+              <span className="truncate font-medium text-foreground">
+                {activeProject?.name || `Project #${projectId}`}
+              </span>
+              <ChevronDown className={cn("h-3.5 w-3.5 text-stonegray shrink-0 transition-transform duration-200", switcherOpen && "rotate-180")} />
+            </button>
+
+            {/* Switcher Dropdown Menu */}
+            {switcherOpen && (
+              <div className="absolute top-full left-3 right-3 mt-1 py-1 rounded-lg bg-card border border-border shadow-md z-50 max-h-52 overflow-y-auto">
+                {projects && projects.length > 0 ? (
+                  projects.map((p) => (
+                    <Link
+                      key={p.id}
+                      href={routes.project(p.id)}
+                      onClick={() => setSwitcherOpen(false)}
+                      className={cn(
+                        "flex items-center justify-between px-3 py-1.5 text-xs hover:bg-muted transition-colors",
+                        p.id === projectId && "bg-muted font-medium text-foreground"
+                      )}
+                    >
+                      <span className="truncate">{p.name}</span>
+                      {p.id === projectId && <Check className="h-3 w-3 text-terracotta shrink-0" />}
+                    </Link>
+                  ))
+                ) : (
+                  <div className="px-3 py-2 text-xs text-stonegray">No simulations found</div>
+                )}
+                <div className="border-t border-border mt-1 pt-1">
+                  <Link
+                    href={routes.dashboard}
+                    onClick={() => setSwitcherOpen(false)}
+                    className="block px-3 py-1 text-xs text-stonegray hover:text-foreground"
+                  >
+                    All projects
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Sidebar Navigation */}
+        <nav className="flex-1 p-3 space-y-4 overflow-y-auto">
+          {/* Project-specific navigation items */}
+          {projectId && (
+            <div className="space-y-1 pt-1">
+              <div className="px-2 text-[10px] font-mono uppercase tracking-wider text-stonegray mb-1.5 font-medium">
+                EXPLORE
+              </div>
+              {projectNavItems.map((item) => {
+                const active = isActivePath(pathname, item.href)
+                const IconComponent = item.icon
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    onClick={() => setMobileOpen(false)}
+                    className={cn(
+                      "flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150",
+                      active
+                        ? "bg-darkmineral text-white dark:bg-charcoal dark:text-white font-semibold shadow-2xs"
+                        : "text-stonegray hover:text-foreground hover:bg-muted/50"
+                    )}
+                  >
+                    <IconComponent
+                      className={cn(
+                        "h-4 w-4 shrink-0 transition-colors",
+                        active ? "text-terracotta" : "text-stonegray"
+                      )}
+                    />
+                    <span>{item.label}</span>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
         </nav>
-        <div className="p-4 border-t">
-          <div className="text-sm font-medium truncate">{user?.name || "User"}</div>
-          <div className="text-xs text-muted-foreground truncate">{user?.email}</div>
-          <Button variant="ghost" size="sm" className="mt-2 w-full justify-start" onClick={handleLogout}>
-            Sign Out
-          </Button>
+
+        {/* User Card & Settings/Sign Out in Sidebar Footer */}
+        <div className="p-3 border-t border-border bg-muted/20">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <div className="h-7 w-7 rounded-full bg-stonegray/20 text-foreground flex items-center justify-center font-medium text-xs shrink-0">
+                {user?.name ? user.name.slice(0, 1).toUpperCase() : "U"}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold truncate text-foreground">{user?.name || "Architect"}</div>
+                <div className="text-[10px] text-stonegray truncate">{user?.email}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <Link href={routes.dashboard}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 text-stonegray hover:text-foreground"
+                  title="Workspace Settings"
+                  aria-label="Settings"
+                >
+                  <Compass className="h-3.5 w-3.5" />
+                </Button>
+              </Link>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-stonegray hover:text-destructive"
+                onClick={handleLogout}
+                disabled={signingOut}
+                title="Sign Out"
+                aria-label="Sign out"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
         </div>
       </aside>
+
+      {/* Mobile Backdrop */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 bg-black/20 z-20 md:hidden"
+          className="fixed inset-0 bg-black/40 z-20 md:hidden"
           onClick={() => setMobileOpen(false)}
           aria-hidden="true"
         />
       )}
 
-      {/* Main content */}
-      <main className="flex-1 overflow-auto md:ml-0">
-        <div className="p-6">
+      {/* Main workspace content area */}
+      <main className="flex-1 overflow-auto md:ml-0 min-w-0 flex flex-col">
+        {/* Clean Top Bar (NO BREADCRUMBS in navbar) */}
+        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-4 py-2 backdrop-blur-sm sm:px-6">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="w-8 md:hidden" aria-hidden="true" />
+            {/* HistoryNav: Only arrows, zero text */}
+            <HistoryNav />
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Minimal Search Trigger */}
+            <Link href={routes.dashboard}>
+              <button
+                type="button"
+                className="hidden sm:flex items-center gap-2 px-2 py-1 rounded-md border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                title="Search simulations"
+              >
+                <Search className="h-3 w-3" />
+                <span>Search</span>
+                <kbd className="px-1 py-0.2 rounded bg-muted border text-[10px] font-mono">/</kbd>
+              </button>
+            </Link>
+
+            <ThemeToggle />
+
+            <span className="hidden max-w-40 truncate text-xs text-muted-foreground md:block">
+              {user?.email || ""}
+            </span>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+              onClick={handleLogout}
+              disabled={signingOut}
+              title="Sign Out"
+              aria-label="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
+        </header>
+
+        {/* Content Viewport with In-Page Breadcrumbs */}
+        <div className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+          {/* Directive 5: Page Path Location in the page itself */}
           {breadcrumbItems.length > 1 && (
-            <nav aria-label="Breadcrumb" className="text-xs text-muted-foreground mb-4">
-              <ol className="flex items-center gap-1 flex-wrap">
+            <nav aria-label="Breadcrumb" className="mb-4 text-xs text-muted-foreground">
+              <ol className="flex items-center gap-1.5 flex-wrap">
                 {breadcrumbItems.map((crumb, idx) => {
                   const isLast = idx === breadcrumbItems.length - 1
                   return (
-                    <li key={crumb.href} className="flex items-center gap-1">
-                      {idx > 0 && <span aria-hidden="true">/</span>}
-                      {isLast ? (
-                        <span aria-current="page" className="font-medium text-foreground">{crumb.label}</span>
+                    <li key={`${crumb.href ?? "current"}-${crumb.label}-${idx}`} className="flex items-center gap-1.5">
+                      {idx > 0 && <span className="text-muted-foreground/50" aria-hidden="true">/</span>}
+                      {isLast || !crumb.href ? (
+                        <span aria-current="page" className="font-medium text-foreground">
+                          {crumb.label}
+                        </span>
                       ) : (
-                        <Link href={crumb.href} className="hover:underline hover:text-foreground">
+                        <Link href={crumb.href} className="hover:text-foreground transition-colors">
                           {crumb.label}
                         </Link>
                       )}
@@ -184,7 +427,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </ol>
             </nav>
           )}
-          {children}
+
+          {!authReady ? (
+            <div className="space-y-3 pt-2" role="status" aria-live="polite" aria-label="Loading workspace">
+              <Skeleton className="h-8 w-1/3 rounded" />
+              <Skeleton className="h-4 w-1/2 rounded" />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3">
+                <Skeleton className="h-28 rounded" />
+                <Skeleton className="h-28 rounded" />
+                <Skeleton className="h-28 rounded" />
+              </div>
+              <span className="sr-only">Loading workspace…</span>
+            </div>
+          ) : authError ? (
+            <div className="flex min-h-64 items-center justify-center">
+              <div className="space-y-3 text-center max-w-sm p-6 rounded-lg border border-border bg-card">
+                <p role="alert" className="text-sm font-medium text-destructive">{authError}</p>
+                <Button onClick={() => window.location.reload()} size="sm" variant="outline">
+                  Retry
+                </Button>
+              </div>
+            </div>
+          ) : (
+            children
+          )}
         </div>
       </main>
     </div>

@@ -696,8 +696,8 @@ async def websocket_signaling(
 
     # Determine client_type via query alias "type" (avoid shadowing builtin)
     raw_type = websocket.query_params.get("type", "unknown")
-    if raw_type not in ("android", "render_server", "unknown"):
-        client_type: Literal["android", "render_server", "unknown"] = "unknown"
+    if raw_type not in ("android", "render_server", "web", "unknown"):
+        client_type: Literal["android", "render_server", "web", "unknown"] = "unknown"
     else:
         client_type = raw_type  # type: ignore[assignment]
 
