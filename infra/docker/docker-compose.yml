@@ -205,6 +205,9 @@ services:
     environment:
       OLLAMA_HOST: 0.0.0.0
       OLLAMA_NUM_PARALLEL: 1
+      # Keep the 2.3GB model resident: cold load + first-token latency dominate
+      # on CPU boxes, and 8GB LAN target has room (total ~3.2GB with infra).
+      OLLAMA_KEEP_ALIVE: 24h
     restart: unless-stopped
     mem_limit: 4g
     profiles: ["local"]

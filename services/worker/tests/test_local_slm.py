@@ -6,6 +6,7 @@ from app.agents.architect_agent import (
     ArchitectInput,
     LOCAL_SLM_MAX_TOKENS,
     LOCAL_SLM_MODEL,
+    LOCAL_SLM_TEMPERATURE,
     _local_llm_enabled,
     create_spec_llm,
     create_spec_slm,
@@ -34,6 +35,32 @@ VALID_SLM_SPEC = {
     "lighting": {"preset": "warm", "time_of_day": "evening", "ambient_intensity": 0.8},
     "copilot_policy": {"enabled": True, "languages": ["en"], "default_language": "en", "personality": "helpful_guide"},
     "performance_budget": {"target_fps": 60, "max_triangles": 100000, "max_draw_calls": 50, "texture_budget_mb": 100},
+}
+
+# Hybrid path: the SLM returns ONLY entities; the scaffold is deterministic.
+SLM_ENTITIES_ONLY = {
+    "entities": [
+        {
+            "id": "room_living",
+            "type": "room",
+            "name": "Living",
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
+            "properties": {"furnished": True, "style": "modern", "size": [5, 4, 3]},
+            "children": [],
+        },
+        {
+            "id": "room_kitchen",
+            "type": "room",
+            "name": "Kitchen",
+            "position": {"x": 12.0, "y": 0.0, "z": 0.0},
+            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
+            "properties": {"furnished": True, "style": "modern", "size": [4, 5, 2.7]},
+            "children": [],
+        },
+    ]
 }
 
 
@@ -67,8 +94,41 @@ async def test_create_spec_slm_success():
     _, kwargs = mock_llm.call_args
     assert kwargs["model"] == LOCAL_SLM_MODEL
     assert kwargs["max_tokens"] == LOCAL_SLM_MAX_TOKENS
-    assert kwargs["temperature"] == 0.2
+    assert kwargs["temperature"] == LOCAL_SLM_TEMPERATURE
     assert kwargs["task_type"] == "spec_generation"
+
+
+@pytest.mark.asyncio
+async def test_create_spec_slm_hybrid_entities_only():
+    """Hybrid: SLM entities + deterministic scaffold yields a full valid spec."""
+    with patch(
+        "app.agents.architect_agent.call_llm_json",
+        new=AsyncMock(return_value=SLM_ENTITIES_ONLY),
+    ) as mock_llm:
+        result = await create_spec_slm(_input())
+    assert result.spec.domain == "real_estate"
+    assert len(result.spec.entities) == 2
+    assert result.spec.entities[1].id == "room_kitchen"
+    # Deterministic scaffold, not SLM output
+    assert result.spec.lighting.preset == "warm"
+    assert len(result.spec.navigation.points) == 2
+    assert result.spec.navigation.default_start_point == "nav_room_living"
+    assert mock_llm.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_create_spec_slm_retries_invalid_then_succeeds():
+    """Truncated SLM JSON (EOS mid-object) is retried once before giving up."""
+    assert LOCAL_SLM_TEMPERATURE == 0.1
+    truncated: dict = {}
+    with patch(
+        "app.agents.architect_agent.call_llm_json",
+        new=AsyncMock(side_effect=[truncated, VALID_SLM_SPEC]),
+    ) as mock_llm:
+        result = await create_spec_slm(_input())
+    assert result.spec.domain == "real_estate"
+    assert mock_llm.call_count == 2
+    assert any("attempt 2" in note for note in result.generation_notes)
 
 
 @pytest.mark.asyncio

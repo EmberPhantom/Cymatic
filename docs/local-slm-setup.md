@@ -55,14 +55,32 @@ Generate as usual via the API (`/intake` → `/clarify` → `/generate-spec`); t
 
 ## SLM Prompt Notes
 
-`phi-3-mini` has a 4k window, so the architect uses a compact prompt (`ARCHITECT_SLIM_PROMPT`, ~600 tokens + one few-shot 2-room example) instead of the full cloud prompt: strict single-JSON-object contract, `temperature 0.2`, `max_tokens 2048`. Non-numeric `position` hallucinations fail `SimulationSpec` validation and fall through to cloud/template — by design.
+`phi-3-mini` has a 4k window, so the architect uses a compact entities-only prompt (`ARCHITECT_SLIM_ENTITIES_PROMPT` + one few-shot 2-room example) with `temperature 0.1`, `max_tokens 2048`, and 1 retry; navigation/lighting/budget are assembled deterministically (`_assemble_spec`). A full-spec single-shot prompt proved unreliable on 3B (see tuning below).
+
+## Tuning Results (2026-09-10, 8-core i5 laptop CPU, Docker, phi3:mini q4)
+
+Steady-state inference: **5.4 tok/s** decode, prompt eval fast, first load ~60s.
+
+| Config | Outcome |
+|---|---|
+| Full-spec prompt, temp 0.2 | 0/2 valid — truncated mid-entities (~700 chars, trailing newlines, same stall point) |
+| Full-spec prompt, temp 0.1 | 0/1 valid — same stall (deterministic, not sampling noise) |
+| **Hybrid entities-only, temp 0.1** | **2/2 valid first attempt** — real estate 4 rooms (122s), heritage 5 POIs (177s) |
+| Full pipeline e2e (offline, no cloud keys) | `completed`, validation 0.97, domain True (129s) |
+
+Fixes applied from tuning:
+- Worker→router auth: shared client now sends `X-Api-Key` (router 401'd every worker call otherwise).
+- `timeout` passthrough on shared client; `LOCAL_LLM_TIMEOUT=300` (60s reader timed out mid-generation).
+- Intake/clarification fallbacks now catch `httpx.HTTPError` (router 502 with no cloud keys crashed the pipeline instead of using keyword fallback).
+- `OLLAMA_KEEP_ALIVE=24h` in compose (cold load dominates first request).
+- Truncated SLM outputs must not be retried from cache: keep outputs short enough to complete first try. If a run caches garbage, delete `llm_cache:spec_generation:phi-3-mini*` in Redis DB 1.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `No available provider for SPEC_GENERATION` with flag on | Ollama down or model not pulled: `docker compose --profile local up -d ollama && docker exec ... ollama pull phi3:mini` |
-| Slow first generation (30-60s) | Cold model load into RAM; subsequent runs 5-30s |
+| Slow first generation (60s load + 2-3 min for a full spec at ~5 tok/s) | Cold model load into RAM; keep `OLLAMA_KEEP_ALIVE=24h` so later runs skip load |
 | `generation_notes` says template fallback | SLM + cloud both failed; check `docker logs ollama` and router `/v1/router/providers` health |
 | OOM on 8GB box | Keep `_MAX_CONCURRENT_LOCAL=2`; don't raise `OLLAMA_NUM_PARALLEL` |
 

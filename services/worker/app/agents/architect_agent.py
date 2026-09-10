@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from cymatic_shared.schemas.simulation_spec import SimulationSpec
+from cymatic_shared.schemas.simulation_spec import Entity, SimulationSpec
 import structlog
 from app.core.llm_client import call_llm_json
 
@@ -56,10 +56,16 @@ Guidelines:
 # Local <3B SLM (phi-3-mini q4 via Ollama) for offline-first generation.
 LOCAL_SLM_MODEL = "phi-3-mini-3.8b-q4"
 LOCAL_SLM_MAX_TOKENS = 2048
+# SLM @ temp 0.2 sometimes emits EOS mid-JSON (trailing newlines, truncated
+# object). Retry once before falling through to cloud/templates.
+# Tuned 2026-09-10: temp 0.1, 1 retry; steady-state ~5.4 tok/s on CPU.
+LOCAL_SLM_TEMPERATURE = 0.1
+LOCAL_SLM_MAX_ATTEMPTS = 2
 
-# Compact prompt for the 4k-context SLM: strict JSON contract + one few-shot
-# example. Keep it short — the full ARCHITECT_SYSTEM_PROMPT exceeds what a
-# quantized 3B model follows reliably.
+# Compact prompts for the 4k-context SLM. Tuning 2026-09-10 showed a full
+# SimulationSpec in one shot is unreliable on 3B (stalls mid-entities or
+# emits empty sections). The SLM therefore generates ONLY the variable part
+# (entities); deterministic code assembles navigation/lighting/budget.
 ARCHITECT_SLIM_PROMPT = """You are a Simulation Architect. Output ONLY a valid SimulationSpec JSON object. No prose, no markdown.
 
 Required top-level keys: domain, metadata, entities, navigation, lighting, copilot_policy, performance_budget.
@@ -78,6 +84,21 @@ Example for "Cozy 2BHK apartment":
 Now generate the spec for the request below. Output ONLY JSON."""
 
 
+# Entities-only prompt for the SLM hybrid path: short output (~300-600
+# tokens) the 3B model completes reliably. Navigation/lighting/budget are
+# assembled deterministically from these entities.
+ARCHITECT_SLIM_ENTITIES_PROMPT = """You are a Simulation Architect. Output ONLY a JSON object with one key "entities": a list of rooms (real_estate) or POIs (heritage).
+
+Each entity: {id, type, name, position: {x,y,z} meters Y-up, rotation: {x,y,z}, scale: {x,y,z}, properties, children: []}.
+- Real estate: type "room", properties {furnished, style, size: [w,d,h] meters, has_window, has_doors}. Space rooms 12m apart on x.
+- Heritage: type "poi", properties {description, has_narration: true, site_type}. Space POIs 15m apart on x.
+
+Example for "Cozy 2BHK apartment" (real_estate):
+{"entities":[{"id":"room_living_room","type":"room","name":"Living Room","position":{"x":0.0,"y":0.0,"z":0.0},"rotation":{"x":0.0,"y":0.0,"z":0.0},"scale":{"x":1.0,"y":1.0,"z":1.0},"properties":{"furnished":true,"style":"modern","size":[6.0,7.0,2.7],"has_window":true,"has_doors":true},"children":[]},{"id":"room_kitchen","type":"room","name":"Kitchen","position":{"x":12.0,"y":0.0,"z":0.0},"rotation":{"x":0.0,"y":0.0,"z":0.0},"scale":{"x":1.0,"y":1.0,"z":1.0},"properties":{"furnished":true,"style":"modern","size":[4.0,5.0,2.7],"has_window":true,"has_doors":true},"children":[]}]}
+
+Now generate ONLY {"entities": [...]} for the request below. Output ONLY JSON."""
+
+
 def _local_llm_enabled() -> bool:
     """Check the ENABLE_LOCAL_LLM feature flag (default off for cloud CI)."""
     try:
@@ -88,10 +109,21 @@ def _local_llm_enabled() -> bool:
         return False
 
 
+def _local_llm_timeout() -> float:
+    """Per-request timeout for SLM inference (default covers CPU generation)."""
+    try:
+        from app.core.config import get_settings
+
+        return float(getattr(get_settings(), "LOCAL_LLM_TIMEOUT", 300.0))
+    except Exception:
+        return 300.0
+
+
 async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
     """Generate simulation specification using the local <3B SLM (phi-3-mini q4).
 
-    Raises on any failure so the caller can fall back to cloud or templates.
+    Retries once on invalid JSON (the SLM occasionally emits EOS mid-object),
+    then raises so the caller can fall back to cloud or templates.
     """
     all_data = {**input_data.intake_data, **input_data.clarification_data}
 
@@ -102,29 +134,64 @@ async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
     }
 
     messages = [
-        {"role": "system", "content": ARCHITECT_SLIM_PROMPT},
-        {"role": "user", "content": f"Generate SimulationSpec JSON for:\n{json.dumps(context)}"},
+        {"role": "system", "content": ARCHITECT_SLIM_ENTITIES_PROMPT},
+        {"role": "user", "content": f"Generate ONLY {{\"entities\": [...]}} for:\n{json.dumps(context)}"},
     ]
 
-    result = await call_llm_json(
-        messages=messages,
-        task_type="spec_generation",
-        sensitivity="internal",
-        temperature=0.2,
-        max_tokens=LOCAL_SLM_MAX_TOKENS,
-        model=LOCAL_SLM_MODEL,
-    )
+    last_err: Exception | None = None
+    for attempt in range(LOCAL_SLM_MAX_ATTEMPTS):
+        try:
+            result = await call_llm_json(
+                messages=messages,
+                task_type="spec_generation",
+                sensitivity="internal",
+                temperature=LOCAL_SLM_TEMPERATURE,
+                max_tokens=LOCAL_SLM_MAX_TOKENS,
+                model=LOCAL_SLM_MODEL,
+                timeout=_local_llm_timeout(),
+            )
 
-    spec = SimulationSpec(**result)
+            raw_entities = result.get("entities")
+            if not isinstance(raw_entities, list) or not raw_entities:
+                raise ValueError("SLM returned no entities list")
+            # Validate each entity shape; raises ValidationError on bad items
+            entities = [Entity(**e).model_dump() for e in raw_entities]
 
-    notes = [
-        f"Generated {input_data.domain} specification via local SLM ({LOCAL_SLM_MODEL})",
-        f"Entities: {len(spec.entities)}",
-        f"Navigation points: {len(spec.navigation.points)}",
-    ]
+            template = DOMAIN_TEMPLATES.get(input_data.domain, DOMAIN_TEMPLATES["real_estate"])
+            all_data = {**input_data.intake_data, **input_data.clarification_data}
+            spec = _assemble_spec(
+                domain=input_data.domain,
+                objective=input_data.objective,
+                all_data=all_data,
+                entities=entities,
+                template=template,
+            )
 
-    logger.info("architect_slm_completed", domain=input_data.domain, entities=len(spec.entities))
-    return ArchitectResult(spec=spec, generation_notes=notes)
+            notes = [
+                f"Generated {input_data.domain} specification via local SLM ({LOCAL_SLM_MODEL})",
+                f"Entities: {len(spec.entities)} (SLM) + deterministic scaffold",
+                f"Navigation points: {len(spec.navigation.points)}",
+            ]
+            if attempt > 0:
+                notes.append(f"SLM succeeded on attempt {attempt + 1}")
+
+            logger.info(
+                "architect_slm_completed",
+                domain=input_data.domain,
+                entities=len(spec.entities),
+                attempt=attempt + 1,
+            )
+            return ArchitectResult(spec=spec, generation_notes=notes)
+        except (ValidationError, ValueError, KeyError) as e:
+            last_err = e
+            logger.warning(
+                "architect_slm_attempt_failed",
+                attempt=attempt + 1,
+                max_attempts=LOCAL_SLM_MAX_ATTEMPTS,
+                error=str(e)[:200],
+            )
+
+    raise last_err if last_err is not None else ValueError("SLM returned no usable spec")
 
 
 async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
@@ -212,28 +279,32 @@ DOMAIN_TEMPLATES = {
 }
 
 
-async def create_spec_fallback(input_data: ArchitectInput) -> ArchitectResult:
-    """Fallback template-based spec generation without LLM."""
-    domain = input_data.domain
-    template = DOMAIN_TEMPLATES.get(domain, DOMAIN_TEMPLATES["real_estate"])
-    all_data = {**input_data.intake_data, **input_data.clarification_data}
+def _assemble_spec(
+    domain: str,
+    objective: str,
+    all_data: dict[str, Any],
+    entities: list[dict[str, Any]],
+    template: dict[str, Any],
+) -> SimulationSpec:
+    """Assemble a full SimulationSpec from entities + deterministic scaffold.
 
+    Navigation, lighting, copilot policy and performance budget are fixed
+    templates; only entities vary (SLM-generated or template-built).
+    """
     if domain == "heritage":
-        entities = _build_heritage_entities(all_data)
         nav_points = _build_heritage_nav_points(entities)
         nav_paths = _build_heritage_nav_paths(nav_points)
         default_start = nav_points[0]["id"] if nav_points else "entrance"
     else:
-        entities = _build_real_estate_entities(all_data)
         nav_points = _build_real_estate_nav_points(entities)
         nav_paths = _build_real_estate_nav_paths(nav_points)
         default_start = nav_points[0]["id"] if nav_points else "front_door"
 
-    spec = SimulationSpec(
+    return SimulationSpec(
         domain=domain,
         metadata={
             "title": all_data.get("title", f"Generated {domain} walkthrough"),
-            "description": input_data.objective,
+            "description": objective,
             "version": 1,
             "tags": [domain],
         },
@@ -267,6 +338,26 @@ async def create_spec_fallback(input_data: ArchitectInput) -> ArchitectResult:
             "max_entities": 50,
             "lod_distances": [10.0, 30.0, 60.0],
         },
+    )
+
+
+async def create_spec_fallback(input_data: ArchitectInput) -> ArchitectResult:
+    """Fallback template-based spec generation without LLM."""
+    domain = input_data.domain
+    template = DOMAIN_TEMPLATES.get(domain, DOMAIN_TEMPLATES["real_estate"])
+    all_data = {**input_data.intake_data, **input_data.clarification_data}
+
+    if domain == "heritage":
+        entities = _build_heritage_entities(all_data)
+    else:
+        entities = _build_real_estate_entities(all_data)
+
+    spec = _assemble_spec(
+        domain=domain,
+        objective=input_data.objective,
+        all_data=all_data,
+        entities=entities,
+        template=template,
     )
 
     notes = [

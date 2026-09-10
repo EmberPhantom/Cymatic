@@ -36,9 +36,11 @@ class Settings(BaseSettings):
 
     # Offline <3B SLM for spec generation (feature-flagged, default off).
     # LAN compose with `--profile local` sets ENABLE_LOCAL_LLM=true.
-    # SLM inference on CPU takes 5-30s, so the router timeout must cover it.
+    # SLM inference on CPU takes 60-180s for a full spec (phi-3-mini q4 at
+    # ~10-15 tok/s); the per-request timeout must cover it. Measured 140s
+    # on first load (model warmup included) during 2026-09-10 tuning.
     ENABLE_LOCAL_LLM: bool = False
-    LOCAL_LLM_TIMEOUT: float = 60.0
+    LOCAL_LLM_TIMEOUT: float = 300.0
 
     WORKER_CONCURRENCY: int = 4
     WORKER_QUEUES: str = "generation,spec,asset,analytics"

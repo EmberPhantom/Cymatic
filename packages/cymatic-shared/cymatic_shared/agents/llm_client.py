@@ -33,13 +33,27 @@ def _get_settings():
 class LLMRouterClient:
     """Client for calling LLM Router from any service."""
 
-    def __init__(self, base_url: str | None = None, timeout: float = 60.0):
+    def __init__(
+        self,
+        base_url: str | None = None,
+        timeout: float = 60.0,
+        api_key: str | None = None,
+    ):
         settings = _get_settings()
         self.base_url = base_url or settings.LLM_ROUTER_URL
+        # Router enforces ADMIN_API_KEY on /v1/*; without this every worker
+        # call gets 401 whenever the router key is configured.
+        self.api_key = api_key or getattr(settings, "ADMIN_API_KEY", "") or ""
         self.client = httpx.AsyncClient(timeout=timeout)
 
     async def close(self):
         await self.client.aclose()
+
+    @property
+    def _headers(self) -> Dict[str, str]:
+        if self.api_key:
+            return {"X-Api-Key": self.api_key}
+        return {}
 
     @retry(
         reraise=True,
@@ -60,11 +74,14 @@ class LLMRouterClient:
         organization_id: Optional[str] = None,
         project_id: Optional[str] = None,
         model: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Call chat completions endpoint with retry.
 
         `model` optionally pins an explicit router model id (e.g. a local
         SLM like `phi-3-mini-3.8b-q4`); when None the router picks by policy.
+        `timeout` overrides the client default per request (needed for slow
+        local SLM inference on CPU); None keeps the client default.
         """
         request = {
             "messages": messages,
@@ -82,6 +99,8 @@ class LLMRouterClient:
         response = await self.client.post(
             f"{self.base_url}/v1/chat/completions",
             json=request,
+            headers=self._headers,
+            timeout=self.client.timeout if timeout is None else timeout,
         )
         # Retry on 502/503 gateway errors
         if response.status_code in (502, 503):
@@ -105,6 +124,7 @@ class LLMRouterClient:
         response = await self.client.post(
             f"{self.base_url}/v1/embeddings",
             json=request,
+            headers=self._headers,
         )
         response.raise_for_status()
         return response.json()
@@ -125,6 +145,7 @@ class LLMRouterClient:
         response = await self.client.post(
             f"{self.base_url}/v1/audio/transcriptions",
             json=request,
+            headers=self._headers,
         )
         response.raise_for_status()
         return response.json()
@@ -147,6 +168,7 @@ class LLMRouterClient:
         response = await self.client.post(
             f"{self.base_url}/v1/audio/speech",
             json=request,
+            headers=self._headers,
         )
         response.raise_for_status()
         return response.json()
@@ -187,10 +209,12 @@ async def call_llm_json(
     temperature: float = 0.3,
     max_tokens: Optional[int] = None,
     model: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Call LLM and parse JSON response.
 
     `model` optionally pins an explicit router model id (e.g. a local SLM).
+    `timeout` optionally overrides the client default per request.
     """
     result = await llm_router_client.chat_completion(
         messages=messages,
@@ -200,6 +224,7 @@ async def call_llm_json(
         max_tokens=max_tokens,
         response_format={"type": "json_object"},
         model=model,
+        timeout=timeout,
     )
 
     content = result.get("choices", [{}])[0].get("message", {}).get("content", "{}")

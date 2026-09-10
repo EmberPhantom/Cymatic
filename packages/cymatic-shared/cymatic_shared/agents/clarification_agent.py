@@ -1,6 +1,7 @@
 """Clarification Agent - Asks targeted follow-up questions using LLM"""
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
+import httpx
 import structlog
 import json
 from cymatic_shared.agents.llm_client import call_llm_json
@@ -150,7 +151,7 @@ async def process_clarification_llm(
             completion_percentage=result.get("completion_percentage", 0.0),
         )
 
-    except (ValueError, KeyError, OSError) as e:
+    except (ValueError, KeyError, OSError, httpx.HTTPError) as e:
         logger.error("clarification_llm_failed", error=str(e))
         return process_clarification_fallback(domain, current_answers, new_answers)
 
