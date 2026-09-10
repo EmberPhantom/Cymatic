@@ -1,0 +1,11 @@
+# Exclude local tool caches from the `shared` build context
+# (root .dockerignore does not apply to named additional contexts)
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+htmlcov/
+*.egg-info/
