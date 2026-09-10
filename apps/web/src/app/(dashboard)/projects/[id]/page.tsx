@@ -26,8 +26,8 @@ import {
   ExternalLink
 } from "lucide-react"
 
-const tabs = [
-  { label: "Overview", icon: Compass, href: (id: number) => routes.project(id) },
+const tabs: Array<{ label: string; icon: typeof Compass; href: (id: number) => string; exact?: boolean }> = [
+  { label: "Overview", icon: Compass, href: (id: number) => routes.project(id), exact: true },
   { label: "Builder", icon: Sparkles, href: (id: number) => routes.builder(id) },
   { label: "Specs", icon: FileCode2, href: (id: number) => routes.specs(id) },
   { label: "Assets", icon: Package, href: (id: number) => routes.assets(id) },
@@ -168,7 +168,7 @@ export default function ProjectDetailPage() {
       <nav className="flex gap-1 border-b border-border overflow-x-auto" aria-label="Project sections">
         {tabs.map((tab) => {
           const href = tab.href(projectId)
-          const isActive = isActivePath(pathname, href)
+          const isActive = isActivePath(pathname, href, { exact: tab.exact })
           const IconComponent = tab.icon
           return (
             <Link
