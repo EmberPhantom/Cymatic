@@ -132,9 +132,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Breadcrumbs placed in the page body, not in navbar
   const breadcrumbItems = getBreadcrumbs(pathname, activeProject?.name)
 
-  const projectNavItems = projectId
+  const projectNavItems: Array<{ href: string; label: string; icon: typeof Compass; exact?: boolean }> = projectId
     ? [
-        { href: routes.project(projectId), label: "Overview", icon: Compass },
+        { href: routes.project(projectId), label: "Overview", icon: Compass, exact: true },
         { href: routes.builder(projectId), label: "Builder", icon: Sparkles },
         { href: routes.specs(projectId), label: "Specifications", icon: FileCode2 },
         { href: routes.assets(projectId), label: "Assets", icon: Package },
@@ -143,7 +143,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     : []
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
+    <div className="flex h-screen h-[100dvh] overflow-hidden bg-background text-foreground">
       {/* Mobile toggle button */}
       <button
         ref={toggleRef}
@@ -162,14 +162,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         ref={sidebarRef}
         aria-hidden={!mobileOpen && typeof window !== "undefined" && window.innerWidth < 768 ? true : undefined}
         className={cn(
-          "w-60 border-r border-border bg-card flex flex-col fixed md:static inset-y-0 left-0 z-30 transform transition-transform duration-200 md:translate-x-0",
+          "w-60 shrink-0 border-r border-border bg-card flex flex-col fixed md:sticky md:top-0 md:h-screen md:h-[100dvh] md:overflow-hidden inset-y-0 left-0 z-30 transform transition-transform duration-200 md:translate-x-0",
           mobileOpen ? "translate-x-0 shadow-lg" : "-translate-x-full md:translate-x-0"
         )}
         role="navigation"
         aria-label="Main"
       >
-        {/* Brand header */}
-        <div className="p-4 border-b border-border flex items-center justify-between">
+        {/* Brand header — h-14 matches the top bar height so borders align */}
+        <div className="h-14 px-4 shrink-0 border-b border-border flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="h-7 w-7 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-xs transition-transform group-hover:scale-105">
               CY
@@ -271,7 +271,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         )}
 
         {/* Sidebar Navigation */}
-        <nav className="flex-1 p-3 space-y-4 overflow-y-auto">
+        <nav className="flex-1 min-h-0 p-3 space-y-4 overflow-y-auto overscroll-contain">
           {/* Project-specific navigation items */}
           {projectId && (
             <div className="space-y-1 pt-1">
@@ -279,7 +279,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 EXPLORE
               </div>
               {projectNavItems.map((item) => {
-                const active = isActivePath(pathname, item.href)
+                const active = isActivePath(pathname, item.href, { exact: item.exact })
                 const IconComponent = item.icon
                 return (
                   <Link
@@ -358,9 +358,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       {/* Main workspace content area */}
-      <main className="flex-1 overflow-auto md:ml-0 min-w-0 flex flex-col">
+      <main className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden flex flex-col overscroll-contain">
         {/* Clean Top Bar (NO BREADCRUMBS in navbar) */}
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-4 py-2 backdrop-blur-sm sm:px-6">
+        <header className="sticky top-0 z-10 h-14 shrink-0 flex items-center justify-between gap-3 border-b border-border bg-background/95 px-4 backdrop-blur-sm sm:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <span className="w-8 md:hidden" aria-hidden="true" />
             {/* HistoryNav: Only arrows, zero text */}

@@ -13,9 +13,14 @@ export const routes = {
 /**
  * Segment-aware active check. Avoids the classic bug where
  * `pathname.startsWith("/")` marks Home active on every page.
+ *
+ * Pass `{ exact: true }` for leaf routes (e.g. project Overview,
+ * whose href is a prefix of every child route) so descendants
+ * don't keep the parent highlighted.
  */
-export function isActivePath(pathname: string, href: string): boolean {
+export function isActivePath(pathname: string, href: string, opts?: { exact?: boolean }): boolean {
   if (href === "/") return pathname === "/"
+  if (opts?.exact) return pathname === href
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
