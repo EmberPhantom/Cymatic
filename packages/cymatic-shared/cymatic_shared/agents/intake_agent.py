@@ -1,6 +1,7 @@
 """Intake Agent - Parses prompt and detects domain/missing fields using LLM"""
 from typing import Dict, Any, List
 from pydantic import BaseModel, Field
+import httpx
 import structlog
 import json
 from cymatic_shared.agents.llm_client import call_llm_json
@@ -80,7 +81,9 @@ async def process_intake_llm(prompt: str, context: Dict[str, Any] | None = None)
         logger.info("intake_llm_completed", domain=intake_result.detected_domain, confidence=intake_result.confidence)
         return intake_result
 
-    except (ValueError, KeyError, OSError) as e:
+    except (ValueError, KeyError, OSError, httpx.HTTPError) as e:
+        # httpx.HTTPError covers ConnectError/Timeout (router down) and
+        # HTTPStatusError (e.g. router 502 when cloud keys are missing).
         logger.error("intake_llm_failed", error=str(e))
         return await process_intake_fallback(prompt, context)
 

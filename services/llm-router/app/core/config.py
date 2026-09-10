@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     DEFAULT_STT_PROVIDER: str = "sarvam"
     DEFAULT_TTS_PROVIDER: str = "sarvam"
 
+    # Offline <3B SLM via Ollama sidecar (feature-flagged, default off for cloud CI).
+    # LAN compose with `--profile local` sets ENABLE_LOCAL_LLM=true and starts ollama.
+    ENABLE_LOCAL_LLM: bool = False
+    OLLAMA_URL: str = "http://ollama:11434"
+    OLLAMA_MODEL: str = "phi-3-mini-3.8b-q4"
+    LOCAL_LLM_CONTEXT: int = 4096
+
     # Provider Config (can be loaded from YAML)
     PROVIDER_CONFIGS: dict[str, Any] = Field(default_factory=dict)
 

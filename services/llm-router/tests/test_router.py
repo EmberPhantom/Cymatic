@@ -94,23 +94,48 @@ async def test_circuit_breaker_half_open():
 
 @pytest.mark.asyncio
 async def test_routing_engine_intent_extraction():
+    # Planning uses Qwen on Groq (fallback: Qwen on OpenRouter)
     decision = routing_engine.route(TaskType.INTENT_EXTRACTION, SensitivityLevel.INTERNAL)
     assert decision.provider == "groq"
-    assert decision.model == "openai/gpt-oss-20b"
+    assert decision.model == "qwen-qwq-32b"
 
 
 @pytest.mark.asyncio
 async def test_routing_engine_spec_generation():
+    # Offline-first: LOCAL preferred, but disabled by default in CI so the
+    # paid fallback (OpenAI gpt-4o-mini) is routed — never a free leak.
     decision = routing_engine.route(TaskType.SPEC_GENERATION, SensitivityLevel.INTERNAL)
-    assert decision.provider == "groq"
-    assert decision.model == "openai/gpt-oss-120b"
+    assert decision.provider == "openai"
+    assert decision.model == "gpt-4o-mini"
 
 
 @pytest.mark.asyncio
 async def test_routing_engine_sensitivity():
+    # Tenant-sensitive spec must never touch free Groq/OpenRouter endpoints.
     decision = routing_engine.route(TaskType.SPEC_GENERATION, SensitivityLevel.TENANT_SENSITIVE)
-    assert decision.provider == "openai"
-    assert decision.model == "gpt-4o"
+    assert decision.provider in ("local", "openai", "nvidia_nim")
+    assert decision.provider not in ("groq", "openrouter")
+
+
+@pytest.mark.asyncio
+async def test_routing_engine_local_slm_when_flag_on(monkeypatch):
+    """With ENABLE_LOCAL_LLM=true, spec generation prefers the offline SLM."""
+    import os
+
+    from app.routing.engine import RoutingEngine
+
+    monkeypatch.setenv("ENABLE_LOCAL_LLM", "true")
+    get_settings.cache_clear()
+    try:
+        engine = RoutingEngine()
+        assert engine.providers[ProviderName.LOCAL].enabled is True
+        decision = engine.route(TaskType.SPEC_GENERATION, SensitivityLevel.INTERNAL)
+        assert decision.provider == "local"
+        assert decision.model == "phi-3-mini-3.8b-q4"
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+        os.environ.pop("ENABLE_LOCAL_LLM", None)
 
 
 @pytest.mark.asyncio

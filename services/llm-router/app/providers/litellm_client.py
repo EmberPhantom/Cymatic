@@ -27,6 +27,8 @@ litellm.drop_params = True  # Drop unsupported params
 
 # Concurrency & size caps
 _MAX_CONCURRENT_LLM = 50
+# Local Ollama SLM on 8GB CPU box: serialize to avoid OOM (phi-3-mini q4 ~2.3GB)
+_MAX_CONCURRENT_LOCAL = 2
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB decoded
 _MAX_AUDIO_B64_CHARS = 35 * 1024 * 1024
 _MAX_TTS_CHARS = 5000
@@ -166,6 +168,17 @@ class LiteLLMClient:
         self.usage_tracker = UsageTracker()
         self.cache = LLMCache()
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LLM)
+        self._local_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOCAL)
+
+    @staticmethod
+    def _is_local_provider(provider: ProviderName | str) -> bool:
+        return provider == ProviderName.LOCAL or str(provider) == ProviderName.LOCAL.value
+
+    def _semaphore_for(self, provider: ProviderName | str) -> asyncio.Semaphore:
+        """CPU-bound local SLM gets its own small semaphore to avoid OOM."""
+        if self._is_local_provider(provider):
+            return self._local_semaphore
+        return self._semaphore
 
     async def chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         """Execute chat completion with routing, caching, and fallbacks."""
@@ -267,6 +280,11 @@ class LiteLLMClient:
             "stream": request.stream,
         }
 
+        if self._is_local_provider(provider_name):
+            # Route to the Ollama sidecar instead of a cloud endpoint.
+            # getattr keeps this working before OLLAMA_URL lands in Settings (W1.5).
+            params["api_base"] = getattr(settings, "OLLAMA_URL", "http://ollama:11434")
+
         if request.response_format:
             params["response_format"] = request.response_format
 
@@ -277,7 +295,7 @@ class LiteLLMClient:
         # Streaming contract: streaming responses are not cached and not retried via fallback same way
         if request.stream:
             # Streaming – single attempt, concurrency guarded
-            async with self._semaphore:
+            async with self._semaphore_for(provider_name):
                 try:
                     return await self._stream_completion(params, model, provider_str)
                 except Exception as e:
@@ -290,7 +308,7 @@ class LiteLLMClient:
                     "llm_request", request_id=request_id, model=model, provider=provider_str, attempt=attempt
                 )
 
-                async with self._semaphore:
+                async with self._semaphore_for(provider_name):
                     response_any: Any = await litellm.acompletion(**params)
 
                 # Extract usage
@@ -802,10 +820,28 @@ class LiteLLMClient:
 
     @staticmethod
     def _to_litellm_model(provider: ProviderName | str, model: str) -> str:
-        """Prefix model with litellm provider slug, dedup if already prefixed."""
+        """Prefix model with litellm provider slug, dedup if already prefixed.
+
+        LOCAL (Ollama) models resolve to `ollama/<ollama_model>` using the
+        `ollama_model` metadata on the ModelProfile (e.g. `phi3:mini`),
+        falling back to the internal model id.
+        """
         if provider is None:
             return model
         provider_val = provider.value if isinstance(provider, ProviderName) else str(provider)
+        if provider_val == ProviderName.LOCAL.value:
+            ollama_model = model
+            try:
+                local_cfg = routing_engine.providers.get(ProviderName.LOCAL)
+                if local_cfg is not None:
+                    profile = local_cfg.models.get(model)
+                    if profile is not None:
+                        ollama_model = str(profile.metadata.get("ollama_model", model))
+            except Exception:
+                pass
+            if ollama_model.startswith("ollama/"):
+                return ollama_model
+            return f"ollama/{ollama_model}"
         # Dedup: if model already starts with provider_val/
         if model.startswith(f"{provider_val}/"):
             return model
