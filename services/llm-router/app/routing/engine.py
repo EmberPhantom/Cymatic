@@ -1,5 +1,6 @@
 """Routing Policy Engine - Task-based and sensitivity-based routing with circuit breaker"""
 
+import copy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -40,11 +41,30 @@ class RoutingEngine:
     """Routes LLM requests to appropriate providers based on task and sensitivity with circuit breaker protection."""
 
     def __init__(self) -> None:
-        self.providers: dict[ProviderName, ProviderConfig] = DEFAULT_PROVIDERS.copy()
+        # Deep copy so per-engine toggles (e.g. LOCAL enabled flag) never
+        # mutate the global DEFAULT_PROVIDERS shared across engines/tests.
+        self.providers: dict[ProviderName, ProviderConfig] = copy.deepcopy(DEFAULT_PROVIDERS)
         self.policies: dict[str, RoutingPolicy] = {}
         self.status: dict[ProviderName, ProviderStatus] = {}
+        self._apply_local_llm_flag()
         self._initialize_default_policies()
         self._initialize_status()
+
+    def _apply_local_llm_flag(self) -> None:
+        """Enable/disable the LOCAL (Ollama SLM) provider from settings.
+
+        Defaults to disabled so cloud CI is unaffected; LAN compose with
+        `--profile local` sets ENABLE_LOCAL_LLM=true.
+        """
+        try:
+            from app.core.config import get_settings
+
+            enabled = bool(get_settings().ENABLE_LOCAL_LLM)
+        except Exception:
+            enabled = False
+        local = self.providers.get(ProviderName.LOCAL)
+        if local is not None:
+            local.enabled = enabled
 
     def _initialize_status(self) -> None:
         """Initialize provider status for all configured providers."""
@@ -55,20 +75,20 @@ class RoutingEngine:
         """Initialize default routing policies."""
         # Task-based routing with sensitivity
         self.policies = {
-            # Fast/small model for intent extraction
+            # Qwen for intent extraction / planning (Groq primary, OpenRouter fallback)
             f"{TaskType.INTENT_EXTRACTION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.INTENT_EXTRACTION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="openai/gpt-oss-20b",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI],
+                preferred_profile="qwen-qwq-32b",
+                fallback_profile="qwen/qwen-2.5-72b-instruct",
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
             ),
             f"{TaskType.INTENT_EXTRACTION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.INTENT_EXTRACTION,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="openai/gpt-oss-20b",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI],
+                preferred_profile="qwen-qwq-32b",
+                fallback_profile="qwen/qwen-2.5-72b-instruct",
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
             ),
             f"{TaskType.INTENT_EXTRACTION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
                 task_type=TaskType.INTENT_EXTRACTION,
@@ -77,34 +97,48 @@ class RoutingEngine:
                 fallback_profile="nvidia/nemotron-3-ultra",
                 allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
             ),
-            # Strong reasoning for spec generation
+            # Offline-first spec generation: local phi-3-mini SLM preferred,
+            # cloud fallback when Ollama is down or ENABLE_LOCAL_LLM=false.
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="openai/gpt-oss-120b",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                preferred_profile="phi-3-mini-3.8b-q4",
+                fallback_profile="gpt-4o-mini",
+                allowed_providers=[
+                    ProviderName.LOCAL,
+                    ProviderName.OPENAI,
+                    ProviderName.NVIDIA_NIM,
+                    ProviderName.GROQ,
+                    ProviderName.OPENROUTER,
+                ],
             ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="openai/gpt-oss-120b",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                preferred_profile="phi-3-mini-3.8b-q4",
+                fallback_profile="gpt-4o-mini",
+                allowed_providers=[
+                    ProviderName.LOCAL,
+                    ProviderName.OPENAI,
+                    ProviderName.NVIDIA_NIM,
+                    ProviderName.GROQ,
+                    ProviderName.OPENROUTER,
+                ],
             ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
-                preferred_profile="gpt-4o",
-                fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                preferred_profile="phi-3-mini-3.8b-q4",
+                fallback_profile="gpt-4o-mini",
+                allowed_providers=[ProviderName.LOCAL, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
             ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.REGULATED}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
                 sensitivity=SensitivityLevel.REGULATED,
-                preferred_profile="gpt-4o",
-                fallback_profile=None,
-                allowed_providers=[ProviderName.OPENAI],
+                preferred_profile="phi-3-mini-3.8b-q4",
+                fallback_profile="gpt-4o-mini",
+                allowed_providers=[ProviderName.LOCAL, ProviderName.OPENAI],
                 blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
             ),
             # Structured output reliable for validation
@@ -173,20 +207,20 @@ class RoutingEngine:
                 fallback_profile=None,
                 allowed_providers=[ProviderName.OPENAI],
             ),
-            # Clarification - fast model
+            # Clarification - Qwen planning (Groq primary, OpenRouter fallback)
             f"{TaskType.CLARIFICATION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.CLARIFICATION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="openai/gpt-oss-20b",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI],
+                preferred_profile="qwen-qwq-32b",
+                fallback_profile="qwen/qwen-2.5-72b-instruct",
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
             ),
             f"{TaskType.CLARIFICATION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.CLARIFICATION,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="openai/gpt-oss-20b",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI],
+                preferred_profile="qwen-qwq-32b",
+                fallback_profile="qwen/qwen-2.5-72b-instruct",
+                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
             ),
             # Research - larger context
             f"{TaskType.RESEARCH}_{SensitivityLevel.PUBLIC}": RoutingPolicy(

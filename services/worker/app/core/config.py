@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     LLM_ROUTER_URL: str = "http://localhost:8001"
     LLM_TIMEOUT: float = 5.0
 
+    # Offline <3B SLM for spec generation (feature-flagged, default off).
+    # LAN compose with `--profile local` sets ENABLE_LOCAL_LLM=true.
+    # SLM inference on CPU takes 5-30s, so the router timeout must cover it.
+    ENABLE_LOCAL_LLM: bool = False
+    LOCAL_LLM_TIMEOUT: float = 60.0
+
     WORKER_CONCURRENCY: int = 4
     WORKER_QUEUES: str = "generation,spec,asset,analytics"
 

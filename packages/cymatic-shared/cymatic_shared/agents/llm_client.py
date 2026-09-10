@@ -59,8 +59,13 @@ class LLMRouterClient:
         user_id: Optional[str] = None,
         organization_id: Optional[str] = None,
         project_id: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Call chat completions endpoint with retry."""
+        """Call chat completions endpoint with retry.
+
+        `model` optionally pins an explicit router model id (e.g. a local
+        SLM like `phi-3-mini-3.8b-q4`); when None the router picks by policy.
+        """
         request = {
             "messages": messages,
             "task_type": task_type,
@@ -71,6 +76,7 @@ class LLMRouterClient:
             "user_id": user_id,
             "organization_id": organization_id,
             "project_id": project_id,
+            "model": model,
         }
 
         response = await self.client.post(
@@ -180,8 +186,12 @@ async def call_llm_json(
     sensitivity: str = "internal",
     temperature: float = 0.3,
     max_tokens: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Call LLM and parse JSON response."""
+    """Call LLM and parse JSON response.
+
+    `model` optionally pins an explicit router model id (e.g. a local SLM).
+    """
     result = await llm_router_client.chat_completion(
         messages=messages,
         task_type=task_type,
@@ -189,6 +199,7 @@ async def call_llm_json(
         temperature=temperature,
         max_tokens=max_tokens,
         response_format={"type": "json_object"},
+        model=model,
     )
 
     content = result.get("choices", [{}])[0].get("message", {}).get("content", "{}")

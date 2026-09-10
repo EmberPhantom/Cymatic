@@ -11,6 +11,7 @@ class ProviderName(str, Enum):
     NVIDIA_NIM = "nvidia_nim"
     OPENAI = "openai"
     SARVAM = "sarvam"
+    LOCAL = "local"
 
 
 class ModelClass(str, Enum):
@@ -135,6 +136,21 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
                 context_window=131072,
                 supports_json_mode=True,
             ),
+            "qwen-qwq-32b": ModelProfile(
+                model_id="qwen-qwq-32b",
+                provider=ProviderName.GROQ,
+                task_types=[
+                    TaskType.INTENT_EXTRACTION,
+                    TaskType.CLARIFICATION,
+                    TaskType.COPILOT_CHAT,
+                    TaskType.RESEARCH,
+                ],
+                cost_class="free",
+                latency_class="medium",
+                max_tokens=8192,
+                context_window=131072,
+                supports_json_mode=True,
+            ),
         },
     ),
     ProviderName.OPENROUTER: ProviderConfig(
@@ -172,6 +188,21 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
                 latency_class="medium",
                 max_tokens=8192,
                 context_window=1000000,
+                supports_json_mode=True,
+            ),
+            "qwen/qwen-2.5-72b-instruct": ModelProfile(
+                model_id="qwen/qwen-2.5-72b-instruct",
+                provider=ProviderName.OPENROUTER,
+                task_types=[
+                    TaskType.INTENT_EXTRACTION,
+                    TaskType.CLARIFICATION,
+                    TaskType.RESEARCH,
+                    TaskType.COPILOT_CHAT,
+                ],
+                cost_class="low",
+                latency_class="medium",
+                max_tokens=8192,
+                context_window=32768,
                 supports_json_mode=True,
             ),
         },
@@ -252,6 +283,45 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
                 latency_class="fast",
                 max_tokens=8191,
                 context_window=8191,
+            ),
+        },
+    ),
+    ProviderName.LOCAL: ProviderConfig(
+        name=ProviderName.LOCAL,
+        enabled=True,
+        priority=5,
+        base_url="http://ollama:11434/v1",
+        rate_limit_rpm=10,
+        rate_limit_tpm=8000,
+        supported_tasks=[
+            TaskType.SPEC_GENERATION,
+            TaskType.VALIDATION,
+        ],
+        # Local inference never leaves the box, so it is safe for all
+        # sensitivity levels including tenant-sensitive and regulated.
+        supported_sensitivity=[
+            SensitivityLevel.PUBLIC,
+            SensitivityLevel.INTERNAL,
+            SensitivityLevel.TENANT_SENSITIVE,
+            SensitivityLevel.REGULATED,
+        ],
+        models={
+            "phi-3-mini-3.8b-q4": ModelProfile(
+                model_id="phi-3-mini-3.8b-q4",
+                provider=ProviderName.LOCAL,
+                task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION],
+                cost_class="free",
+                latency_class="slow",
+                max_tokens=2048,
+                context_window=4096,
+                supports_json_mode=True,
+                metadata={
+                    "quant": "q4_k_m",
+                    "vram_mb": 2300,
+                    "cpu_only": True,
+                    # Name of the model inside Ollama (ollama pull <name>).
+                    "ollama_model": "phi3:mini",
+                },
             ),
         },
     ),

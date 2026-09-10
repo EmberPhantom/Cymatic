@@ -117,7 +117,10 @@ Use:
 - Sarvam
 
 ### Local LLM
-Not required for MVP.
+Optional and feature-flagged (`ENABLE_LOCAL_LLM`, default off) — not required for MVP.
+When enabled, spec generation prefers the offline <3B SLM (`phi-3-mini-3.8b-q4`
+via the Ollama sidecar, `--profile local`) with cloud fallback. Planning
+(intake/clarification) uses Qwen on Groq. See `docs/local-slm-setup.md`.
 
 ---
 
