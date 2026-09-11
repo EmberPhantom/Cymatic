@@ -1,5 +1,6 @@
 """Cache Layer for LLM Router Responses"""
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -32,22 +33,38 @@ class LLMCache:
         # DB 1 = cache (isolated from rate/quota DBs)
         self.redis_url = redis_url or getattr(settings, "REDIS_CACHE_URL", None) or settings.REDIS_URL
         self._client: redis.Redis | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self.default_ttl = timedelta(hours=1)
         self._local_cache: dict[str, CacheEntry] = {}  # Hot cache
         self._max_local_size = 1000
 
     async def connect(self) -> None:
+        # redis.asyncio clients bind to the creating loop; recreate when the
+        # running loop changed (pytest per-test loops, reloads).
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if self._client is not None and running is not None and self._loop is not running:
+            self._client = None
+            self._loop = None
         if not self._client:
             self._client = redis.from_url(
                 self.redis_url,
                 encoding="utf-8",
                 decode_responses=True,
             )
+            self._loop = running
 
     async def disconnect(self) -> None:
         if self._client:
-            await self._client.close()
-            self._client = None
+            try:
+                await self._client.close()
+            except Exception:
+                pass
+            finally:
+                self._client = None
+                self._loop = None
 
     def _make_key(
         self,

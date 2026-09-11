@@ -1,5 +1,6 @@
 """Redis sliding-window rate limiter."""
 
+import asyncio
 import time
 import uuid
 from typing import Optional
@@ -11,18 +12,42 @@ from app.core.config import get_settings
 settings = get_settings()
 logger = structlog.get_logger()
 _redis: Optional[redis.Redis] = None
+_redis_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _reset_redis() -> None:
+    global _redis, _redis_loop
+    _redis = None
+    _redis_loop = None
 
 
 def _get_redis() -> Optional[redis.Redis]:
-    global _redis
+    """Loop-aware lazy client.
+
+    redis.asyncio connections bind to the creating event loop. Test runners
+    (and `--reload` restarts) may run later code on a different loop, in
+    which case the cached client raises "Event loop is closed". Detect the
+    loop change and recreate instead of reusing a stale client.
+    """
+    global _redis, _redis_loop
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if _redis is not None and running is not None and _redis_loop is not running:
+        # Stale client bound to a previous (possibly closed) loop. Drop it;
+        # the old loop/GC reclaims the socket. Recreation is rare in prod
+        # (long-lived loops) and cheap in tests.
+        _reset_redis()
     if _redis is None:
         try:
             # DB 3 = rate (isolated from queue/cache)
             redis_url = getattr(settings, "REDIS_RATE_URL", None) or settings.REDIS_URL
             _redis = redis.from_url(redis_url, decode_responses=True)
+            _redis_loop = running
         except Exception as e:
             logger.warning("rate_limit_redis_init_failed", error=str(e))
-            _redis = None
+            _reset_redis()
     return _redis
 
 
@@ -34,10 +59,17 @@ def parse_limit(limit: str) -> tuple[int, int]:
     return int(count), period_seconds
 
 
-async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
+def _is_stale_loop_error(e: Exception) -> bool:
+    msg = str(e)
+    return "Event loop is closed" in msg or "different loop" in msg or "attached to a different loop" in msg
+
+
+async def is_rate_limited(key: str, limit: str, _retried: bool = False) -> tuple[bool, int]:
     """Return (is_limited, retry_after_seconds) using sliding window.
 
     Fail-closed: if Redis is unavailable or errors, deny request.
+    A stale-loop client is recreated once and retried; only genuine
+    Redis failures deny.
     """
     r = _get_redis()
     if r is None:
@@ -72,6 +104,10 @@ async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
         await r.expire(redis_key, window)
         return False, 0
     except Exception as e:
+        if not _retried and _is_stale_loop_error(e):
+            # Client outlived its event loop (tests, reload): recreate once.
+            _reset_redis()
+            return await is_rate_limited(key, limit, _retried=True)
         logger.error("rate_limit_error", key=key, error=str(e))
         return True, window
 

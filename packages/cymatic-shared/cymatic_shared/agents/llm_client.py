@@ -43,7 +43,9 @@ class LLMRouterClient:
         self.base_url = base_url or settings.LLM_ROUTER_URL
         # Router enforces ADMIN_API_KEY on /v1/*; without this every worker
         # call gets 401 whenever the router key is configured.
-        self.api_key = api_key or getattr(settings, "ADMIN_API_KEY", "") or ""
+        # None means "use configured default"; explicit "" forces no header
+        # (e.g. probing an open router). `or` would wrongly fall back to env.
+        self.api_key = getattr(settings, "ADMIN_API_KEY", "") or "" if api_key is None else api_key
         self.client = httpx.AsyncClient(timeout=timeout)
 
     async def close(self):

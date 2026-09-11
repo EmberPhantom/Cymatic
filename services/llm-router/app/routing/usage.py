@@ -1,5 +1,6 @@
 """Usage Tracking and Quota Management with Redis atomic quotas"""
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -76,6 +77,7 @@ class UsageTracker:
         # DB 2 = usage (isolated from cache/rate)
         self.redis_url = redis_url or getattr(settings, "REDIS_USAGE_URL", None) or settings.REDIS_URL
         self._client: redis.Redis | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._local_quotas: dict[str, ProviderQuota] = {}
         self._initialize_default_quotas()
 
@@ -140,17 +142,31 @@ class UsageTracker:
         return self._local_quotas.get(provider, ProviderQuota(provider=provider))
 
     async def connect(self) -> None:
+        # Loop-aware like LLMCache.connect: recreate when running loop changed.
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if self._client is not None and running is not None and self._loop is not running:
+            self._client = None
+            self._loop = None
         if not self._client:
             self._client = redis.from_url(
                 self.redis_url,
                 encoding="utf-8",
                 decode_responses=True,
             )
+            self._loop = running
 
     async def disconnect(self) -> None:
         if self._client:
-            await self._client.close()
-            self._client = None
+            try:
+                await self._client.close()
+            except Exception:
+                pass
+            finally:
+                self._client = None
+                self._loop = None
 
     # Lua script for atomic INCR + EXPIRE (SET if new)
     _INCR_EXPIRE_LUA = """
