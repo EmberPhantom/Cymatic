@@ -110,7 +110,7 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/3
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/0
       REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/3
       REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/4
       REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/5

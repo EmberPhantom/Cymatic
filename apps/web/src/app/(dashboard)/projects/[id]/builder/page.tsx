@@ -171,6 +171,7 @@ export default function BuilderPage() {
   const publish = usePublish(projectId)
 
   const jobStatus = useJobStatus(currentJobId, !!currentJobId)
+  const { data: project } = useProject(projectId)
 
   // keep mutation fns stable for workflow continuation (avoid effect restarts on object identity change)
   const validateSpecRef = useRef(validateSpec.mutateAsync)
@@ -307,7 +308,10 @@ export default function BuilderPage() {
     }
 
     // still in progress -> do not continue; timeout interval handles stalled jobs
-    if (["queued", "running", "retry", "validating_spec", "generating_scene", "pending"].includes(status)) return
+    // NOTE: Job statuses are only pending/queued/running/retry/completed/failed/
+    // cancelled. Run stages like validating_spec/generating_scene live on
+    // GenerationRun and must not block the job chain here.
+    if (["queued", "running", "retry", "pending"].includes(status)) return
 
     // completed -> chain next stage
     if (status !== "completed") return
@@ -357,18 +361,38 @@ export default function BuilderPage() {
   const stepIndex = STEPS.findIndex((s) => s.key === step)
 
   // ---------------------------------------------------------------------------
-  // Derived questions without fragile heuristic: use backend field directly
+  // Derived questions: backend clarify returns canonical {field,...}; intake
+  // returns string[] which we map to canonical fields so answers resolve.
   // ---------------------------------------------------------------------------
   const displayQuestions: ClarificationQuestion[] = useMemo(() => {
     if (clarifyResult?.remaining_questions?.length) {
       return clarifyResult.remaining_questions
     }
     if (!intakeResult?.suggested_questions?.length) return []
+    const textToField: Record<string, string> = {
+      "what architectural style do you prefer?": "style",
+      "how many bedrooms and bathrooms do you need?": "bedrooms",
+      "what's the approximate square footage?": "square_footage",
+      "what's your budget range?": "budget",
+      "how many floors/levels?": "floors",
+      "do you need outdoor spaces? (garden, balcony, pool, etc.)": "outdoor_spaces",
+      "any specific rooms required? (home office, gym, theater, etc.)": "special_rooms",
+      "furnished or unfurnished?": "furnished",
+      "what type of heritage site? (temple, palace, courtyard, monument, etc.)": "site_type",
+      "what historical period or culture?": "historical_period",
+      "what key points of interest should be highlighted?": "key_pois",
+      "do you need guided narration? in what language(s)?": "narration",
+      "what's the approximate area/scale?": "scale",
+      "any specific architectural features to emphasize?": "focus",
+      "indoor, outdoor, or mixed experience?": "indoor_outdoor",
+      "educational focus or pure exploration?": "focus",
+    }
     return intakeResult.suggested_questions.map((q) => {
       // suggested_questions is string[] per IntakeResult; handle both string and object defensively
       if (typeof q === "string") {
+        const canonical = textToField[q.trim().toLowerCase()] ?? q
         return {
-          field: q,
+          field: canonical,
           question: q,
           type: "text",
           options: [],
@@ -398,7 +422,10 @@ export default function BuilderPage() {
     }
     try {
       dispatch({ type: "SET_ERROR", payload: null })
-      const result = await intake.mutateAsync({ prompt: safePrompt })
+      const result = await intake.mutateAsync({
+        prompt: safePrompt,
+        context: { project_domain: project?.domain },
+      })
       dispatch({ type: "SET_INTAKE_RESULT", payload: result })
       // Fix step logic: consider both missing_fields and suggested_questions
       // Backend stage is "clarification" iff missing_fields non-empty, but suggested_questions may also indicate need.
@@ -410,15 +437,22 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to analyze the prompt.") })
     }
-  }, [prompt, intake])
+  }, [prompt, intake, project?.domain])
 
   const handleClarify = useCallback(async () => {
     try {
       dispatch({ type: "SET_ERROR", payload: null })
+      // Send the freshest known entities as base: prior clarify updated_fields
+      // win over the original intake, so multi-round clarification accumulates
+      // instead of resetting to round 1.
+      const baseEntities = {
+        ...(intakeResult?.extracted_entities ?? {}),
+        ...(clarifyResult?.updated_fields ?? {}),
+      }
       const result = await clarify.mutateAsync({
         answers,
-        run_id: intakeResult?.run_id,
-        current_intake: (intakeResult as unknown as Record<string, unknown>) || {},
+        run_id: intakeResult?.run_id ?? clarifyResult?.run_id,
+        current_intake: { ...(intakeResult ?? {}), extracted_entities: baseEntities },
       })
       dispatch({ type: "SET_CLARIFY_RESULT", payload: result as ClarifyResult })
       if (result.ready_for_generation || result.remaining_questions.length === 0) dispatch({ type: "SET_STEP", payload: "review" })
@@ -426,15 +460,20 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to save clarification answers.") })
     }
-  }, [answers, clarify, intakeResult])
+  }, [answers, clarify, intakeResult, clarifyResult])
 
   const handleGenerateSpec = useCallback(async () => {
     try {
       dispatch({ type: "SET_ERROR", payload: null })
+      // Prefer LLM-normalized clarify fields over raw text inputs.
+      const clarificationAnswers = {
+        ...answers,
+        ...(clarifyResult?.updated_fields ?? {}),
+      }
       const result = await generateSpec.mutateAsync({
         prompt: prompt.slice(0, MAX_PROMPT_LENGTH),
-        run_id: intakeResult?.run_id,
-        clarification_answers: answers,
+        run_id: intakeResult?.run_id ?? clarifyResult?.run_id,
+        clarification_answers: clarificationAnswers,
       })
       dispatch({
         type: "SET_WORKFLOW",
@@ -444,7 +483,7 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to start specification generation.") })
     }
-  }, [prompt, intakeResult, answers, generateSpec])
+  }, [prompt, intakeResult, clarifyResult, answers, generateSpec])
 
   const handlePublish = useCallback(async () => {
     try {
@@ -481,7 +520,6 @@ export default function BuilderPage() {
     (jobStatus.error as unknown as string | undefined) ||
     null
 
-  const { data: project } = useProject(projectId)
   const isHeritage = project?.domain === "heritage"
 
   const pipelineStage: PipelineStage = useMemo(() => {
@@ -643,8 +681,20 @@ export default function BuilderPage() {
               {/* Step 2: Clarification */}
               {step === "clarify" && (
                 <div className="space-y-4">
-                  <div className="text-xs font-semibold text-foreground">
-                    Architectural Clarification
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs font-semibold text-foreground">
+                      Architectural Clarification
+                    </div>
+                    {(clarifyResult?.analyser_mode === "fallback" || intakeResult?.analyser_mode === "fallback") && (
+                      <span title="AI analyser unavailable — showing basic questions referencing your idea. Check LLM router health.">
+                        <Badge variant="outline" className="text-[10px]">Basic questions (offline mode)</Badge>
+                      </span>
+                    )}
+                    {(clarifyResult?.analyser_mode === "llm" || (intakeResult?.analyser_mode === "llm" && !clarifyResult)) && (
+                      <span title="Questions generated from your idea by the AI analyser.">
+                        <Badge variant="outline" className="text-[10px]">AI-grounded questions</Badge>
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] text-stonegray">
                     Refine architectural constraints before generating the 3D scene.
@@ -665,6 +715,11 @@ export default function BuilderPage() {
                             <Label htmlFor={`clarify-${field}`} className="text-xs font-medium text-foreground">
                               {question}
                             </Label>
+                            {q.evidence_span && (
+                              <p className="text-[10px] italic text-stonegray">
+                                Based on: “{q.evidence_span}”
+                              </p>
+                            )}
                             {type === "choice" && options.length ? (
                               <select
                                 id={`clarify-${field}`}

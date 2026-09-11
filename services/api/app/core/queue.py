@@ -338,9 +338,45 @@ class JobQueue:
         if job.lock_token:
             await self.release_job_lock(job_id, job.lock_token)
 
-        # Remove from queue if queued
-        queue_key = self._queues.get(job.type, f"queue:{job.type}")
-        await self.client.zrem(queue_key, job.model_dump_json())
+        # Remove from queue if queued — resolve the ORIGINAL queue name stored
+        # at enqueue time (e.g. "spec"), not job.type (e.g. "generate_spec"),
+        # otherwise ZREM misses and cancel appears to work while worker runs on.
+        stored_queue: str | None = None
+        try:
+            raw = await self.client.hget(f"job:{job_id}", "queue")
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            stored_queue = raw
+        except Exception:
+            stored_queue = None
+        queue_key = self._queues.get(
+            stored_queue or "", f"queue:{stored_queue or job.type}"
+        )
+        # Best-effort removal from all known queues: job JSON changes across
+        # state transitions (status/retries), so exact-match ZREM often misses.
+        # Scan known queues and remove any member whose parsed id matches.
+        removed = 0
+        queues_to_try = [queue_key, *self._queues.values()]
+        seen_keys: set[str] = set()
+        for qk in queues_to_try:
+            if qk in seen_keys:
+                continue
+            seen_keys.add(qk)
+            try:
+                members = await self.client.zrange(qk, 0, -1)
+                for m in members:
+                    try:
+                        mid = json.loads(m).get("id")
+                    except Exception:
+                        continue
+                    if mid == job_id:
+                        await self.client.zrem(qk, m)
+                        removed += 1
+            except Exception:
+                continue
+        if removed == 0:
+            # Fallback: exact-match attempt for legacy payloads
+            await self.client.zrem(queue_key, job.model_dump_json())
 
         # Mark as cancelled
         job.status = JobStatus.CANCELLED

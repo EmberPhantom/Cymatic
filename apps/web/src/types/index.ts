@@ -36,6 +36,7 @@ export interface IntakeResult {
   suggested_questions: string[]
   extracted_entities: Record<string, any>
   confidence: number
+  analyser_mode?: "llm" | "fallback" | string
   run_id?: string
 }
 
@@ -44,6 +45,7 @@ export interface ClarifyResult {
   ready_for_generation: boolean
   completion_percentage: number
   remaining_questions: ClarificationQuestion[]
+  analyser_mode?: "llm" | "fallback" | string
   run_id?: string
 }
 
@@ -54,6 +56,7 @@ export interface ClarificationQuestion {
   options: string[]
   required: boolean
   depends_on?: string
+  evidence_span?: string | null
 }
 
 export interface ValidationResult {
@@ -64,11 +67,15 @@ export interface ValidationResult {
 
 export interface JobStatus {
   job_id: string
+  job_type?: string
   status: string
   message?: string
   result?: Record<string, any>
   error?: string
   progress?: number
+  retry_count?: number
+  run_id?: string | null
+  updated_at?: string | null
 }
 
 export interface GenerationRun {
@@ -113,7 +120,7 @@ export type Domain = "real_estate" | "heritage"
 
 export type ProjectStatus = "draft" | "spec_generating" | "spec_ready" | "scene_generating" | "scene_ready" | "published" | "failed"
 export type SpecStatus = "draft" | "validating" | "valid" | "invalid" | "superseded"
-export type JobStatusType = "queued" | "running" | "retry" | "validating_spec" | "generating_scene" | "completed" | "failed" | "cancelled"
+export type JobStatusType = "pending" | "queued" | "running" | "retry" | "completed" | "failed" | "cancelled"
 
 export interface Paginated<T> {
   items: T[]

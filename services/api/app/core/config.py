@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
 
     # Redis — DB split: 0 queue, 1 cache, 2 usage, 3 rate, 4 revoked, 5 pubsub, 6 test
-    REDIS_URL: str = "redis://localhost:6379/3"
+    # REDIS_URL is the JOB QUEUE connection and must be DB 0 to match the worker.
+    # Rate/revoked/pubsub use their dedicated REDIS_*_URL vars below.
+    REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_REVOKED_URL: str | None = None
     REDIS_PUBSUB_URL: str | None = None
     REDIS_RATE_URL: str | None = None

@@ -27,6 +27,10 @@ litellm.drop_params = True  # Drop unsupported params
 
 # Concurrency & size caps
 _MAX_CONCURRENT_LLM = 50
+# Clarification/intent are highly context-dependent (prompt-specific questions).
+# Caching them on {domain, answers} alone leaks identical questions across
+# different projects, so they bypass the cache entirely.
+_NO_CACHE_TASKS = {"clarification", "intent_extraction"}
 # Local Ollama SLM on 8GB CPU box: serialize to avoid OOM (phi-3-mini q4 ~2.3GB)
 _MAX_CONCURRENT_LOCAL = 2
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB decoded
@@ -235,7 +239,8 @@ class LiteLLMClient:
             logger.warning("quota_check_failed", error=str(e))
 
         # Check cache first (isolated via sensitivity/provider/org)
-        if request.use_cache and not request.stream:
+        task_value = request.task_type.value if hasattr(request.task_type, "value") else str(request.task_type)
+        if request.use_cache and not request.stream and task_value not in _NO_CACHE_TASKS:
             # Do not cache tenant-sensitive/regulated to avoid leak
             should_cache = request.sensitivity in (SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL)
             if should_cache:
@@ -348,7 +353,8 @@ class LiteLLMClient:
                 routing_engine.record_provider_result(provider_str, True, float(latency_ms))
 
                 # Cache successful response – tenant isolation via sensitivity/provider/org
-                if request.use_cache:
+                # Skip context-sensitive planning tasks (see _NO_CACHE_TASKS).
+                if request.use_cache and task_value not in _NO_CACHE_TASKS:
                     # Only cache for non-sensitive to prevent leak
                     if request.sensitivity in (SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL):
                         cache_key_prompt = self._messages_to_prompt(request.messages)

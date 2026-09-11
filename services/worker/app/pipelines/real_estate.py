@@ -25,6 +25,10 @@ class PipelineInput(BaseModel):
     prompt: str
     context: dict[str, Any] = {}
     clarification_answers: dict[str, str] = {}
+    # Authoritative project domain from the generate_spec task. Intake still
+    # detects its own domain for telemetry, but architect uses this when set
+    # so API (project.domain) and worker (detected) can't fork question sets.
+    expected_domain: str | None = None
 
 
 class PipelineResult(BaseModel):
@@ -156,7 +160,7 @@ class RealEstatePipeline:
                         raise ValueError("Intake result missing for clarification stage")
                     logger.info("pipeline_stage_start", stage="clarification", project_id=input_data.project_id)
                     result.clarification = await process_clarification_answers(
-                        result.intake.detected_domain,
+                        input_data.expected_domain or result.intake.detected_domain,
                         result.intake.extracted_entities,
                         input_data.clarification_answers,
                     )
@@ -178,7 +182,7 @@ class RealEstatePipeline:
                     "texture_budget_mb": 100,
                 }
                 result.research = research_generation(
-                    result.intake.detected_domain,
+                    input_data.expected_domain or result.intake.detected_domain,
                     style,
                     research_reqs,
                 )
@@ -188,8 +192,16 @@ class RealEstatePipeline:
                     raise ValueError("Intake result missing for architect stage")
                 logger.info("pipeline_stage_start", stage="architect", project_id=input_data.project_id)
                 clarification_data = result.clarification.updated_fields if result.clarification else {}
+                architect_domain = input_data.expected_domain or result.intake.detected_domain
+                if result.intake.detected_domain != architect_domain:
+                    logger.warning(
+                        "pipeline_domain_mismatch",
+                        project_id=input_data.project_id,
+                        expected=architect_domain,
+                        detected=result.intake.detected_domain,
+                    )
                 result.architect = await create_simulation_spec(
-                    domain=result.intake.detected_domain,
+                    domain=architect_domain,
                     objective=input_data.prompt,
                     intake_data=result.intake.extracted_entities,
                     clarification_data=clarification_data,
@@ -205,7 +217,7 @@ class RealEstatePipeline:
                 clarification_data = result.clarification.updated_fields if result.clarification else {}
                 result.composer = compose_scene(
                     entities=result.architect.spec.entities,
-                    domain=result.intake.detected_domain,
+                    domain=input_data.expected_domain or result.intake.detected_domain,
                     user_preferences=clarification_data,
                 )
 
@@ -234,7 +246,7 @@ class RealEstatePipeline:
                 logger.info("pipeline_stage_start", stage="asset_selection", project_id=input_data.project_id)
                 result.assets = select_assets(
                     spec_entities=result.architect.spec.entities,
-                    domain=result.intake.detected_domain,
+                    domain=input_data.expected_domain or result.intake.detected_domain,
                     performance_budget=result.architect.spec.performance_budget.model_dump(),
                 )
 
@@ -441,12 +453,14 @@ async def generate_real_estate_spec(
     prompt: str,
     context: dict[str, Any] | None = None,
     clarification_answers: dict[str, str] | None = None,
+    expected_domain: str | None = None,
 ) -> PipelineResult:
     """Convenience function for real estate spec generation."""
     input_data = PipelineInput(
         project_id=project_id,
         prompt=prompt,
         context=context or {},
-        clarification_answers=clarification_answers or {}
+        clarification_answers=clarification_answers or {},
+        expected_domain=expected_domain or "real_estate",
     )
     return await real_estate_pipeline.run(input_data)

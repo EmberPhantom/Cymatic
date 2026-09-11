@@ -44,6 +44,13 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
+def _router_headers() -> dict[str, str]:
+    """Auth headers for LLM-router calls (requires ADMIN_API_KEY when set)."""
+    if settings.ADMIN_API_KEY:
+        return {"X-Api-Key": settings.ADMIN_API_KEY}
+    return {}
+
+
 class StreamSessionCreate(BaseModel):
     project_id: int
     device_info: Dict[str, Any] = {}
@@ -428,6 +435,7 @@ async def copilot_message(
                 "task_type": "copilot_chat",
                 "sensitivity": "internal",
             },
+            headers=_router_headers(),
             timeout=httpx.Timeout(30.0, connect=5.0),
         )
         resp.raise_for_status()
@@ -504,6 +512,7 @@ async def voice_transcript(
                 "task_type": "copilot_chat",
                 "sensitivity": "internal",
             },
+            headers=_router_headers(),
             timeout=httpx.Timeout(30.0, connect=5.0),
         )
         resp.raise_for_status()
