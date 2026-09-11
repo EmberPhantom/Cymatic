@@ -215,6 +215,10 @@ async def call_llm_json(
 
     `model` optionally pins an explicit router model id (e.g. a local SLM).
     `timeout` optionally overrides the client default per request.
+
+    Robust to common LLM output faults: markdown fences (```json),
+    leading prose, trailing commas. Returns {} only when unrecoverable —
+    callers MUST treat {} as failure and fall back.
     """
     result = await llm_router_client.chat_completion(
         messages=messages,
@@ -228,11 +232,90 @@ async def call_llm_json(
     )
 
     content = result.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        logger.warning("llm_json_parse_failed", content=content[:200])
+    if not isinstance(content, str):
+        content = str(content)
+    content = content.strip()
+    if not content:
+        logger.warning("llm_json_empty_content", task_type=task_type)
         return {}
+
+    cleaned = _strip_code_fences(content)
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt to extract the largest {...} block (handles leading prose).
+    extracted = _extract_json_object(cleaned)
+    if extracted is not None:
+        try:
+            parsed = json.loads(extracted)
+            logger.warning(
+                "llm_json_recovered_via_extraction",
+                task_type=task_type,
+                preview=content[:200],
+            )
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            pass
+
+    logger.warning(
+        "llm_json_parse_failed", task_type=task_type, content=content[:500]
+    )
+    return {}
+
+
+def _strip_code_fences(content: str) -> str:
+    """Remove markdown code fences like ```json ... ``` or ``` ... ```."""
+    text = content.strip()
+    if text.startswith("```"):
+        # Drop opening fence line (``` or ```json)
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1 :]
+        else:
+            text = text[3:]
+        # Drop closing fence
+        closing = text.rfind("```")
+        if closing != -1:
+            text = text[:closing]
+        text = text.strip()
+    return text
+
+
+def _extract_json_object(content: str) -> Optional[str]:
+    """Return the largest balanced {...} substring, or None."""
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    candidate = content[start : end + 1]
+    # Quick balance check to avoid returning obviously truncated JSON
+    if candidate.count("{") != candidate.count("}"):
+        # Try to find a balanced prefix by scanning
+        depth = 0
+        in_str = False
+        esc = False
+        for i, ch in enumerate(candidate):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return candidate[: i + 1]
+        return None
+    return candidate
 
 
 async def call_llm_structured(

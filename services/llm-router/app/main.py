@@ -99,10 +99,32 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check() -> dict[str, Any]:
+    providers = {name: provider.enabled for name, provider in routing_engine.providers.items()}
+    cloud_keys = {
+        "groq": bool(settings.GROQ_API_KEY),
+        "openrouter": bool(settings.OPENROUTER_API_KEY),
+        "openai": bool(settings.OPENAI_API_KEY),
+        "nim": bool(settings.NVIDIA_NIM_API_KEY),
+        "sarvam": bool(settings.SARVAM_API_KEY),
+    }
+    local_enabled = bool(getattr(settings, "ENABLE_LOCAL_LLM", False))
+    any_cloud = any(cloud_keys.values())
+    hint = None
+    if not local_enabled and not any_cloud:
+        hint = (
+            "No LLM provider configured. For offline LAN: "
+            "docker compose --profile local up -d ollama && "
+            "docker exec <ollama-ctr> ollama pull phi3:mini, then set "
+            "ENABLE_LOCAL_LLM=true. For cloud: set GROQ_API_KEY or "
+            "OPENROUTER_API_KEY."
+        )
     return {
         "status": "healthy",
         "service": "llm-router",
-        "providers": {name: provider.enabled for name, provider in routing_engine.providers.items()},
+        "providers": providers,
+        "local_enabled": local_enabled,
+        "cloud_keys_configured": cloud_keys,
+        "hint": hint,
     }
 
 
@@ -149,7 +171,19 @@ async def chat_completions(request: ChatCompletionRequest) -> Any:
         raise e
     except (OSError, Exception) as e:
         logger.error("chat_completion_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="LLM provider request failed") from e
+        local_enabled = bool(getattr(settings, "ENABLE_LOCAL_LLM", False))
+        hint = (
+            "No LLM provider available. "
+            + (
+                "Ollama sidecar unreachable — start it with "
+                "'docker compose --profile local up -d ollama' and pull "
+                "'phi3:mini'."
+                if local_enabled
+                else "Set ENABLE_LOCAL_LLM=true with ollama profile, or set "
+                "GROQ_API_KEY/OPENROUTER_API_KEY."
+            )
+        )
+        raise HTTPException(status_code=502, detail=f"LLM provider request failed: {hint}") from e
 
 
 @app.post(

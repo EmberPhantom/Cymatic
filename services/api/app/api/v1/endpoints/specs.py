@@ -21,6 +21,7 @@ from cymatic_shared.agents.clarification_agent import process_clarification_answ
 from app.models.scene_package import ScenePackage
 from app.services.minio_client import get_minio_client
 from app.models import GenerationRun
+from sqlalchemy.orm.attributes import flag_modified
 
 router = APIRouter()
 
@@ -133,9 +134,13 @@ async def intake_prompt(
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Use Intake Agent and persist the result for the subsequent stages.
-    intake_result = await process_intake(request.prompt, request.context)
+    # Merge project.domain into context so the LLM sees the creation-time
+    # domain alongside the prompt (frontend sends only {prompt} today).
+    effective_context = dict(request.context or {})
+    effective_context.setdefault("project_domain", project.domain)
+    intake_result = await process_intake(request.prompt, effective_context)
     # Deep copy context to avoid mutation after enqueue
-    context_copy = copy.deepcopy(request.context) if request.context else {}
+    context_copy = copy.deepcopy(effective_context)
     input_hash = hashlib.sha256(
         json.dumps(
             {"prompt": request.prompt, "context": context_copy}, sort_keys=True
@@ -166,6 +171,7 @@ async def intake_prompt(
         "suggested_questions": intake_result.suggested_questions,
         "extracted_entities": intake_result.extracted_entities,
         "confidence": intake_result.confidence,
+        "analyser_mode": intake_result.analyser_mode,
         "run_id": run.id,
     }
 
@@ -199,13 +205,48 @@ async def clarify_requirements(
         )
         if not run:
             raise HTTPException(status_code=404, detail="Generation run not found")
-    current_answers = dict((run.clarification_json if run else {}) or {})
-    current_answers.update(request.current_intake.get("extracted_entities", {}))
+    # Merge order: stale intake entities first, then fresh stored answers win.
+    # Previously request.current_intake overwrote run.clarification_json on key
+    # collision, discarding prior LLM-derived answers.
+    from cymatic_shared.agents.clarification_agent import normalize_answer_keys
+
+    stored_answers = normalize_answer_keys(dict((run.clarification_json if run else {}) or {}))
+    intake_entities = normalize_answer_keys(
+        (request.current_intake or {}).get("extracted_entities", {}) or {}
+    )
+    # Drop boolean-only fallback artifacts (e.g. {"style": True}) that would
+    # falsely mark required fields as answered.
+    intake_entities = {k: v for k, v in intake_entities.items() if v is not True}
+    current_answers = {**intake_entities, **stored_answers}
+    new_answers = normalize_answer_keys(dict(request.answers or {}))
+
+    # Domain reconciliation: prefer the LLM-detected domain stored on the run,
+    # fall back to project.domain. Warn on mismatch (stale creation-time domain).
+    detected_domain = None
+    prompt_text = None
+    objective_text = None
+    if run and isinstance(run.intake_json, dict):
+        detected_domain = run.intake_json.get("detected_domain")
+        prompt_text = run.prompt or run.intake_json.get("objective")
+        objective_text = run.intake_json.get("objective")
+    domain = detected_domain or project.domain
+    if detected_domain and detected_domain != project.domain:
+        import structlog as _structlog
+
+        _structlog.get_logger().warning(
+            "clarify_domain_mismatch",
+            project_domain=project.domain,
+            detected_domain=detected_domain,
+            run_id=run.id if run else None,
+        )
 
     clarification_result = await process_clarification_answers(
-        domain=project.domain,
+        domain=domain,
         current_answers=current_answers,
-        new_answers=request.answers,
+        new_answers=new_answers,
+        prompt=prompt_text,
+        objective=objective_text,
+        intake_entities=intake_entities,
     )
 
     if run:
@@ -219,12 +260,28 @@ async def clarify_requirements(
             else "needs_clarification"
         )
         run.progress = 30 if clarification_result.ready_for_generation else 20
+        # Per-run analyser trace: prompt -> entities -> grounded questions.
+        # Stored inside intake_json (no migration needed) and readable via
+        # GET generation-runs for debugging which path served this run.
+        intake_snapshot = dict(run.intake_json or {})
+        intake_snapshot["analyser_trace"] = {
+            "intake_mode": intake_snapshot.get("analyser_mode", "unknown"),
+            "clarify_mode": clarification_result.analyser_mode,
+            "domain": domain,
+            "questions": [
+                {"field": q.field, "evidence_span": q.evidence_span}
+                for q in clarification_result.questions
+            ],
+        }
+        run.intake_json = intake_snapshot
+        flag_modified(run, "intake_json")
         await db.commit()
 
     return {
         "updated_fields": copy.deepcopy(clarification_result.updated_fields),
         "ready_for_generation": clarification_result.ready_for_generation,
         "completion_percentage": clarification_result.completion_percentage,
+        "analyser_mode": clarification_result.analyser_mode,
         "remaining_questions": [
             {
                 "field": q.field,
@@ -232,6 +289,7 @@ async def clarify_requirements(
                 "type": q.type,
                 "options": q.options,
                 "required": q.required,
+                "evidence_span": q.evidence_span,
             }
             for q in clarification_result.questions
         ],
@@ -705,11 +763,38 @@ async def clarify_with_state(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Use Clarification Agent with full state
+    # Use Clarification Agent with full state (same merge + domain rules as /clarify)
+    from cymatic_shared.agents.clarification_agent import normalize_answer_keys as _norm
+
+    _stored: Dict[str, Any] = {}
+    _prompt: Optional[str] = None
+    _objective: Optional[str] = None
+    _detected: Optional[str] = None
+    if request.run_id:
+        _run = await db.scalar(
+            select(GenerationRun).where(
+                GenerationRun.id == request.run_id,
+                GenerationRun.project_id == project_id,
+                GenerationRun.organization_id == current_user.organization_id,
+            )
+        )
+        if _run:
+            _stored = _norm(dict(_run.clarification_json or {}))
+            if isinstance(_run.intake_json, dict):
+                _detected = _run.intake_json.get("detected_domain")
+                _objective = _run.intake_json.get("objective")
+            _prompt = _run.prompt
+    _intake_entities = _norm((request.current_intake or {}).get("extracted_entities", {}) or {})
+    _intake_entities = {k: v for k, v in _intake_entities.items() if v is not True}
+    _current = {**_intake_entities, **_stored}
+    _domain = _detected or project.domain
     clarification_result = await process_clarification_answers(
-        domain=project.domain,
-        current_answers=request.current_intake.get("extracted_entities", {}),
-        new_answers=request.answers,
+        domain=_domain,
+        current_answers=_current,
+        new_answers=_norm(dict(request.answers or {})),
+        prompt=_prompt,
+        objective=_objective,
+        intake_entities=_intake_entities,
     )
 
     if request.run_id:
@@ -732,12 +817,25 @@ async def clarify_with_state(
             else "needs_clarification"
         )
         run.progress = 30 if clarification_result.ready_for_generation else 20
+        intake_snapshot = dict(run.intake_json or {})
+        intake_snapshot["analyser_trace"] = {
+            "intake_mode": intake_snapshot.get("analyser_mode", "unknown"),
+            "clarify_mode": clarification_result.analyser_mode,
+            "domain": _domain,
+            "questions": [
+                {"field": q.field, "evidence_span": q.evidence_span}
+                for q in clarification_result.questions
+            ],
+        }
+        run.intake_json = intake_snapshot
+        flag_modified(run, "intake_json")
         await db.commit()
 
     return {
         "updated_fields": copy.deepcopy(clarification_result.updated_fields),
         "ready_for_generation": clarification_result.ready_for_generation,
         "completion_percentage": clarification_result.completion_percentage,
+        "analyser_mode": clarification_result.analyser_mode,
         "remaining_questions": [
             {
                 "field": q.field,
@@ -745,6 +843,7 @@ async def clarify_with_state(
                 "type": q.type,
                 "options": q.options,
                 "required": q.required,
+                "evidence_span": q.evidence_span,
             }
             for q in clarification_result.questions
         ],

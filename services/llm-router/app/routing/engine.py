@@ -431,7 +431,12 @@ class RoutingEngine:
                         fallback=None,
                     )
 
-        raise ValueError(f"No available provider for {task_type} at {sensitivity} sensitivity")
+        raise ValueError(
+            f"No available provider for {task_type} at {sensitivity} sensitivity. "
+            "Check /health hint: start ollama with '--profile local' + "
+            "'ollama pull phi3:mini' and ENABLE_LOCAL_LLM=true, or set "
+            "GROQ_API_KEY/OPENROUTER_API_KEY."
+        )
 
     def record_provider_result(
         self, provider: ProviderName | str, success: bool, latency_ms: float = 0

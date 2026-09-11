@@ -203,6 +203,26 @@ async def patch_entity(
     """Patch a single entity in the spec"""
     _ensure_manual_editing()
 
+    # Validate patch shapes before mutating stored state (spec-first:
+    # never persist untrusted DRAFT without a schema check).
+    for vec_field, vec in (
+        ("position", patch.position),
+        ("rotation", patch.rotation),
+        ("scale", patch.scale),
+    ):
+        if vec is not None:
+            if (
+                not isinstance(vec, (list, tuple))
+                or len(vec) != 3
+                or not all(isinstance(v, (int, float)) for v in vec)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{vec_field} must be [x, y, z] numbers",
+                )
+    if patch.properties is not None and not isinstance(patch.properties, dict):
+        raise HTTPException(status_code=422, detail="properties must be an object")
+
     result = await db.execute(
         select(SimulationSpec).where(
             SimulationSpec.id == spec_id, SimulationSpec.project_id == project_id
@@ -281,6 +301,7 @@ async def diff_specs(
     db: AsyncSession = Depends(get_db),
 ):
     """Compare two spec versions"""
+    _ensure_manual_editing()
 
     result = await db.execute(
         select(SimulationSpec).where(

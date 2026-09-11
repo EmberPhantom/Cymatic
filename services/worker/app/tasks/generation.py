@@ -54,25 +54,40 @@ async def generate_spec_task(payload: dict) -> dict:
                 run.progress = 35
         await db.commit()
     
-    # Run appropriate pipeline based on domain
-    if project.domain == "real_estate":
-        from app.pipelines.real_estate import generate_real_estate_spec
-        pipeline_result = await generate_real_estate_spec(
-            project_id=project_id,
-            prompt=prompt,
-            context=context,
-            clarification_answers=clarification_answers
-        )
-    elif project.domain == "heritage":
-        from app.pipelines.heritage import generate_heritage_spec
-        pipeline_result = await generate_heritage_spec(
-            project_id=project_id,
-            prompt=prompt,
-            context=context,
-            clarification_answers=clarification_answers
-        )
-    else:
-        raise ValueError(f"Unknown domain: {project.domain}")
+    # Run appropriate pipeline based on domain (persist run failure on ANY error
+    # so GET generation-runs never stays stuck at 35% generating_spec).
+    try:
+        if project.domain == "real_estate":
+            from app.pipelines.real_estate import generate_real_estate_spec
+            pipeline_result = await generate_real_estate_spec(
+                project_id=project_id,
+                prompt=prompt,
+                context=context,
+                clarification_answers=clarification_answers,
+                expected_domain=project.domain,
+            )
+        elif project.domain == "heritage":
+            from app.pipelines.heritage import generate_heritage_spec
+            pipeline_result = await generate_heritage_spec(
+                project_id=project_id,
+                prompt=prompt,
+                context=context,
+                clarification_answers=clarification_answers,
+                expected_domain=project.domain,
+            )
+        else:
+            raise ValueError(f"Unknown domain: {project.domain}")
+    except Exception as exc:
+        async with AsyncSessionLocal() as db:
+            if run_id:
+                run = await db.scalar(select(GenerationRun).where(GenerationRun.id == run_id))
+                if run and run.status != "failed":
+                    run.status = "failed"
+                    run.stage = "spec"
+                    run.progress = 55
+                    run.error_json = {"code": "pipeline_exception", "error": str(exc)[:1000]}
+                    await db.commit()
+        raise
     
     # Handle pipeline result
     if pipeline_result.status == "awaiting_clarification":
@@ -95,7 +110,20 @@ async def generate_spec_task(payload: dict) -> dict:
         return result
     
     if pipeline_result.status != "completed" or not pipeline_result.spec:
-        raise ValueError(f"Pipeline failed: {pipeline_result.error}")
+        err = pipeline_result.error or f"Pipeline ended with status={pipeline_result.status}"
+        async with AsyncSessionLocal() as db:
+            if run_id:
+                run = await db.scalar(select(GenerationRun).where(GenerationRun.id == run_id))
+                if run:
+                    run.status = "failed"
+                    run.stage = pipeline_result.status or "spec"
+                    run.progress = 55
+                    run.error_json = {
+                        "code": f"pipeline_{pipeline_result.status}",
+                        "error": err,
+                    }
+                    await db.commit()
+        raise ValueError(f"Pipeline failed: {err}")
     
     # Validate the complete proposal before it can become trusted state.
     from app.agents.validation_agent import validate_simulation_spec
