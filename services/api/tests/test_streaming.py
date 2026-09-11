@@ -57,9 +57,9 @@ async def test_stream_offer_render_unavailable(client, auth_headers, test_projec
 
 @pytest.mark.asyncio
 async def test_stream_input_writes_runtime_event(client, auth_headers, test_project):
-    # Create project published first would be needed, but we test input endpoint exists
-    # Try input with invalid session
-    resp = await client.post("/v1/stream/sessions/99999/input", json={"type": "controller", "data": {}}, headers=auth_headers)
+    # Valid InputPacket schema against a nonexistent session -> 404 path
+    # (proves the endpoint exists and session lookup runs before forwarding).
+    resp = await client.post("/v1/stream/sessions/99999/input", json={"input_type": "controller", "payload": {}, "timestamp": 1.0}, headers=auth_headers)
     assert resp.status_code in (404, 400)
 
 @pytest.mark.asyncio
@@ -74,6 +74,10 @@ async def test_candidate_forward_failure_is_not_reported_as_success(
     client, auth_headers, db_session, test_project, test_user
 ):
     session = await _published_stream_session(db_session, test_project, test_user)
+    # Release the fixture connection before the request so only the
+    # endpoint session is open (avoids asyncpg "another operation in
+    # progress" contention between fixture and request sessions).
+    await db_session.close()
     with patch(
         "app.api.v1.endpoints.streaming._get_http_client",
         return_value=_failing_render_client(),
@@ -91,6 +95,8 @@ async def test_input_forward_failure_is_not_reported_as_success(
     client, auth_headers, db_session, test_project, test_user
 ):
     session = await _published_stream_session(db_session, test_project, test_user)
+    # Release the fixture connection before the request (see above).
+    await db_session.close()
     with patch(
         "app.api.v1.endpoints.streaming._get_http_client",
         return_value=_failing_render_client(),

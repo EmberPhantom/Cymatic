@@ -91,6 +91,8 @@ Next.js fails to load `@next/swc-win32-x64-msvc` because the installed native mo
 
 `docker compose config` fails because `P:\Cymatic\.env` is missing. The project has `.env.example`, but Compose service `env_file` entries require `.env` directly. A first-run setup must create the file automatically or Compose must use a documented, validated fallback. Production secrets must still be explicitly supplied.
 
+> **Resolution note (2026-09-12):** related shadowing fixed — `ENABLE_LOCAL_LLM: ${...:-false}` was removed from the `worker`/`llm-router` `environment:` blocks because Compose interpolates against `infra/docker/.env` (missing), not the root `.env`, and `environment:` wins over `env_file:`. The root `.env` via `env_file:` is now the single source of truth for that flag. First-run `.env` creation (`make setup`) is still required.
+
 ## Expanded Findings
 
 ### Streaming error semantics are unsafe

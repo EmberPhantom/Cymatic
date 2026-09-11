@@ -154,7 +154,11 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       LLM_ROUTER_URL: http://llm-router:8001
-      ENABLE_LOCAL_LLM: ${ENABLE_LOCAL_LLM:-false}
+      # NOTE: ENABLE_LOCAL_LLM intentionally NOT set here — it comes from
+      # env_file (../../.env, default false in .env.example). An explicit
+      # `${ENABLE_LOCAL_LLM:-false}` interpolation would shadow env_file
+      # because Compose interpolates against infra/docker/.env (missing),
+      # not the root .env, and `environment:` wins over `env_file:`.
       DEBUG: "false"
     restart: unless-stopped
     mem_limit: 512m
@@ -180,7 +184,8 @@ services:
       REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/1
       REDIS_USAGE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/2
       REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/3
-      ENABLE_LOCAL_LLM: ${ENABLE_LOCAL_LLM:-false}
+      # NOTE: ENABLE_LOCAL_LLM intentionally NOT set here — see worker note
+      # above; env_file (../../.env) is the single source of truth.
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi-3-mini-3.8b-q4}
       DEBUG: "false"
@@ -286,10 +291,15 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_test
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       LLM_ROUTER_URL: http://llm-router:8001
+      # CI-like defaults: unit tests assert DEBUG=false and local-off routing.
+      DEBUG: "false"
+      ENABLE_LOCAL_LLM: "false"
     profiles: ["test"]
 
   test-worker:
@@ -316,10 +326,14 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_worker_test
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       LLM_ROUTER_URL: http://llm-router:8001
+      DEBUG: "false"
+      ENABLE_LOCAL_LLM: "false"
     profiles: ["test"]
 
   test-llm-router:
@@ -336,6 +350,8 @@ services:
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      DEBUG: "false"
+      ENABLE_LOCAL_LLM: "false"
     profiles: ["test"]
 
   test-postgres:

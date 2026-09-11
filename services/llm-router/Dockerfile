@@ -43,7 +43,7 @@ FROM runtime AS test
 USER root
 
 COPY tests/ ./tests/
-RUN --mount=type=cache,target=/root/.cache/pip pip install pytest==8.3.5 pytest-asyncio==0.24.0 pytest-cov httpx
+RUN --mount=type=cache,target=/root/.cache/pip pip install pytest==9.1.1 pytest-asyncio==1.4.0 pytest-cov httpx
 
 ENV PYTHONPATH=/app:/usr/local/lib/python3.11/site-packages
 

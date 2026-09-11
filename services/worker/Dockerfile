@@ -48,7 +48,7 @@ USER root
 
 COPY tests/ ./tests/
 COPY pytest.ini ./pytest.ini
-RUN --mount=type=cache,target=/root/.cache/pip pip install pytest==8.3.5 pytest-asyncio==0.24.0 pytest-cov psycopg2-binary==2.9.9 httpx
+RUN --mount=type=cache,target=/root/.cache/pip pip install pytest==9.1.1 pytest-asyncio==1.4.0 pytest-cov psycopg2-binary==2.9.9 httpx
 
 ENV PYTHONPATH=/app:/usr/local/lib/python3.11/site-packages
 

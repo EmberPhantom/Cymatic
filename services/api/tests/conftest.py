@@ -136,7 +136,7 @@ def deterministic_agent_results(monkeypatch):
             confidence=0.95,
         )
 
-    async def clarify(domain, current_answers, new_answers):
+    async def clarify(domain, current_answers, new_answers, **kwargs):
         return ClarificationResult(
             questions=[],
             updated_fields=dict(new_answers),
