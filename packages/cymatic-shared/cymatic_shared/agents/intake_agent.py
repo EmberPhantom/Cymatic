@@ -1,4 +1,6 @@
 """Intake Agent - Parses prompt and detects domain/missing fields using LLM"""
+import difflib
+import re
 from typing import Dict, Any, List
 from pydantic import BaseModel, Field
 import httpx
@@ -215,18 +217,180 @@ DOMAIN_QUESTIONS = {
 }
 
 
-async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
-    """Fallback keyword-based intake processing."""
-    prompt_lower = prompt.lower()
+# Landmark gazetteer: proper nouns keyword lists can never cover.
+# Matched spaceless/case-insensitively ("TajMahal", "taj-mahal").
+# Entities use quoted fragments, never bare booleans.
+LANDMARK_GAZETTEER: Dict[str, Dict[str, Any]] = {
+    "taj mahal": {
+        "domain": "heritage",
+        "entities": {"site_type": "mausoleum", "historical_period": "Mughal", "key_pois": "main gateway, charbagh gardens, mosque, reflection pools", "focus": "architectural"},
+    },
+    "eiffel tower": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "19th century", "key_pois": "esplanade, first floor, summit", "focus": "architectural"},
+    },
+    "colosseum": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "ancient Roman", "key_pois": "arena floor, hypogeum, upper tiers", "focus": "historical"},
+    },
+    "pyramids of giza": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "ancient Egyptian", "key_pois": "great pyramid, sphinx, valley temple", "focus": "historical"},
+    },
+    "great wall": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "Ming dynasty", "key_pois": "watchtowers, passes, wall walk", "focus": "historical"},
+    },
+    "machu picchu": {
+        "domain": "heritage",
+        "entities": {"site_type": "archaeological site", "historical_period": "Inca", "key_pois": "temple of the sun, terraces, guardhouse viewpoint", "focus": "exploration"},
+    },
+    "petra": {
+        "domain": "heritage",
+        "entities": {"site_type": "archaeological site", "historical_period": "Nabataean", "key_pois": "treasury, monastery, siq canyon", "focus": "exploration"},
+    },
+    "angkor wat": {
+        "domain": "heritage",
+        "entities": {"site_type": "temple", "historical_period": "Khmer", "key_pois": "central sanctuary, bas-reliefs, moat causeway", "focus": "spiritual"},
+    },
+    "alhambra": {
+        "domain": "heritage",
+        "entities": {"site_type": "palace", "historical_period": "Nasrid", "key_pois": "court of lions, nasrid palaces, generalife gardens", "focus": "architectural"},
+    },
+    "sydney opera house": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "modern", "key_pois": "sails, concert hall, harbour forecourt", "focus": "architectural"},
+    },
+    "statue of liberty": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "19th century", "key_pois": "pedestal, crown observatory, liberty island", "focus": "historical"},
+    },
+    "big ben": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "Victorian", "key_pois": "clock tower, westminster bridge, parliament square", "focus": "historical"},
+    },
+    "forbidden city": {
+        "domain": "heritage",
+        "entities": {"site_type": "palace", "historical_period": "Ming dynasty", "key_pois": "hall of supreme harmony, imperial gardens, meridian gate", "focus": "cultural"},
+    },
+    "blue mosque": {
+        "domain": "heritage",
+        "entities": {"site_type": "mosque", "historical_period": "Ottoman", "key_pois": "prayer hall, six minarets, courtyard", "focus": "spiritual"},
+    },
+    "hagia sophia": {
+        "domain": "heritage",
+        "entities": {"site_type": "mosque", "historical_period": "Byzantine", "key_pois": "main dome, mosaics, gallery", "focus": "cultural"},
+    },
+    "chichen itza": {
+        "domain": "heritage",
+        "entities": {"site_type": "archaeological site", "historical_period": "Maya", "key_pois": "el castillo pyramid, great ball court, cenote", "focus": "exploration"},
+    },
+    "louvre": {
+        "domain": "heritage",
+        "entities": {"site_type": "museum", "historical_period": "Renaissance", "key_pois": "glass pyramid, denon wing, courtyards", "focus": "educational"},
+    },
+    "santorini": {
+        "domain": "heritage",
+        "entities": {"site_type": "historic town", "key_pois": "caldera viewpoint, blue domes, narrow lanes", "focus": "exploration"},
+    },
+    "kiyomizu": {
+        "domain": "heritage",
+        "entities": {"site_type": "temple", "historical_period": "Japanese Edo", "key_pois": "wooden stage, otowa waterfall, pagoda", "focus": "spiritual"},
+    },
+    "burj khalifa": {
+        "domain": "heritage",
+        "entities": {"site_type": "monument", "historical_period": "modern", "key_pois": "observation deck, fountains, plaza", "focus": "architectural"},
+    },
+    # Real-estate idea cues that read as proper fragments
+    "2bhk": {
+        "domain": "real_estate",
+        "entities": {"bedrooms": "2BHK", "bathrooms": "2 bathrooms"},
+    },
+    "3bhk": {
+        "domain": "real_estate",
+        "entities": {"bedrooms": "3BHK", "bathrooms": "2-3 bathrooms"},
+    },
+    "penthouse": {
+        "domain": "real_estate",
+        "entities": {"style": "luxury penthouse", "outdoor_spaces": "terrace"},
+    },
+    "villa": {
+        "domain": "real_estate",
+        "entities": {"style": "villa", "outdoor_spaces": "garden"},
+    },
+    "farmhouse": {
+        "domain": "real_estate",
+        "entities": {"style": "farmhouse", "outdoor_spaces": "yard"},
+    },
+}
 
-    # Detect domain
+
+async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
+    """Fallback keyword-based intake processing.
+
+    Typo-tolerant (spaceless + fuzzy word match) with a landmark gazetteer
+    so short idea-style prompts ("A 3D structrue of TajMahal") still resolve
+    to the right domain with real entities instead of empty/generic output.
+    """
+    prompt_lower = prompt.lower()
+    # Spaceless form catches joined names ("tajmahal") and punctuation splits.
+    prompt_flat = re.sub(r"[^a-z0-9]", "", prompt_lower)
+    prompt_words = re.findall(r"[a-z0-9]+", prompt_lower)
+
+    def _matches(pattern: str) -> str | None:
+        """Return the matched prompt text for a keyword pattern, else None."""
+        pat = pattern.lower()
+        if pat in prompt_lower:
+            return pattern
+        flat_pat = re.sub(r"[^a-z0-9]", "", pat)
+        if flat_pat and flat_pat in prompt_flat:
+            return pattern
+        # Fuzzy word match for typos ("tempel" -> "temple"); only for
+        # patterns long enough to avoid false positives.
+        if len(flat_pat) >= 5:
+            for word in prompt_words:
+                if len(word) >= 4 and difflib.SequenceMatcher(None, word, flat_pat).ratio() >= 0.8:
+                    return word
+        return None
+
+    # Landmark gazetteer: proper nouns the keyword lists can never cover.
+    # Values are ready-made entities (quoted fragments, never bare bools).
+    # High-signal: exact wins, then typo-tolerant fuzzy on the joined name.
+    landmark_hit: Dict[str, Any] | None = None
+    for name, info in LANDMARK_GAZETTEER.items():
+        flat_name = re.sub(r"[^a-z0-9]", "", name.lower())
+        if flat_name and flat_name in prompt_flat:
+            landmark_hit = info
+            break
+    if landmark_hit is None:
+        best_ratio = 0.0
+        for name, info in LANDMARK_GAZETTEER.items():
+            flat_name = re.sub(r"[^a-z0-9]", "", name.lower())
+            if len(flat_name) < 6:
+                continue
+            # Sliding window over the flat prompt so "angkorvat" ~= "angkorwat".
+            for i in range(0, max(1, len(prompt_flat) - len(flat_name) + 1)):
+                window = prompt_flat[i:i + len(flat_name)]
+                ratio = difflib.SequenceMatcher(None, window, flat_name).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    if ratio >= 0.85:
+                        landmark_hit = info
+            if landmark_hit is not None:
+                break
+
+    # Detect domain (gazetteer wins over keyword scores)
     domain_scores = {}
     for domain, keywords in DOMAIN_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in prompt_lower)
+        score = sum(1 for kw in keywords if _matches(kw) is not None)
         domain_scores[domain] = score
 
-    detected_domain = max(domain_scores, key=domain_scores.get) if max(domain_scores.values()) > 0 else "real_estate"
-    confidence = max(domain_scores.values()) / max(len(DOMAIN_KEYWORDS[detected_domain]), 1)
+    if landmark_hit is not None:
+        detected_domain = landmark_hit["domain"]
+        confidence = 0.85
+    else:
+        detected_domain = max(domain_scores, key=domain_scores.get) if max(domain_scores.values()) > 0 else "real_estate"
+        confidence = max(domain_scores.values()) / max(len(DOMAIN_KEYWORDS[detected_domain]), 1)
 
     # Extract mentioned fields
     extracted = {}
@@ -234,12 +398,29 @@ async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = 
 
     for field, patterns in FIELD_PATTERNS.items():
         for pattern in patterns:
-            if pattern in prompt_lower:
+            hit = _matches(pattern)
+            if hit is not None:
                 mentioned_fields.add(field)
                 # Store the matched keyword text (not bare True) so downstream
                 # clarification sees a meaningful value instead of a boolean.
-                extracted[field] = pattern
+                extracted[field] = hit
                 break
+
+    if landmark_hit is None:
+        # Keyword ties (e.g. "palace walkthrough") resolve by field evidence:
+        # site_type is heritage-only, bedrooms/bathrooms/square_footage are
+        # real-estate-only. Stronger than an arbitrary dict-order default.
+        if "site_type" in mentioned_fields:
+            detected_domain = "heritage"
+        elif mentioned_fields & {"bedrooms", "bathrooms", "square_footage"}:
+            detected_domain = "real_estate"
+
+    # Merge gazetteer entities (gazetteer wins: a landmark match is more
+    # specific than a generic keyword hit, e.g. "3BHK" over "bhk").
+    if landmark_hit is not None:
+        for field, value in landmark_hit["entities"].items():
+            mentioned_fields.add(field)
+            extracted[field] = value
 
     # Determine missing fields against the DETECTED domain's canonical set
     # (previously the whole pattern superset, so real-estate runs demanded
@@ -278,6 +459,21 @@ async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = 
         first_hit = next(iter(extracted.values()), "")
         if isinstance(first_hit, str) and first_hit and grounded[0].lower().find(first_hit.lower()) == -1:
             grounded[0] = f"You mentioned '{first_hit}' — {grounded[0][0].lower() + grounded[0][1:]}"
+    elif not extracted:
+        # Nothing recognized: be honest instead of faking entities. Cap
+        # confidence and lead with open questions that invite real detail.
+        confidence = min(confidence, 0.3)
+        if detected_domain == "heritage":
+            openers = [
+                "Which heritage site or monument do you have in mind?",
+                "What should a visitor experience first when entering?",
+            ]
+        else:
+            openers = [
+                "Could you describe the key rooms or spaces you have in mind?",
+                "What should a visitor experience first when entering?",
+            ]
+        grounded = openers + [q for q in grounded if q not in openers][:4]
 
     return IntakeResult(
         detected_domain=detected_domain,

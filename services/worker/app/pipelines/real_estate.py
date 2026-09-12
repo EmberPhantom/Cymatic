@@ -24,7 +24,8 @@ class PipelineInput(BaseModel):
     project_id: int
     prompt: str
     context: dict[str, Any] = {}
-    clarification_answers: dict[str, str] = {}
+    # Any: see heritage PipelineInput — clarify yields bool/int answers.
+    clarification_answers: dict[str, Any] = {}
     # Authoritative project domain from the generate_spec task. Intake still
     # detects its own domain for telemetry, but architect uses this when set
     # so API (project.domain) and worker (detected) can't fork question sets.
@@ -452,7 +453,7 @@ async def generate_real_estate_spec(
     project_id: int,
     prompt: str,
     context: dict[str, Any] | None = None,
-    clarification_answers: dict[str, str] | None = None,
+    clarification_answers: dict[str, Any] | None = None,
     expected_domain: str | None = None,
 ) -> PipelineResult:
     """Convenience function for real estate spec generation."""

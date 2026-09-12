@@ -141,14 +141,18 @@ async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
     last_err: Exception | None = None
     for attempt in range(LOCAL_SLM_MAX_ATTEMPTS):
         try:
+            # Retries bypass the router cache (a truncated first output must
+            # not be replayed) and nudge temperature to escape deterministic
+            # stalls.
             result = await call_llm_json(
                 messages=messages,
                 task_type="spec_generation",
                 sensitivity="internal",
-                temperature=LOCAL_SLM_TEMPERATURE,
+                temperature=LOCAL_SLM_TEMPERATURE + 0.05 * attempt,
                 max_tokens=LOCAL_SLM_MAX_TOKENS,
                 model=LOCAL_SLM_MODEL,
                 timeout=_local_llm_timeout(),
+                use_cache=(attempt == 0),
             )
 
             raw_entities = result.get("entities")
@@ -159,11 +163,14 @@ async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
             # so domain-expert egress checks don't flake on valid layouts.
             entities = []
             for e in raw_entities:
-                if isinstance(e, dict):
-                    props = e.get("properties") if isinstance(e.get("properties"), dict) else {}
-                    if e.get("type") == "room" and props is not None and "has_window" not in props:
-                        props["has_window"] = True
+                if not isinstance(e, dict):
+                    continue
+                props = e.get("properties") if isinstance(e.get("properties"), dict) else {}
+                if e.get("type") == "room" and props is not None and "has_window" not in props:
+                    props["has_window"] = True
                 entities.append(Entity(**e).model_dump())
+            if not entities:
+                raise ValueError("SLM returned no valid entities")
 
             template = DOMAIN_TEMPLATES.get(input_data.domain, DOMAIN_TEMPLATES["real_estate"])
             all_data = {**input_data.intake_data, **input_data.clarification_data}

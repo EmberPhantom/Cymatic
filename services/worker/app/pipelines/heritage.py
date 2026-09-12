@@ -25,7 +25,10 @@ class PipelineInput(BaseModel):
     project_id: int
     prompt: str
     context: dict[str, Any] = {}
-    clarification_answers: dict[str, str] = {}
+    # Any: clarify convert_value legitimately yields bool/int (furnished,
+    # bedrooms); consumers use truthiness/.get, so accept them here instead
+    # of failing validation (was dict[str, str], rejected furnished=False).
+    clarification_answers: dict[str, Any] = {}
     # Authoritative project domain from the generate_spec task (see real_estate).
     expected_domain: str | None = None
 
@@ -404,7 +407,7 @@ async def generate_heritage_spec(
     project_id: int,
     prompt: str,
     context: dict[str, Any] | None = None,
-    clarification_answers: dict[str, str] | None = None,
+    clarification_answers: dict[str, Any] | None = None,
     expected_domain: str | None = None,
 ) -> PipelineResult:
     """Convenience function for heritage spec generation."""

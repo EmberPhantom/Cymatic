@@ -156,11 +156,14 @@ async def generate_spec_task(payload: dict) -> dict:
         )
         next_version = result.scalar_one()
         
-        # Create spec record (serialize with alias for TS/frontend compatibility)
+        # Create spec record (serialize with alias for TS/frontend compatibility).
+        # mode="json" is required: model_dump() leaves datetime objects as-is
+        # and asyncpg cannot serialize those into the JSON column (live Taj
+        # run died here with "Object of type datetime is not JSON serializable").
         db_spec = SimulationSpecModel(
             project_id=project_id,
             version=next_version,
-            payload_json=spec.model_dump(by_alias=True),
+            payload_json=spec.model_dump(by_alias=True, mode="json"),
             status=SpecStatus.VALID,
         )
         db.add(db_spec)

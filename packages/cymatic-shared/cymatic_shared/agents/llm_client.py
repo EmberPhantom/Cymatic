@@ -77,6 +77,7 @@ class LLMRouterClient:
         project_id: Optional[str] = None,
         model: Optional[str] = None,
         timeout: Optional[float] = None,
+        use_cache: bool = True,
     ) -> Dict[str, Any]:
         """Call chat completions endpoint with retry.
 
@@ -84,6 +85,7 @@ class LLMRouterClient:
         SLM like `phi-3-mini-3.8b-q4`); when None the router picks by policy.
         `timeout` overrides the client default per request (needed for slow
         local SLM inference on CPU); None keeps the client default.
+        `use_cache` false bypasses router caching (retries after bad output).
         """
         request = {
             "messages": messages,
@@ -96,6 +98,7 @@ class LLMRouterClient:
             "organization_id": organization_id,
             "project_id": project_id,
             "model": model,
+            "use_cache": use_cache,
         }
 
         response = await self.client.post(
@@ -212,15 +215,19 @@ async def call_llm_json(
     max_tokens: Optional[int] = None,
     model: Optional[str] = None,
     timeout: Optional[float] = None,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """Call LLM and parse JSON response.
 
     `model` optionally pins an explicit router model id (e.g. a local SLM).
     `timeout` optionally overrides the client default per request.
+    `use_cache` false bypasses the router cache — REQUIRED for retries after
+    truncated/error outputs, otherwise the retry replays cached garbage.
 
     Robust to common LLM output faults: markdown fences (```json),
-    leading prose, trailing commas. Returns {} only when unrecoverable —
-    callers MUST treat {} as failure and fall back.
+    leading prose, trailing commas, mid-object truncation (3B SLMs emit EOS
+    early). Returns {} only when unrecoverable — callers MUST treat {} as
+    failure and fall back.
     """
     result = await llm_router_client.chat_completion(
         messages=messages,
@@ -231,6 +238,7 @@ async def call_llm_json(
         response_format={"type": "json_object"},
         model=model,
         timeout=timeout,
+        use_cache=use_cache,
     )
 
     content = result.get("choices", [{}])[0].get("message", {}).get("content", "{}")
@@ -262,10 +270,101 @@ async def call_llm_json(
         except json.JSONDecodeError:
             pass
 
+    # Last resort: repair mid-object truncation (SLM EOS). Salvages complete
+    # entities instead of discarding a nearly-good response.
+    repaired = _repair_truncated_json(cleaned)
+    if repaired is not None:
+        try:
+            parsed = json.loads(repaired)
+            logger.warning(
+                "llm_json_recovered_via_repair",
+                task_type=task_type,
+                preview=content[:200],
+            )
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            pass
+
     logger.warning(
         "llm_json_parse_failed", task_type=task_type, content=content[:500]
     )
     return {}
+
+
+def _repair_truncated_json(content: str) -> Optional[str]:
+    """Close a JSON document cut off mid-object (truncated LLM output).
+
+    Strategy: cut back to the last structurally complete point (a `}` or `]`
+    that leaves balanced depth), drop any dangling partial string, then close
+    remaining open brackets. Returns None when nothing salvageable remains.
+    """
+    text = content.strip()
+    # Find the last index where bracket depth returns to a closable state by
+    # scanning while tracking strings.
+    best: Optional[str] = None
+    depth = 0
+    in_str = False
+    esc = False
+    last_balanced = -1
+    last_comma = -1
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{" or ch == "[":
+            depth += 1
+        elif ch == "}" or ch == "]":
+            depth -= 1
+            if depth >= 0:
+                last_balanced = i
+        elif ch == "," and depth > 0:
+            last_comma = i
+    cut = last_balanced
+    if cut <= 0 and last_comma > 0:
+        # No balanced close at all (cut very early): fall back to the last
+        # complete value boundary.
+        cut = last_comma
+    if cut <= 0:
+        return None
+    candidate = text[: cut + 1].rstrip().rstrip(",").rstrip(":").rstrip()
+    # Recompute open brackets to close them.
+    depth = 0
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in candidate:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch == "}" or ch == "]":
+            if stack:
+                stack.pop()
+    candidate += "".join(reversed(stack))
+    try:
+        parsed = json.loads(candidate)
+        if isinstance(parsed, dict) and parsed:
+            return candidate
+    except json.JSONDecodeError:
+        pass
+    return None
 
 
 def _strip_code_fences(content: str) -> str:
