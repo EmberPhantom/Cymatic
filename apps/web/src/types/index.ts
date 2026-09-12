@@ -36,7 +36,7 @@ export interface IntakeResult {
   suggested_questions: string[]
   extracted_entities: Record<string, any>
   confidence: number
-  analyser_mode?: "llm" | "fallback" | string
+  analyser_mode?: "llm" | "slm" | "fallback" | string
   run_id?: string
 }
 
@@ -57,6 +57,42 @@ export interface ClarificationQuestion {
   required: boolean
   depends_on?: string
   evidence_span?: string | null
+  unit?: string | null
+  min_value?: number | null
+  max_value?: number | null
+  multi?: boolean
+}
+
+export interface PlanDimension {
+  value: number
+  unit: "mm" | "cm" | "m"
+}
+
+export interface PlanSpace {
+  id: string
+  kind: "room" | "poi"
+  name: string
+  size?: {
+    width?: PlanDimension
+    depth?: PlanDimension
+    height?: PlanDimension
+  }
+  colors?: { hex: string; name?: string }[]
+  materials?: { name: string; finish?: string }[]
+  lighting?: { preset?: string; notes?: string }
+  features?: string[]
+}
+
+export interface PlanningSheet {
+  objective: string
+  domain: "real_estate" | "heritage"
+  version?: string
+  spaces?: PlanSpace[]
+  style?: Record<string, string>
+  constraints?: Record<string, unknown>
+  open_questions?: string[]
+  research_refs?: { title: string; source: string; url?: string; snippet?: string }[]
+  analyser_mode?: string
 }
 
 export interface ValidationResult {

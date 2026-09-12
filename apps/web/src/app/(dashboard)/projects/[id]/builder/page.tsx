@@ -1,10 +1,11 @@
 "use client"
 
-import { useEffect, useRef, useReducer, useMemo, useCallback } from "react"
+import { useEffect, useRef, useReducer, useMemo, useCallback, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useIntake } from "@/hooks/use-intake"
 import { useClarify } from "@/hooks/use-clarify"
 import { useGenerateSpec } from "@/hooks/use-generate-spec"
+import { useBuildPlan, useApprovePlan, type PlanSheetResponse } from "@/hooks/use-plan"
 import { useValidateSpec } from "@/hooks/use-validate-spec"
 import { useGenerateScene } from "@/hooks/use-generate-scene"
 import { usePublish } from "@/hooks/use-publish"
@@ -166,6 +167,10 @@ export default function BuilderPage() {
   const intake = useIntake(projectId)
   const clarify = useClarify(projectId)
   const generateSpec = useGenerateSpec(projectId)
+  const buildPlan = useBuildPlan(projectId)
+  const approvePlan = useApprovePlan(projectId)
+  const [planSheet, setPlanSheet] = useState<PlanSheetResponse | null>(null)
+  const planRunIdRef = useRef<string | null>(null)
   const validateSpec = useValidateSpec(projectId)
   const generateScene = useGenerateScene(projectId)
   const publish = usePublish(projectId)
@@ -176,12 +181,16 @@ export default function BuilderPage() {
   // keep mutation fns stable for workflow continuation (avoid effect restarts on object identity change)
   const validateSpecRef = useRef(validateSpec.mutateAsync)
   const generateSceneRef = useRef(generateScene.mutateAsync)
+  const approvePlanRef = useRef(approvePlan.mutateAsync)
   useEffect(() => {
     validateSpecRef.current = validateSpec.mutateAsync
   }, [validateSpec.mutateAsync])
   useEffect(() => {
     generateSceneRef.current = generateScene.mutateAsync
   }, [generateScene.mutateAsync])
+  useEffect(() => {
+    approvePlanRef.current = approvePlan.mutateAsync
+  }, [approvePlan.mutateAsync])
 
   // ---------------------------------------------------------------------------
   // Persist across refresh: sessionStorage + URL ?run_id=
@@ -391,12 +400,22 @@ export default function BuilderPage() {
       // suggested_questions is string[] per IntakeResult; handle both string and object defensively
       if (typeof q === "string") {
         const canonical = textToField[q.trim().toLowerCase()] ?? q
+        // Numeric fields keep number semantics (with units/bounds) even when
+        // the intake round only yields plain strings.
+        const numberMeta: Record<string, { unit?: string; min_value?: number; max_value?: number }> = {
+          bedrooms: { unit: "count", min_value: 1, max_value: 20 },
+          bathrooms: { unit: "count", min_value: 1, max_value: 20 },
+          square_footage: { unit: "sqft", min_value: 100, max_value: 100000 },
+          floors: { unit: "count", min_value: 1, max_value: 10 },
+        }
+        const meta = numberMeta[canonical]
         return {
           field: canonical,
           question: q,
-          type: "text",
+          type: meta ? "number" : "text",
           options: [],
           required: true,
+          ...(meta ?? {}),
         } as ClarificationQuestion
       }
       const obj = q as unknown as Record<string, unknown>
@@ -465,6 +484,18 @@ export default function BuilderPage() {
   const handleGenerateSpec = useCallback(async () => {
     try {
       dispatch({ type: "SET_ERROR", payload: null })
+      // Approval gate: freeze the reviewed plan sheet before generating.
+      // Fail-open on plan errors (sheet is advisory until the job split
+      // makes plan_sheet_id the generation input).
+      const runId = intakeResult?.run_id ?? clarifyResult?.run_id
+      if (runId && planSheet?.run_id === runId && planSheet.status !== "approved") {
+        try {
+          const approved = await approvePlanRef.current({ sheetId: planSheet.id })
+          setPlanSheet(approved)
+        } catch {
+          // proceed to generation anyway; approval is advisory for now
+        }
+      }
       // Prefer LLM-normalized clarify fields over raw text inputs.
       const clarificationAnswers = {
         ...answers,
@@ -483,7 +514,7 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to start specification generation.") })
     }
-  }, [prompt, intakeResult, clarifyResult, answers, generateSpec])
+  }, [prompt, intakeResult, clarifyResult, answers, generateSpec, planSheet])
 
   const handlePublish = useCallback(async () => {
     try {
@@ -507,6 +538,25 @@ export default function BuilderPage() {
       jobStartedAtRef.current = null
     }
   }, [currentJobId])
+
+  // ---------------------------------------------------------------------------
+  // Planning sheet: build once per run when reaching review. The sheet is the
+  // presentable, approvable plan (spaces, style, open items) — never raw JSON.
+  // ---------------------------------------------------------------------------
+  const reviewRunId = intakeResult?.run_id ?? clarifyResult?.run_id ?? null
+  useEffect(() => {
+    if (step !== "review" || !reviewRunId) return
+    if (planRunIdRef.current === reviewRunId) return
+    planRunIdRef.current = reviewRunId
+    setPlanSheet(null)
+    buildPlan
+      .mutateAsync({ run_id: reviewRunId })
+      .then((sheet) => setPlanSheet(sheet))
+      .catch(() => {
+        planRunIdRef.current = null
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, reviewRunId])
 
   const promptRemaining = MAX_PROMPT_LENGTH - prompt.length
   const isPromptOverLimit = prompt.length > MAX_PROMPT_LENGTH
@@ -700,57 +750,157 @@ export default function BuilderPage() {
                     Refine architectural constraints before generating the 3D scene.
                   </p>
 
+                  {displayQuestions.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono text-stonegray">
+                        <span>
+                          Answered {displayQuestions.filter((q) => (answers[q.field || q.question] || "").trim() !== "").length} of {displayQuestions.length}
+                        </span>
+                        {typeof clarifyResult?.completion_percentage === "number" && (
+                          <span>{Math.round(clarifyResult.completion_percentage * 100)}%</span>
+                        )}
+                      </div>
+                      <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-terracotta transition-all duration-300"
+                          style={{
+                            width: `${Math.round(
+                              (displayQuestions.filter((q) => (answers[q.field || q.question] || "").trim() !== "").length /
+                                displayQuestions.length) *
+                                100
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
                     {displayQuestions.length === 0 ? (
                       <p className="text-xs text-stonegray">No clarification needed. Continue to review.</p>
                     ) : (
-                      displayQuestions.map((q, i) => {
+                      displayQuestions
+                        .filter((q) => {
+                          // Reactive depends_on: hide e.g. languages when narration is declined.
+                          if (!q.depends_on) return true
+                          const dep = (answers[q.depends_on] || "").trim().toLowerCase()
+                          if (!dep) return true
+                          return !["no", "false", "none", "n"].includes(dep)
+                        })
+                        .map((q, i) => {
                         const field = q.field || q.question || String(q)
                         const question = q.question || String(q)
                         const type = q.type || "text"
                         const options: string[] = q.options || []
+                        const current = answers[field] || ""
+                        const setAnswer = (value: string) =>
+                          dispatch({ type: "SET_ANSWER", payload: { field, value } })
+                        const selectedMulti = current
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter(Boolean)
+                        const toggleMulti = (opt: string) => {
+                          const next = selectedMulti.includes(opt)
+                            ? selectedMulti.filter((s) => s !== opt)
+                            : [...selectedMulti, opt]
+                          setAnswer(next.join(", "))
+                        }
 
                         return (
                           <div key={field + i} className="space-y-1">
                             <Label htmlFor={`clarify-${field}`} className="text-xs font-medium text-foreground">
                               {question}
+                              {q.required === false && (
+                                <span className="ml-1 font-normal text-stonegray">(optional)</span>
+                              )}
                             </Label>
                             {q.evidence_span && (
                               <p className="text-[10px] italic text-stonegray">
                                 Based on: “{q.evidence_span}”
                               </p>
                             )}
-                            {type === "choice" && options.length ? (
-                              <select
-                                id={`clarify-${field}`}
-                                className="h-8 w-full rounded-lg border border-warmgray bg-background px-2 text-xs text-foreground focus:ring-1 focus:ring-terracotta"
-                                value={answers[field] || ""}
-                                onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
-                              >
-                                <option value="">Select option...</option>
+                            {type === "number" ? (
+                              <div className="flex items-center gap-1.5">
+                                <Input
+                                  id={`clarify-${field}`}
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={q.min_value ?? undefined}
+                                  max={q.max_value ?? undefined}
+                                  placeholder="Enter a number..."
+                                  value={current}
+                                  onChange={(e) => setAnswer(e.target.value)}
+                                  className="h-8 text-xs border-warmgray focus-visible:ring-terracotta"
+                                />
+                                {q.unit && (
+                                  <span className="text-[10px] font-mono text-stonegray whitespace-nowrap">
+                                    {q.unit}
+                                  </span>
+                                )}
+                              </div>
+                            ) : type === "choice" && options.length && q.multi ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {options.map((o: string) => {
+                                  const active = selectedMulti.includes(o)
+                                  return (
+                                    <button
+                                      key={o}
+                                      type="button"
+                                      onClick={() => toggleMulti(o)}
+                                      className={cn(
+                                        "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                                        active
+                                          ? "border-terracotta bg-terracotta/10 font-medium"
+                                          : "border-warmgray hover:border-terracotta/50"
+                                      )}
+                                    >
+                                      {o}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            ) : type === "choice" && options.length ? (
+                              <div className="flex flex-wrap gap-1.5">
                                 {options.map((o: string) => (
-                                  <option key={o} value={o}>
+                                  <button
+                                    key={o}
+                                    type="button"
+                                    onClick={() => setAnswer(o)}
+                                    className={cn(
+                                      "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                                      current === o
+                                        ? "border-terracotta bg-terracotta/10 font-medium"
+                                        : "border-warmgray hover:border-terracotta/50"
+                                    )}
+                                  >
                                     {o}
-                                  </option>
+                                  </button>
                                 ))}
-                              </select>
+                              </div>
                             ) : type === "boolean" ? (
-                              <select
-                                id={`clarify-${field}`}
-                                className="h-8 w-full rounded-lg border border-warmgray bg-background px-2 text-xs text-foreground focus:ring-1 focus:ring-terracotta"
-                                value={answers[field] || ""}
-                                onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
-                              >
-                                <option value="">Select...</option>
-                                <option value="yes">Yes</option>
-                                <option value="no">No</option>
-                              </select>
+                              <div className="flex gap-1.5">
+                                {(["yes", "no"] as const).map((o) => (
+                                  <button
+                                    key={o}
+                                    type="button"
+                                    onClick={() => setAnswer(o)}
+                                    className={cn(
+                                      "flex-1 rounded-lg border px-2 py-1.5 text-xs capitalize transition-colors",
+                                      current.toLowerCase() === o
+                                        ? "border-terracotta bg-terracotta/10 font-medium"
+                                        : "border-warmgray hover:border-terracotta/50"
+                                    )}
+                                  >
+                                    {o === "yes" ? "Yes" : "No"}
+                                  </button>
+                                ))}
+                              </div>
                             ) : (
                               <Input
                                 id={`clarify-${field}`}
                                 placeholder="Answer..."
-                                value={answers[field] || ""}
-                                onChange={(e) => dispatch({ type: "SET_ANSWER", payload: { field, value: e.target.value } })}
+                                value={current}
+                                onChange={(e) => setAnswer(e.target.value)}
                                 className="h-8 text-xs border-warmgray focus-visible:ring-terracotta"
                               />
                             )}
@@ -780,18 +930,128 @@ export default function BuilderPage() {
               {/* Step 3: Review Spec */}
               {step === "review" && (
                 <div className="space-y-4">
-                  <div className="text-xs font-semibold text-foreground">
-                    Review Extracted Architecture
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-foreground">
+                      Review Extracted Architecture
+                    </div>
+                    {intakeResult?.analyser_mode && (
+                      <span
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                          intakeResult.analyser_mode === "fallback"
+                            ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                            : "border-sage-200 bg-sage-50 text-sage dark:border-sage-900 dark:bg-sage-950/40"
+                        )}
+                        title={
+                          intakeResult.analyser_mode === "fallback"
+                            ? "Basic offline analysis — no AI provider reachable. Answers you give will still improve the spec."
+                            : intakeResult.analyser_mode === "slm"
+                            ? "Analysed on-device by the local model (offline)."
+                            : "Analysed by the AI provider."
+                        }
+                      >
+                        {intakeResult.analyser_mode === "fallback"
+                          ? "Basic analysis"
+                          : intakeResult.analyser_mode === "slm"
+                          ? "On-device AI"
+                          : "AI analysed"}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] text-stonegray">
-                    The specification engine compiled the following spatial layout from your prompt:
+                    Review the plan the agent gathered from your prompt. Approve it to generate the 3D scene.
                   </p>
 
-                  <div className="rounded-xl border border-warmgray bg-charcoal text-white p-3 font-mono text-[11px] overflow-auto max-h-56">
-                    <pre className="text-ivory/90 leading-tight">
-                      {JSON.stringify(intakeResult?.extracted_entities || { rooms: 2, spawn: [0, 1.6, 0] }, null, 2)}
-                    </pre>
-                  </div>
+                  {planSheet?.sheet ? (
+                    <div className="space-y-3">
+                      <div className="rounded-xl border border-warmgray p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs font-semibold text-foreground capitalize">
+                            {planSheet.sheet.domain === "heritage" ? "Heritage walkthrough" : "Real estate walkthrough"}
+                          </div>
+                          <span
+                            className={cn(
+                              "rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                              planSheet.status === "approved"
+                                ? "border-sage-200 bg-sage-50 text-sage dark:border-sage-900 dark:bg-sage-950/40"
+                                : "border-warmgray text-stonegray"
+                            )}
+                          >
+                            Plan v{planSheet.version} · {planSheet.status}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-stonegray line-clamp-3">{planSheet.sheet.objective}</p>
+                      </div>
+
+                      {(planSheet.sheet.spaces?.length ?? 0) > 0 && (
+                        <div>
+                          <div className="text-[11px] font-semibold text-foreground mb-1">
+                            Spaces ({planSheet.sheet.spaces?.length})
+                          </div>
+                          <ul className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                            {planSheet.sheet.spaces?.map((s) => (
+                              <li
+                                key={s.id}
+                                className="flex items-center justify-between rounded-lg border border-warmgray/60 px-2 py-1 text-[11px]"
+                              >
+                                <span className="font-medium">{s.name}</span>
+                                <span className="text-stonegray capitalize">{s.kind}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {planSheet.sheet.style && Object.keys(planSheet.sheet.style).length > 0 && (
+                        <div>
+                          <div className="text-[11px] font-semibold text-foreground mb-1">Style</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {Object.entries(planSheet.sheet.style).map(([k, v]) => (
+                              <span
+                                key={k}
+                                className="rounded-full bg-secondary px-2 py-0.5 text-[10px] text-foreground"
+                              >
+                                {k}: {v}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {(planSheet.sheet.open_questions?.length ?? 0) > 0 && (
+                        <p className="text-[10px] italic text-stonegray">
+                          Still open: {planSheet.sheet.open_questions?.slice(0, 3).join(" · ")}
+                          {(planSheet.sheet.open_questions?.length ?? 0) > 3 &&
+                            ` +${(planSheet.sheet.open_questions?.length ?? 0) - 3} more`}
+                        </p>
+                      )}
+                    </div>
+                  ) : buildPlan.isPending ? (
+                    <div className="rounded-xl border border-dashed border-warmgray p-4 text-center">
+                      <p className="text-[11px] text-stonegray">Preparing your plan…</p>
+                    </div>
+                  ) : intakeResult?.extracted_entities && Object.keys(intakeResult.extracted_entities).length > 0 ? (
+                    <div className="rounded-xl border border-warmgray bg-charcoal text-white p-3 font-mono text-[11px] overflow-auto max-h-56">
+                      <pre className="text-ivory/90 leading-tight">
+                        {JSON.stringify(intakeResult.extracted_entities, null, 2)}
+                      </pre>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-warmgray p-4 text-center">
+                      <p className="text-[11px] text-stonegray">
+                        No concrete fragments detected in your prompt yet — nothing is made up. Answer the
+                        clarification questions so the spec is built from your input.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => dispatch({ type: "SET_STEP", payload: "clarify" })}
+                        className="mt-2 text-xs"
+                      >
+                        Answer Questions →
+                      </Button>
+                    </div>
+                  )}
 
                   <div className="flex gap-2 pt-1">
                     <Button variant="outline" size="sm" onClick={() => dispatch({ type: "SET_STEP", payload: "clarify" })} className="flex-1 text-xs">
@@ -801,10 +1061,16 @@ export default function BuilderPage() {
                       variant="terracotta"
                       size="sm"
                       onClick={handleGenerateSpec}
-                      disabled={generateSpec.isPending || !!currentJobId}
+                      disabled={generateSpec.isPending || approvePlan.isPending || buildPlan.isPending || !!currentJobId}
                       className="flex-1 text-xs font-medium"
                     >
-                      {generateSpec.isPending ? "Compiling…" : "Compile Scene →"}
+                      {generateSpec.isPending || approvePlan.isPending
+                        ? "Compiling…"
+                        : buildPlan.isPending
+                        ? "Preparing plan…"
+                        : planSheet?.status === "approved"
+                        ? "Compile Scene →"
+                        : "Approve & Compile →"}
                     </Button>
                   </div>
                 </div>
@@ -845,6 +1111,31 @@ export default function BuilderPage() {
                     <div role="alert" className="rounded-lg bg-destructive/10 border border-destructive/20 p-2.5 text-xs text-destructive text-center">
                       <p className="font-semibold">Generation Failed</p>
                       <p className="mt-0.5 text-[11px]">{String(jobErrorDetail || "Please retry.")}</p>
+                    </div>
+                  )}
+
+                  {(workflowError || (jobStatus.isError && currentJobId)) && jobStatus.data?.status !== "failed" && (
+                    <div role="alert" className="rounded-lg bg-destructive/10 border border-destructive/20 p-2.5 text-xs text-destructive text-center">
+                      <p className="font-semibold">Generation Interrupted</p>
+                      <p className="mt-0.5 text-[11px]">
+                        {String(
+                          workflowError ||
+                            "Lost track of the job (it may have expired). Your plan is kept — go back and compile again."
+                        )}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          dispatch({ type: "SET_ERROR", payload: null })
+                          dispatch({ type: "SET_JOB", payload: null })
+                          jobStartedAtRef.current = null
+                          dispatch({ type: "SET_STEP", payload: intakeResult ? "review" : "prompt" })
+                        }}
+                        className="mt-2 text-xs"
+                      >
+                        Back to Review →
+                      </Button>
                     </div>
                   )}
 

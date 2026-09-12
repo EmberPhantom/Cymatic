@@ -9,27 +9,33 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple
 import importlib.util
 
-PYTHON_SCHEMA = Path(__file__).parent.parent / "schemas" / "simulation_spec.py"
-TYPESCRIPT_SCHEMA = Path(__file__).parent.parent / "schemas" / "simulation_spec.ts"
+SCHEMA_ROOT = Path(__file__).parent.parent / "schemas"
+# (python file, typescript file, root model/interface name)
+SCHEMA_PAIRS = [
+    ("simulation_spec.py", "simulation_spec.ts", "SimulationSpec"),
+    ("planning_sheet.py", "planning_sheet.ts", "PlanningSheet"),
+]
 
 
-def extract_python_schema() -> Dict[str, Any]:
+def extract_python_schema(py_file: str, model_name: str) -> Dict[str, Any]:
     """Extract schema structure from Python Pydantic models."""
-    spec = importlib.util.spec_from_file_location("simulation_spec", PYTHON_SCHEMA)
+    path = SCHEMA_ROOT / py_file
+    module_name = Path(py_file).stem
+    spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["simulation_spec"] = module
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
 
     # Get the JSON schema from Pydantic
-    schema = module.SimulationSpec.model_json_schema()
+    schema = getattr(module, model_name).model_json_schema()
     return schema
 
 
-def extract_typescript_schema() -> Dict[str, Any]:
+def extract_typescript_schema(ts_file: str) -> Dict[str, Any]:
     """Extract schema structure from TypeScript by compiling and inspecting."""
     # Use TypeScript compiler to get declaration info
     # We'll parse the TS file directly for a simpler approach
-    content = TYPESCRIPT_SCHEMA.read_text()
+    content = (SCHEMA_ROOT / ts_file).read_text()
 
     # Simple extraction of interface names and their fields
     # This is a basic parser - could be enhanced with proper TS AST parsing
@@ -111,7 +117,7 @@ def get_pydantic_fields(schema: Dict[str, Any], prefix: str = "") -> Dict[str, s
     return fields
 
 
-def compare_schemas(py_fields: Dict[str, str], ts_fields: Dict[str, Dict[str, str]]) -> Tuple[List[str], List[str], List[str]]:
+def compare_schemas(py_fields: Dict[str, str], ts_fields: Dict[str, Dict[str, str]], main_name: str) -> Tuple[List[str], List[str], List[str]]:
     """Compare Python and TypeScript field structures."""
     errors = []
     warnings = []
@@ -119,29 +125,29 @@ def compare_schemas(py_fields: Dict[str, str], ts_fields: Dict[str, Dict[str, st
 
     # Main interface comparison
     py_main = {k: v for k, v in py_fields.items() if '.' not in k}
-    ts_main = ts_fields.get('SimulationSpec', {})
+    ts_main = ts_fields.get(main_name, {})
 
     py_keys = set(py_main.keys())
     ts_keys = set(ts_main.keys())
 
     # Missing in TypeScript
     for key in py_keys - ts_keys:
-        errors.append(f"Missing in TypeScript: SimulationSpec.{key} ({py_main[key]})")
+        errors.append(f"Missing in TypeScript: {main_name}.{key} ({py_main[key]})")
 
     # Missing in Python
     for key in ts_keys - py_keys:
-        errors.append(f"Missing in Python: SimulationSpec.{key} ({ts_main[key]})")
+        errors.append(f"Missing in Python: {main_name}.{key} ({ts_main[key]})")
 
     # Type mismatches
     for key in py_keys & ts_keys:
         py_type = py_main[key]
         ts_type = ts_main[key]
         if not types_match(py_type, ts_type):
-            warnings.append(f"Type mismatch: SimulationSpec.{key} - Python: {py_type}, TypeScript: {ts_type}")
+            warnings.append(f"Type mismatch: {main_name}.{key} - Python: {py_type}, TypeScript: {ts_type}")
 
     # Check nested interfaces
     for ts_interface, ts_props in ts_fields.items():
-        if ts_interface == 'SimulationSpec':
+        if ts_interface == main_name:
             continue
         py_props = {k.split('.', 1)[1]: v for k, v in py_fields.items() if k.startswith(f"{ts_interface}.")}
         if not py_props:
@@ -158,17 +164,19 @@ def compare_schemas(py_fields: Dict[str, str], ts_fields: Dict[str, Dict[str, st
 
 def types_match(py_type: str, ts_type: str) -> bool:
     """Check if Python and TypeScript types are compatible."""
-    # Normalize types
-    py_norm = py_type.lower().replace('array<', 'array<').replace('>', '')
-    ts_norm = ts_type.lower().replace('array<', 'array<').replace('>', '')
+    # Normalize types (keep brackets: slicing below depends on them)
+    py_norm = py_type.lower()
+    ts_norm = ts_type.lower()
 
     # Direct match
     if py_norm == ts_norm:
         return True
 
     # Handle TypeScript type references (Domain, Entity, etc.)
-    if ts_norm in ['domain', 'entity', 'entitytype', 'navigationpoint', 'navigationpath', 'navigationspec', 
-                   'lightingspec', 'customlight', 'copilotpolicy', 'performancebudget', 'specmetadata']:
+    if ts_norm in ['domain', 'planningdomain', 'entity', 'entitytype', 'navigationpoint', 'navigationpath', 'navigationspec',
+                    'lightingspec', 'customlight', 'copilotpolicy', 'performancebudget', 'specmetadata',
+                    'planspace', 'spacesize', 'dimension', 'plancolor', 'planmaterial', 'spacelighting', 'researchref',
+                    'lengthunit', 'sheetstatus']:
         return True
 
     # Handle array types: Array<Entity> vs Entity[]
@@ -180,6 +188,9 @@ def types_match(py_type: str, ts_type: str) -> bool:
         ts_inner = ts_norm[6:-1]
         py_inner = py_norm[:-2]
         return types_match(py_inner, ts_inner)
+    # Dict[str, X] (pydantic 'object') vs TypeScript Record<string, X>
+    if py_norm == 'object' and ts_norm.startswith('record<string'):
+        return True
 
     # Common equivalences
     equivalences = {
@@ -201,23 +212,34 @@ def types_match(py_type: str, ts_type: str) -> bool:
 def main():
     print("Checking schema sync between Python and TypeScript...")
 
-    try:
-        py_schema = extract_python_schema()
-        py_fields = get_pydantic_fields(py_schema)
-        print(f"Extracted {len(py_fields)} Python fields")
-    except Exception as e:
-        print(f"Error extracting Python schema: {e}")
-        sys.exit(1)
+    all_errors: List[str] = []
+    all_warnings: List[str] = []
+    all_info: List[str] = []
 
-    try:
-        ts_fields = extract_typescript_schema()
-        total_ts = sum(len(v) if isinstance(v, dict) else 0 for v in ts_fields.values())
-        print(f"Extracted {total_ts} TypeScript fields from {len(ts_fields)} interfaces")
-    except Exception as e:
-        print(f"Error extracting TypeScript schema: {e}")
-        sys.exit(1)
+    for py_file, ts_file, main_name in SCHEMA_PAIRS:
+        print(f"\n--- {py_file} <-> {ts_file} ---")
+        try:
+            py_schema = extract_python_schema(py_file, main_name)
+            py_fields = get_pydantic_fields(py_schema)
+            print(f"Extracted {len(py_fields)} Python fields")
+        except Exception as e:
+            print(f"Error extracting Python schema: {e}")
+            sys.exit(1)
 
-    errors, warnings, info = compare_schemas(py_fields, ts_fields)
+        try:
+            ts_fields = extract_typescript_schema(ts_file)
+            total_ts = sum(len(v) if isinstance(v, dict) else 0 for v in ts_fields.values())
+            print(f"Extracted {total_ts} TypeScript fields from {len(ts_fields)} interfaces")
+        except Exception as e:
+            print(f"Error extracting TypeScript schema: {e}")
+            sys.exit(1)
+
+        errors, warnings, info = compare_schemas(py_fields, ts_fields, main_name)
+        all_errors.extend(errors)
+        all_warnings.extend(warnings)
+        all_info.extend(info)
+
+    errors, warnings, info = all_errors, all_warnings, all_info
 
     if info:
         print("\nINFO:")

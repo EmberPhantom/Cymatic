@@ -13,6 +13,7 @@ from app.models.voice_session import VoiceSession
 from app.models.credit_ledger import CreditLedger
 from app.models.audit_log import AuditLog
 from app.models.generation_run import GenerationRun
+from app.models.planning_sheet import PlanningSheet, SheetStatus
 
 __all__ = [
     "User",
@@ -34,4 +35,6 @@ __all__ = [
     "CreditLedger",
     "AuditLog",
     "GenerationRun",
+    "PlanningSheet",
+    "SheetStatus",
 ]

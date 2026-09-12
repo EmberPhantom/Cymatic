@@ -47,6 +47,7 @@ class Project(Base):
     organization = relationship("Organization", back_populates="projects")
     owner = relationship("User", back_populates="projects")
     specs = relationship("SimulationSpec", back_populates="project")
+    planning_sheets = relationship("PlanningSheet", back_populates="project")
     assets = relationship("Asset", back_populates="project")
     scene_packages = relationship("ScenePackage", back_populates="project")
     stream_sessions = relationship("StreamSession", back_populates="project")

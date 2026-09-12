@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     credits,
     editing,
     jobs,
+    plan,
 )
 
 api_router = APIRouter()
@@ -28,3 +29,4 @@ api_router.include_router(analytics.router, prefix="/analytics", tags=["analytic
 api_router.include_router(credits.router, prefix="/credits", tags=["credits"])
 api_router.include_router(editing.router, prefix="/projects", tags=["editing"])
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
+api_router.include_router(plan.router, prefix="/projects", tags=["planning"])
