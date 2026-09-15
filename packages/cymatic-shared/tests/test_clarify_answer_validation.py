@@ -52,3 +52,12 @@ def test_good_entity_survives_garbage_answer():
     assert r.updated_fields["historical_period"] == "Mughal"
     assert "when it was built" in r.answer_notes["historical_period"]
     assert r.updated_fields["narration"] is True
+
+
+def test_choice_without_separator_matching_no_option_does_not_crash():
+    # Live regression: a short choice answer with no comma/slash that matches
+    # no option (e.g. scale="entire complex") raised UnboundLocalError on
+    # `parts` and failed the whole worker clarification stage.
+    clean, raw = _clean_fallback_answer("scale", "entire complex", "heritage")
+    assert clean == "entire complex"
+    assert raw == "entire complex"

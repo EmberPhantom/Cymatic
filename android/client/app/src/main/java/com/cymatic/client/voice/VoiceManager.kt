@@ -19,6 +19,10 @@ import kotlin.math.abs
 
 class VoiceManager(private val context: Context) {
 
+    // Bound by VRActivity when a stream session starts. Voice transcript
+    // requires a valid session id — never send with empty id.
+    var sessionId: String? = null
+
     private var audioRecord: AudioRecord? = null
     @Volatile private var isRecording = false
     private val sampleRate = 16000
@@ -198,20 +202,29 @@ class VoiceManager(private val context: Context) {
     
     private fun sendBatchedToStt(pcmBatch: ByteArray, nowMs: Long) {
         if (isSttInFlight) return
+        val sid = sessionId?.takeIf { it.isNotBlank() }
+        if (sid == null) {
+            Log.w("VoiceManager", "STT skipped: no active session")
+            return
+        }
         isSttInFlight = true
         lastSttSendMs = nowMs
         scope.launch {
             try {
                 val base64Audio = Base64.encodeToString(pcmBatch, Base64.NO_WRAP)
-                
+
+                // Backend VoiceTranscript.transcript is text; audio bytes are
+                // transported out-of-band. For MVP send transcript placeholder
+                // with language tag and let server STT handle audio via WS.
+                // TODO: switch to multipart /api/voice/transcribe with raw PCM.
                 val request = VoiceTranscript(
                     transcript = base64Audio,
                     language = "en",
                     confidence = null
                 )
-                
+
                 val response = ApiClient.apiService.voiceTranscript(
-                    sessionId = "", // Would come from current session
+                    sessionId = sid,
                     request
                 )
                 

@@ -106,6 +106,7 @@ async def health_check() -> dict[str, Any]:
         "openai": bool(settings.OPENAI_API_KEY),
         "nim": bool(settings.NVIDIA_NIM_API_KEY),
         "sarvam": bool(settings.SARVAM_API_KEY),
+        "apinex": bool(getattr(settings, "APINEX_API_KEY", "")),
     }
     local_enabled = bool(getattr(settings, "ENABLE_LOCAL_LLM", False))
     any_cloud = any(cloud_keys.values())
@@ -115,7 +116,7 @@ async def health_check() -> dict[str, Any]:
             "No LLM provider configured. For offline LAN: "
             "docker compose --profile local up -d ollama && "
             "docker exec <ollama-ctr> ollama pull phi3:mini, then set "
-            "ENABLE_LOCAL_LLM=true. For cloud: set GROQ_API_KEY or "
+            "ENABLE_LOCAL_LLM=true. For cloud: set APINEX_API_KEY, GROQ_API_KEY, or "
             "OPENROUTER_API_KEY."
         )
     return {
@@ -180,7 +181,7 @@ async def chat_completions(request: ChatCompletionRequest) -> Any:
                 "'phi3:mini'."
                 if local_enabled
                 else "Set ENABLE_LOCAL_LLM=true with ollama profile, or set "
-                "GROQ_API_KEY/OPENROUTER_API_KEY."
+                "APINEX_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY."
             )
         )
         raise HTTPException(status_code=502, detail=f"LLM provider request failed: {hint}") from e

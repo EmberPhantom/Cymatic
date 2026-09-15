@@ -42,6 +42,7 @@ jobs:
   frontend:
     name: Frontend Unit & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/web
@@ -80,6 +81,7 @@ jobs:
   python-tests:
     name: Python Tests (${{ matrix.service }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         service: [api, worker, router]
@@ -355,14 +357,15 @@ jobs:
   docker-build:
     name: Docker Build Verification
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-      - name: Build API image
-        run: docker build -f services/api/Dockerfile -t cymatic/api:latest .
+        uses: docker/setup-buildx-action@v3
+      - name: Build all images via bake (shared context parity with compose)
+        run: docker buildx bake -f docker-bake.hcl --load
       - name: Lint Dockerfiles
         uses: hadolint/hadolint-action@v3.5.0
         with:
@@ -379,12 +382,6 @@ jobs:
         uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: apps/web/Dockerfile
-      - name: Build Worker image
-        run: docker build -f services/worker/Dockerfile -t cymatic/worker:latest .
-      - name: Build LLM Router image
-        run: docker build -f services/llm-router/Dockerfile -t cymatic/llm-router:latest .
-      - name: Build Frontend image
-        run: docker build -t cymatic/web:latest ./apps/web
       - name: Verify images
         run: docker images cymatic/*
 
@@ -401,7 +398,8 @@ jobs:
   test-report:
     name: Unified Test Report
     runs-on: ubuntu-latest
-    needs: [python-tests, frontend, frontend-e2e]
+    timeout-minutes: 5
+    needs: [python-tests, frontend, frontend-e2e, docker-build]
     if: always()
     steps:
       - name: Download API test results

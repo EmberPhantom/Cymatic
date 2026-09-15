@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import require_creator, require_viewer
+from app.core.dependencies import require_admin, require_creator, require_viewer
 from app.db.session import get_db
 from app.models.generation_run import GenerationRun
 from app.models.planning_sheet import PlanningSheet as PlanningSheetModel, SheetStatus
@@ -214,7 +214,7 @@ async def get_latest_plan(
 async def approve_plan(
     project_id: int,
     sheet_id: int,
-    current_user: User = Depends(require_creator),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Approve a sheet version; supersedes other approved versions."""

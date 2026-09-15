@@ -222,10 +222,11 @@ async def process_clarification_llm(
     }
     # Prompt/objective context lets the LLM ask prompt-specific questions
     # (e.g. "you said 14th-century mandapa...") instead of generic templates.
+    # Capped for the 4k SLM window (LOCAL-first routing).
     if prompt:
-        user_payload["original_prompt"] = prompt[:2000]
+        user_payload["original_prompt"] = prompt[:1000]
     if objective:
-        user_payload["objective"] = objective[:2000]
+        user_payload["objective"] = objective[:1000]
     if intake_entities:
         user_payload["intake_entities"] = intake_entities
 
@@ -239,8 +240,10 @@ async def process_clarification_llm(
             messages=messages,
             task_type="clarification",
             sensitivity="internal",
-            temperature=0.3,
-            max_tokens=2000,
+            temperature=0.2,
+            # Same reasoning-model headroom as intake (JSON mode + questions).
+            max_tokens=1500,
+            timeout=180,
         )
 
         # Empty/unparseable output must use the deterministic fallback.
@@ -293,6 +296,7 @@ def _clean_fallback_answer(field: str, value: Any, domain: str) -> tuple[Any | N
         opt_lows = [o.lower() for o in q.options]
         # Multi-select first ("english,telugu"): a single-option prefix match
         # must not swallow the rest of the list.
+        parts: list[str] = []
         if "," in text or "/" in text:
             parts = [p.strip() for p in re.split(r"[,/]", text) if p.strip()]
             if parts and all(

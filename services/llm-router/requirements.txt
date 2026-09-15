@@ -1,16 +1,23 @@
-# LLM Router Dependencies
-fastapi>=0.141.1
-uvicorn[standard]>=0.52.4
-pydantic>=2.13.5
-pydantic-settings>=2.15.0
-httpx>=0.28.1
-idna>=3.19
-python-dotenv>=1.2.3
-structlog>=26.1.0
-litellm>=1.99.0
-redis>=8.1.0
-prometheus-client>=0.26.0
-pytest>=9.1.1
-pytest-asyncio>=1.4.0
-pytest-cov>=7.1.0
-pip-audit>=2.10.1
+# Full dev/test install for local venvs and CI (pr-gate, dependabot).
+# Docker images use the split files instead: requirements.runtime.txt
+# (lean production image) + requirements.test.txt (test stage only).
+# When adding a dependency, put it in the right split file AND here.
+# LLM Router Dependencies (all pins exact so builds are reproducible)
+# Local editable install of shared package (Docker uses COPY --from=shared instead).
+-e ../../packages/cymatic-shared
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+pydantic-settings==2.15.0
+httpx==0.28.1
+idna==3.19
+python-dotenv==1.2.3
+structlog==26.1.0
+tenacity==9.1.4
+litellm==1.100.1
+redis==8.1.0
+prometheus-client==0.26.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+pip-audit==2.10.1

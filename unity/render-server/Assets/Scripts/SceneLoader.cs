@@ -52,13 +52,16 @@ namespace Cymatic
         
         public CymaticScenePackage CurrentPackage => _currentPackage;
         
-        public async UniTask<CymaticScenePackage> LoadFromUrl(string url)
+        public async UniTask<CymaticScenePackage> LoadFromUrl(string url, string authToken = null, int maxMb = 50)
         {
             Debug.Log($"[SceneLoader] Downloading scene package from {url}");
-            
-            // Download JSON
+
+            // Download JSON with optional Bearer auth, size cap, and timeout.
             using (var request = UnityWebRequest.Get(url))
             {
+                if (!string.IsNullOrEmpty(authToken))
+                    request.SetRequestHeader("Authorization", "Bearer " + authToken);
+                request.timeout = 30;
                 await request.SendWebRequest();
                 
                 if (request.result != UnityWebRequest.Result.Success)
@@ -66,11 +69,30 @@ namespace Cymatic
                     Debug.LogError($"[SceneLoader] Failed to download: {request.error}");
                     return null;
                 }
-                
+
                 var json = request.downloadHandler.text;
+                if (json != null && json.Length > maxMb * 1024 * 1024)
+                {
+                    Debug.LogError($"[SceneLoader] Package exceeds {maxMb}MB cap; refusing to parse");
+                    return null;
+                }
                 var settings = new JsonSerializerSettings();
                 settings.Converters.Add(new Vector3Converter());
                 var package = JsonConvert.DeserializeObject<CymaticScenePackage>(json, settings);
+                // Enforce performance budget before instantiation (MVP low-end guard).
+                var budget = package?.performance_budget;
+                if (budget != null)
+                {
+                    if (package.entities != null && package.entities.Count > budget.max_entities)
+                    {
+                        Debug.LogError($"[SceneLoader] entities {package.entities.Count} exceeds budget {budget.max_entities}");
+                        return null;
+                    }
+                    if (budget.max_triangles > 2000000)
+                    {
+                        Debug.LogWarning("[SceneLoader] max_triangles exceeds 2M low-end budget");
+                    }
+                }
                 return package;
             }
         }

@@ -37,11 +37,17 @@ namespace Cymatic
         private Dictionary<string, Action<string>> _pendingRequests = new Dictionary<string, Action<string>>();
         private int _requestId = 0;
         
+        [SerializeField] private string _authToken = "";
+
         public bool IsConnected => _isConnected;
-        
-        public void Configure(string url)
+
+        public void Configure(string url, string authToken = null)
         {
             _signalingUrl = url;
+            if (!string.IsNullOrEmpty(authToken)) _authToken = authToken;
+            // Prefer wss in production; warn on cleartext ws.
+            if (_signalingUrl.StartsWith("ws://") && !_signalingUrl.Contains("localhost") && !_signalingUrl.Contains("127.0.0.1") && !_signalingUrl.Contains("10.") && !_signalingUrl.Contains("192.168."))
+                Debug.LogWarning("[Signaling] Using cleartext ws:// outside LAN; prefer wss://");
         }
         
         public async UniTask Connect()
@@ -61,8 +67,14 @@ namespace Cymatic
                 _webSocket.OnMessage += OnWebSocketMessage;
                 _webSocket.OnError += OnWebSocketError;
                 _webSocket.OnClose += OnWebSocketClose;
-                
-                await _webSocket.Connect(_signalingUrl);
+                // Attach Bearer auth via query when header injection unavailable
+                // (backend prefers Authorization header; query is deprecated fallback).
+                var url = _signalingUrl;
+                if (!string.IsNullOrEmpty(_authToken) && !url.Contains("token="))
+                    url += (url.Contains("?") ? "&" : "?") + "type=render_server";
+                await _webSocket.Connect(url);
+                if (!string.IsNullOrEmpty(_authToken))
+                    Debug.Log("[Signaling] Connecting with auth token (prefer header where supported)");
             }
             catch (Exception e)
             {

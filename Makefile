@@ -1,7 +1,7 @@
 # CYMATIC Development Makefile
 # Supports both Windows (PowerShell) and Unix shells
 
-.PHONY: help setup dev build test lint clean docker-build docker-up docker-down
+.PHONY: help setup dev build test lint clean docker-build docker-build-ci docker-up docker-down
 
 # Default target
 help:
@@ -35,8 +35,9 @@ help:
 	@echo "Database:"
 	@echo "  make migrate        - Run database migrations"
 	@echo ""
-	@echo "Docker:"
-	@echo "  make docker-build   - Build all Docker images (per-service context)"
+  @echo "Docker:"
+  @echo "  make docker-build   - Build all Docker images (parallel bake, local inline cache)"
+  @echo "  make docker-build-ci - Build all Docker images with GHA cache (CI only)"
 	@echo "  make docker-up      - Start all services with Docker Compose"
 	@echo "  make docker-down    - Stop all Docker services (preserves volumes)"
 	@echo "  make docker-clean   - Prune unused Docker resources"
@@ -146,9 +147,14 @@ typecheck:
 migrate:
 	cd services/api && $(VENV_BIN)/alembic upgrade head
 
-# Docker — parallel buildx bake with GHA cache (per-service contexts via bake)
+# Docker — parallel buildx bake (per-service contexts via bake file).
+# Local uses the inline cache from docker-bake.hcl (offline-friendly).
+# CI-only GHA cache lives in docker-bake.ci.hcl (needs ACTIONS_CACHE_URL).
 docker-build:
-	docker buildx bake -f docker-bake.hcl --progress plain --set "*.cache-from=type=gha" --set "*.cache-to=type=gha,mode=max"
+	docker buildx bake -f docker-bake.hcl
+
+docker-build-ci:
+	docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl --progress plain
 
 docker-up:
 	docker compose -f infra/docker/docker-compose.yml up -d --build

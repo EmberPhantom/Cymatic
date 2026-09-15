@@ -79,8 +79,11 @@ async def process_intake_llm(prompt: str, context: Dict[str, Any] | None = None)
             messages=messages,
             task_type="intent_extraction",
             sensitivity="internal",
-            temperature=0.3,
-            max_tokens=1000,
+            temperature=0.2,
+            # gpt-oss reasoning models starve below ~1000 tokens in JSON mode
+            # (Groq json_validate_failed: "max completion tokens reached").
+            max_tokens=1500,
+            timeout=120,
         )
 
         # Empty/unparseable LLM output must fall back — never treat {} as success.

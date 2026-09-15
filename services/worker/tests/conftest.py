@@ -115,7 +115,7 @@ async def db_session(setup_db) -> AsyncGenerator[AsyncSession, None]:
 # LLM Mock Fixtures
 # ---------------------------------------------------------------------------
 
-def _intake_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None):
+def _intake_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None, **kwargs):
     """Return intake-appropriate mock data based on prompt content."""
     content = messages[1]["content"] if len(messages) > 1 else ""
     prompt = content.split("Prompt: ")[1].split("\n")[0] if "Prompt: " in content else content.lower()
@@ -148,7 +148,7 @@ def _intake_mock(messages, task_type="copilot_chat", sensitivity="internal", tem
     }
 
 
-def _clarification_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None):
+def _clarification_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None, **kwargs):
     """Return clarification mock data. The user message contains the merged answers."""
     content = messages[1]["content"] if len(messages) > 1 else "{}"
     try:
@@ -167,7 +167,7 @@ def _clarification_mock(messages, task_type="copilot_chat", sensitivity="interna
     }
 
 
-def _architect_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None):
+def _architect_mock(messages, task_type="copilot_chat", sensitivity="internal", temperature=0.3, max_tokens=None, **kwargs):
     """Return architect mock data - a valid SimulationSpec dict (includes has_window for domain compliance)."""
     return {
         "domain": "real_estate",

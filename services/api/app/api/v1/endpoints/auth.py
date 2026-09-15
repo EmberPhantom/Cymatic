@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from fastapi.security import OAuth2PasswordRequestForm, HTTPAuthorizationCredentials
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from typing import Optional
 from datetime import timedelta
 from jose import JWTError
@@ -42,8 +42,8 @@ class RefreshRequest(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
-    name: str
+    password: str = Field(min_length=12, max_length=128)
+    name: str = Field(min_length=1, max_length=100)
 
 
 class UserResponse(BaseModel):
@@ -174,7 +174,7 @@ async def get_current_user_info(
     return current_user
 
 
-@router.post("/refresh", response_model=Token)
+@router.post("/refresh", response_model=Token, dependencies=[Depends(rate_limit("10/minute"))])
 async def refresh_token(
     response: Response,
     http_request: Request,
@@ -217,9 +217,17 @@ async def refresh_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    result = await db.execute(select(User).where(User.id == int(user_id)))
-    user = result.scalar_one_or_none()
+    try:
+        user_id_int = int(user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
+    result = await db.execute(select(User).where(User.id == user_id_int))
+    user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

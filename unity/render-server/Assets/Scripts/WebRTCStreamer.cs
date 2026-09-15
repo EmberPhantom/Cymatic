@@ -149,12 +149,30 @@ namespace Cymatic
         
         private async UniTask InitializePeerConnection()
         {
-            var config = new RTCConfiguration
+            // LAN-first: host candidates suffice; STUN adds DNS/gathering delay.
+            // TURN configured via env (TURN_URL/USERNAME/PASSWORD) for WAN fallback.
+            var turnUrl = System.Environment.GetEnvironmentVariable("TURN_URL") ?? "";
+            var turnUser = System.Environment.GetEnvironmentVariable("TURN_USERNAME") ?? "";
+            var turnPass = System.Environment.GetEnvironmentVariable("TURN_PASSWORD") ?? "";
+            RTCIceServer[] iceServers;
+            if (!string.IsNullOrEmpty(turnUrl) && !string.IsNullOrEmpty(turnUser))
+            {
+                iceServers = new[]
+                {
+                    new RTCIceServer { urls = new[] { "stun:stun.l.google.com:19302" } },
+                    new RTCIceServer { urls = new[] { turnUrl }, username = turnUser, credential = turnPass }
+                };
+            }
+            else
             {
                 iceServers = new[]
                 {
                     new RTCIceServer { urls = new[] { "stun:stun.l.google.com:19302" } }
-                }
+                };
+            }
+            var config = new RTCConfiguration
+            {
+                iceServers = iceServers
             };
             
             // P0 FIX: real com.unity.webrtc 3.0.0-pre.8 requires ref RTCConfiguration

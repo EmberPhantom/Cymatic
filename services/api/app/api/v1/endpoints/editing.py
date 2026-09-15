@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Dict, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.dependencies import require_creator, require_viewer
@@ -11,6 +11,7 @@ from app.models.user import User
 from app.core.config import get_settings
 from app.core.queue import job_queue, Job, JobPriority
 import copy
+import time
 from sqlalchemy.orm.attributes import flag_modified
 import structlog
 
@@ -28,13 +29,13 @@ def _ensure_manual_editing():
 
 
 class EditOperation(BaseModel):
-    operation: str  # move, rotate, delete, change_material, add_entity, duplicate
-    entity_id: str
-    params: Dict[str, Any]
+    operation: Literal["move", "rotate", "scale", "change_material", "add_entity", "duplicate", "delete"]
+    entity_id: str = Field(min_length=1, max_length=128)
+    params: Dict[str, Any] = Field(default_factory=dict, max_length=50)
 
 
 class EditRequest(BaseModel):
-    operations: List[EditOperation]
+    operations: List[EditOperation] = Field(min_length=1, max_length=50)
 
 
 class EditResponse(BaseModel):
@@ -45,10 +46,25 @@ class EditResponse(BaseModel):
 
 
 class EntityPatch(BaseModel):
-    position: Optional[List[float]] = None
-    rotation: Optional[List[float]] = None
-    scale: Optional[List[float]] = None
-    properties: Optional[Dict[str, Any]] = None
+    position: Optional[List[float]] = Field(default=None, min_length=3, max_length=3)
+    rotation: Optional[List[float]] = Field(default=None, min_length=3, max_length=3)
+    scale: Optional[List[float]] = Field(default=None, min_length=3, max_length=3)
+    properties: Optional[Dict[str, Any]] = Field(default=None, max_length=50)
+
+    @classmethod
+    def _check_finite(cls, values: Optional[List[float]], name: str) -> Optional[List[float]]:
+        if values is None:
+            return values
+        import math
+        for v in values:
+            if not math.isfinite(v) or abs(v) > 1e6:
+                raise ValueError(f"{name} must be finite within ±1e6")
+        return values
+
+    @field_validator("position", "rotation", "scale")
+    @classmethod
+    def _validate_vec(cls, v: Optional[List[float]], info) -> Optional[List[float]]:
+        return cls._check_finite(v, info.field_name)
 
 
 @router.post("/{project_id}/specs/{spec_id}/edit", response_model=EditResponse)
@@ -91,9 +107,19 @@ async def edit_spec(
     for operation in request.operations:
         # add_entity is allowed when entity_id == "new" or when not in map - handle before existence check
         if operation.operation == "add_entity":
+            allowed_types = {
+                "room", "wall", "floor", "ceiling", "door", "window",
+                "furniture", "decoration", "light", "navigation_point",
+                "poi", "audio_zone", "trigger_zone",
+            }
+            req_type = str(operation.params.get("type", "furniture"))
+            if req_type not in allowed_types:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid entity type: {req_type}"
+                )
             new_entity = {
                 "id": operation.params.get("id", f"entity_{len(entities)}"),
-                "type": operation.params.get("type", "entity"),
+                "type": req_type,
                 "name": operation.params.get("name", "New Entity"),
                 "position": copy.deepcopy(operation.params.get("position", [0, 0, 0])),
                 "rotation": copy.deepcopy(operation.params.get("rotation", [0, 0, 0])),
@@ -131,6 +157,17 @@ async def edit_spec(
             entities.remove(entity)
             # keep map consistent
             entity_map.pop(operation.entity_id, None)
+            # Prune dangling navigation references to deleted entity.
+            nav = payload.get("navigation", {})
+            for key in ("points", "paths"):
+                items = nav.get(key)
+                if isinstance(items, list):
+                    nav[key] = [
+                        it for it in items
+                        if it != operation.entity_id
+                        and not (isinstance(it, dict) and it.get("id") == operation.entity_id)
+                        and not (isinstance(it, dict) and operation.entity_id in (it.get("from"), it.get("to"), it.get("from_point"), it.get("to_point")))
+                    ]
         elif operation.operation == "duplicate":
             new_entity = copy.deepcopy(entity)
             new_entity["id"] = f"{entity['id']}_copy_{len(entities)}"
@@ -144,6 +181,22 @@ async def edit_spec(
             )
 
     payload["entities"] = entities
+
+    # Spec-first: synchronously validate the mutated payload before persisting.
+    # Async worker re-validation still runs, but invalid edits are rejected here.
+    try:
+        from app.services.spec_validator import validate_spec as _validate_sync
+        _vresult = _validate_sync(payload)
+        if not _vresult.valid:
+            first = _vresult.errors[0].to_dict() if _vresult.errors else {}
+            raise HTTPException(
+                status_code=400,
+                detail=f"Edit produces invalid spec: {first.get('message', 'validation failed')}",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("edit_sync_validation_failed", error=str(e))
 
     # Create new spec version
     result = await db.execute(
@@ -170,7 +223,7 @@ async def edit_spec(
 
     # Enqueue validation job
     job = Job(
-        id=f"validate_{new_spec.id}_{int(__import__('asyncio').get_event_loop().time())}",
+        id=f"validate_{new_spec.id}_{int(time.monotonic())}",
         type="validate_spec",
         payload={"spec_id": new_spec.id},
         priority=JobPriority.NORMAL,
@@ -279,7 +332,7 @@ async def validate_spec_edits(
 
     # Enqueue validation job
     job = Job(
-        id=f"validate_{spec_id}_{int(__import__('asyncio').get_event_loop().time())}",
+        id=f"validate_{spec_id}_{int(time.monotonic())}",
         type="validate_spec",
         payload={"spec_id": spec_id},
         priority=JobPriority.HIGH,

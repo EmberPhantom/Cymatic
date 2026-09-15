@@ -81,6 +81,9 @@ async def unhandled_exception_handler(request, exc):
     if isinstance(exc, HTTPException):
         from fastapi.responses import JSONResponse
 
+        corr = getattr(request.state, "correlation_id", None) or request.headers.get(
+            "X-Correlation-ID", "-"
+        )
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -89,6 +92,7 @@ async def unhandled_exception_handler(request, exc):
                 "status": exc.status_code,
                 "detail": exc.detail,
                 "instance": str(request.url.path),
+                "correlation_id": corr,
             },
             headers=getattr(exc, "headers", None),
         )

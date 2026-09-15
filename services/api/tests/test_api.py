@@ -121,6 +121,29 @@ async def test_intake_prompt(client, auth_headers, test_project):
 
 
 @pytest.mark.asyncio
+async def test_intake_retry_same_prompt_returns_existing_run(client, auth_headers, test_project):
+    # Retry-after-timeout resubmits the same prompt+context. The unique
+    # (project_id, input_hash) constraint must not surface a 500: the
+    # existing run is returned instead (mirrors generate-spec dedupe).
+    payload = {"prompt": "Create a modern 3-bedroom apartment"}
+    first = await client.post(
+        f"/v1/projects/{test_project.id}/intake",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert first.status_code == 200
+    second = await client.post(
+        f"/v1/projects/{test_project.id}/intake",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert second.status_code == 200
+    data = second.json()
+    assert data["run_id"] == first.json()["run_id"]
+    assert data["deduped"] is True
+
+
+@pytest.mark.asyncio
 async def test_clarify_requirements(client, auth_headers, test_project):
     intake = await client.post(
         f"/v1/projects/{test_project.id}/intake",

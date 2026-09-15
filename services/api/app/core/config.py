@@ -47,8 +47,9 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "cymatic"
     MINIO_ROOT_PASSWORD: str = "minioadmin"
 
-    # JWT
-    JWT_SECRET_KEY: str = Field(default="test-secret-key-for-mypy-32charslong!!")
+    # JWT — fail-closed: no default secret. Must be provided via env.
+    # Deployment will refuse to start without a strong secret (see validator + lifespan).
+    JWT_SECRET_KEY: str = Field(default="")
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -86,8 +87,16 @@ class Settings(BaseSettings):
     @field_validator("JWT_SECRET_KEY")
     @classmethod
     def validate_jwt_secret(cls, v: str) -> str:
-        if v == "your-super-secret-jwt-key-change-in-production":
-            raise ValueError("JWT_SECRET_KEY must be changed in production")
+        insecure = {
+            "",
+            "your-super-secret-jwt-key-change-in-production",
+            "test-secret-key-for-mypy-32charslong!!",
+            "changeme",
+            "secret",
+            "test",
+        }
+        if v in insecure:
+            raise ValueError("JWT_SECRET_KEY must be set to a strong random value")
         if len(v) < 32:
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
         return v

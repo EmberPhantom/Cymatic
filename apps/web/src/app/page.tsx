@@ -531,7 +531,7 @@ export default function Home() {
                     Spatial Node Hierarchy
                   </span>
                   <span className="text-[11px] font-mono text-stonegray">
-                    NODES: {specData.entities_count} // DRAW CALLS: 48
+                    {`NODES: ${specData.entities_count} // DRAW CALLS: 48`}
                   </span>
                 </div>
 

@@ -1,0 +1,17 @@
+# Production runtime dependencies for the LLM router service.
+# Installed into the Docker `runtime` image. All pins are exact (==) so
+# builds are reproducible and the pip layer stays cache-hot.
+# Test-only deps live in requirements.test.txt; local dev installs
+# requirements.txt (runtime + test).
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+pydantic-settings==2.15.0
+httpx==0.28.1
+idna==3.19
+python-dotenv==1.2.3
+structlog==26.1.0
+tenacity==9.1.4
+litellm==1.100.1
+redis==8.1.0
+prometheus-client==0.26.0

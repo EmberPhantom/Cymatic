@@ -1,0 +1,33 @@
+# Per-service context (services/llm-router) — root .dockerignore does NOT apply here.
+# Keep this in sync with the Dockerfile COPY instructions: everything the
+# runtime/test stages need (app/, *.ini, requirements.*.txt, tests/) must
+# NOT be excluded. Only local junk is excluded to keep the build context
+# small and cache-friendly.
+
+# Local virtualenvs (reinstalled in container)
+.venv/
+venv/
+
+# Python caches / coverage (never needed in image)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs / local env (secrets must not enter build context)
+*.log
+.env
+.env.*
+*.pem
+*.key
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

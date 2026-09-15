@@ -113,7 +113,8 @@ make migrate
 make migrate-create
 
 # Docker
-make docker-build
+make docker-build    # parallel bake, local inline cache (fast rebuilds)
+make docker-build-ci # CI only: GHA cache via docker-bake.ci.hcl
 make docker-up
 make docker-down
 

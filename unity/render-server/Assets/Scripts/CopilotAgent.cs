@@ -64,6 +64,19 @@ namespace Cymatic
             _sceneLoader = sceneLoader;
             _stereoRig = stereoRig;
             _inputManager = inputManager;
+
+            // Respect server policy allowlist instead of hardcoded set.
+            _allowedActions.Clear();
+            var configured = policy?.allowed_actions;
+            if (configured != null && configured.Count > 0)
+            {
+                foreach (var a in configured) _allowedActions.Add(a);
+            }
+            else
+            {
+                // Fail-closed: no actions when policy omits allowlist.
+                Debug.LogWarning("[CopilotAgent] Empty allowed_actions; all actions denied");
+            }
             
             _knowledgeBase = policy.knowledge_base != null ? JsonConvert.DeserializeObject<Dictionary<string, object>>(policy.knowledge_base) : new Dictionary<string, object>();
             

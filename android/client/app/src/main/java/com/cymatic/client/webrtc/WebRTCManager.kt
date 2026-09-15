@@ -75,17 +75,23 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         this.onRemoteVideoFrame = onRemoteVideoFrame
     }
     
-    fun connect(signalingUrl: String, sessionId: String) {
+    fun connect(signalingUrl: String, sessionId: String, authToken: String? = null) {
         currentSessionId = sessionId
         lastBytesReceived = -1L
         lastBitrateCalcTimeMs = 0L
         lastBitrateKbps = 0
-        
+
+        // Backend expects client type via query (?type=android) and JWT via
+        // Authorization header (query ?token= deprecated, leaks in logs).
+        val urlWithType = if (signalingUrl.contains("type=")) signalingUrl
+            else if (signalingUrl.contains("?")) "$signalingUrl&type=android"
+            else "$signalingUrl?type=android"
+
         // Create peer connection
         createPeerConnection()
-        
+
         // Connect signaling
-        signalingClient = SignalingClient(signalingUrl, { currentSessionId }, onError)
+        signalingClient = SignalingClient(urlWithType, { currentSessionId }, onError, authTokenProvider = { authToken })
         signalingClient?.setCallbacks(
             onOffer = { sdp ->
                 handleOffer(sdp)
@@ -436,7 +442,12 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     )
     
     // Signaling client inner class
-    private class SignalingClient(private val url: String, private val sessionProvider: () -> String?, private val errorHandler: ((String)->Unit)?) {
+    private class SignalingClient(
+        private val url: String,
+        private val sessionProvider: () -> String?,
+        private val errorHandler: ((String)->Unit)?,
+        private val authTokenProvider: () -> String? = { null }
+    ) {
         private var webSocket: okhttp3.WebSocket? = null
         private val client = okhttp3.OkHttpClient.Builder()
             .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
@@ -452,12 +463,17 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         var onError: ((String) -> Unit)? = errorHandler
         
         fun connect() {
-            val request = okhttp3.Request.Builder().url(url).build()
+            val builder = okhttp3.Request.Builder().url(url)
+            // Prefer Authorization header; backend falls back to ?token= (deprecated).
+            authTokenProvider()?.takeIf { it.isNotBlank() }?.let {
+                builder.addHeader("Authorization", "Bearer $it")
+            }
+            val request = builder.build()
             val listener = object : okhttp3.WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: okhttp3.Response) {
                     Log.d("Signaling", "WebSocket connected")
                     this@SignalingClient.webSocket = webSocket
-                    webSocket.send("""{"type":"register","payload":{"server_id":"android-client","type":"android_client"}}""")
+                    webSocket.send("""{"type":"register","payload":{"server_id":"android-client","type":"android"}}""")
                     sessionProvider()?.let { onConnected?.invoke(it) }
                 }
                 

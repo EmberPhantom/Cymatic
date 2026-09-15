@@ -1,48 +1,56 @@
 package com.cymatic.client.input
 
 import com.cymatic.client.network.model.InputPacket
-import com.cymatic.client.network.model.HeadPoseData
-import com.cymatic.client.network.model.GazeData
-import com.cymatic.client.network.model.ControllerData
-import com.cymatic.client.network.model.VoiceData
 
 class InputManager {
-    
+
     data class HeadPosePacket(
         val timestamp: Long,
         val position: FloatArray,
         val rotation: FloatArray
     )
-    
+
+    private fun nowSeconds(): Double = System.currentTimeMillis() / 1000.0
+
     fun createInputPacket(
         headPose: HeadPosePacket,
         gazeDirection: FloatArray,
-        controllerData: ControllerData? = null,
-        voiceData: VoiceData? = null
+        controllerData: com.cymatic.client.network.model.ControllerData? = null,
+        voiceData: com.cymatic.client.network.model.VoiceData? = null
     ): InputPacket {
+        // Backend contract: {input_type, payload, timestamp}.
+        // Pack head pose + gaze into a single head_pose payload for backwards compat.
+        val payload = mapOf(
+            "position" to headPose.position.toList(),
+            "rotation" to headPose.rotation.toList(),
+            "gaze_direction" to gazeDirection.toList()
+        )
         return InputPacket(
-            timestamp = headPose.timestamp,
-            headPose = HeadPoseData(
-                position = headPose.position,
-                rotation = headPose.rotation
+            inputType = InputPacket.TYPE_HEAD_POSE,
+            payload = payload,
+            timestamp = nowSeconds()
+        )
+    }
+
+    fun createHeadPosePacket(position: FloatArray, rotation: FloatArray): InputPacket {
+        return InputPacket(
+            inputType = InputPacket.TYPE_HEAD_POSE,
+            payload = mapOf(
+                "position" to position.toList(),
+                "rotation" to rotation.toList()
             ),
-            gaze = GazeData(
-                origin = headPose.position,
-                direction = gazeDirection,
-                targetId = null,
-                targetPosition = FloatArray(3),
-                dwellProgress = 0f
+            timestamp = nowSeconds()
+        )
+    }
+
+    fun createGazePacket(origin: FloatArray, direction: FloatArray): InputPacket {
+        return InputPacket(
+            inputType = InputPacket.TYPE_GAZE,
+            payload = mapOf(
+                "origin" to origin.toList(),
+                "direction" to direction.toList()
             ),
-            controller = controllerData ?: ControllerData(
-                selectPressed = false,
-                menuPressed = false,
-                pttPressed = false,
-                touchpadDelta = Pair(0f, 0f),
-                touchpadPosition = Pair(0f, 0f),
-                touchpadTouched = false
-            ),
-            voice = voiceData ?: VoiceData(isRecording = false, data = null),
-            handTracking = null
+            timestamp = nowSeconds()
         )
     }
 }

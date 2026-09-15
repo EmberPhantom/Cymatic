@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     NVIDIA_NIM_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     SARVAM_API_KEY: str = ""
+    APINEX_API_KEY: str = ""
+    APINEX_BASE_URL: str = "https://api.apinex.bond/v1"
 
     # Default Models
     DEFAULT_FAST_MODEL: str = "llama-3.1-8b-instant"
@@ -119,7 +121,14 @@ class Settings(BaseSettings):
             raise ValueError("RATE_LIMIT_LLM period must be second/minute/hour/day")
         return v
 
-    @field_validator("GROQ_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_NIM_API_KEY", "OPENAI_API_KEY", "SARVAM_API_KEY")
+    @field_validator(
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "OPENAI_API_KEY",
+        "SARVAM_API_KEY",
+        "APINEX_API_KEY",
+    )
     @classmethod
     def validate_provider_key(cls, v: str) -> str:
         if v and v.strip() != v:

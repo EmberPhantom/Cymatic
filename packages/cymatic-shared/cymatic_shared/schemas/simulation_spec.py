@@ -45,6 +45,20 @@ class SpecMetadata(BaseModel):
         return str(v)
 
 
+def _check_finite_vec(v, *, bound: float = 1e6):
+    """Reject NaN/Inf and absurd magnitudes that overflow Unity farClip."""
+    if v is None:
+        return v
+    import math
+    vals = v if isinstance(v, list) else [v]
+    for item in vals:
+        seq = item if isinstance(item, list) else [item]
+        for x in seq:
+            if isinstance(x, (int, float)) and (not math.isfinite(float(x)) or abs(float(x)) > bound):
+                raise ValueError(f"vector values must be finite within ±{bound:g}")
+    return v
+
+
 class Entity(BaseModel):
     id: str
     type: EntityType
@@ -59,6 +73,11 @@ class Entity(BaseModel):
     @classmethod
     def _vec_fields(cls, v):
         return _coerce_vec3(v)
+
+    @field_validator("position", "rotation", "scale")
+    @classmethod
+    def _vec_finite(cls, v):
+        return _check_finite_vec(v)
 
 
 class NavigationPoint(BaseModel):
@@ -85,12 +104,10 @@ class NavigationPath(BaseModel):
     @classmethod
     def _remap_keys(cls, data):
         if isinstance(data, dict):
+            data = dict(data)  # avoid mutating caller via pop
             if "to" not in data and data.get("to_point") is not None:
                 data["to"] = data["to_point"]
-            if "from" not in data and data.get("from_point") is not None and "from_point" in data:
-                # already has from_point as field name, keep
-                pass
-            if "from_point" in data and "from" not in data:
+            if "from" not in data and data.get("from_point") is not None:
                 data["from"] = data.pop("from_point")
         return data
 
@@ -139,14 +156,33 @@ class CopilotPolicy(BaseModel):
     ]
     knowledge_base: Optional[str] = None
 
+    @model_validator(mode="after")
+    def _check_lang(self):
+        if not self.allowed_actions:
+            raise ValueError("allowed_actions must not be empty")
+        if self.default_language not in self.languages:
+            raise ValueError("default_language must be in languages")
+        return self
+
 
 class PerformanceBudget(BaseModel):
-    target_fps: int = 60
-    max_triangles: int = 100000
-    max_draw_calls: int = 50
-    texture_budget_mb: int = 100
-    max_entities: int = 500
+    target_fps: int = Field(default=60, ge=15, le=120)
+    max_triangles: int = Field(default=100000, ge=1000, le=2000000)
+    max_draw_calls: int = Field(default=50, ge=1, le=500)
+    texture_budget_mb: int = Field(default=100, ge=1, le=2048)
+    max_entities: int = Field(default=500, ge=1, le=5000)
     lod_distances: List[float] = Field(default=[10.0, 25.0, 50.0], min_length=3, max_length=3)
+
+    @field_validator("lod_distances")
+    @classmethod
+    def _lod_ordered(cls, v: List[float]):
+        import math
+        for x in v:
+            if not math.isfinite(x) or x <= 0 or x > 1e4:
+                raise ValueError("lod_distances must be finite positive <= 1e4")
+        if not (v[0] < v[1] < v[2]):
+            raise ValueError("lod_distances must be strictly increasing")
+        return v
 
 
 class SimulationSpec(BaseModel):

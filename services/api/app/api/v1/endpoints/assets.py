@@ -1,10 +1,10 @@
-import asyncio
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -72,9 +72,9 @@ class AssetResponse(BaseModel):
 
 
 class AssetUploadInit(BaseModel):
-    filename: str
-    content_type: str
-    type: str
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=127)
+    type: str = Field(min_length=1, max_length=32)
     project_id: Optional[int] = None
 
 
@@ -86,7 +86,7 @@ class AssetUploadInitResponse(BaseModel):
 
 class AssetUploadComplete(BaseModel):
     asset_id: int
-    size: Optional[int] = None
+    size: Optional[int] = Field(default=None, ge=0, le=500 * 1024 * 1024)
 
 
 @router.post("/upload/init", response_model=AssetUploadInitResponse)
@@ -100,6 +100,14 @@ async def init_upload(
         asset_type = AssetType(upload_data.type)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid asset type")
+
+    # Block active content that could become stored XSS via presigned GET.
+    ct = upload_data.content_type.split(";")[0].strip().lower()
+    blocked_prefixes = ("text/html", "application/xhtml", "text/javascript", "application/javascript")
+    if ct in blocked_prefixes or ct.startswith("text/html"):
+        raise HTTPException(status_code=400, detail="Unsupported content type")
+    if "/" not in ct:
+        raise HTTPException(status_code=400, detail="Invalid content type")
 
     if upload_data.project_id:
         result = await db.execute(
@@ -194,7 +202,7 @@ async def complete_upload(
         from app.core.queue import job_queue, Job, JobPriority
 
         job = Job(
-            id=f"asset_{asset.id}_{int(asyncio.get_event_loop().time())}",
+            id=f"asset_{asset.id}_{int(time.monotonic())}",
             type="process_asset",
             payload={"asset_id": asset.id},
             priority=JobPriority.NORMAL,

@@ -7,7 +7,7 @@ export function useAssets(projectId: number) {
   return useQuery<Asset[]>({
     queryKey: queryKeys.assets.list(projectId),
     queryFn: async () => {
-      const res = await api.get(`/v1/projects/${projectId}/assets`)
+      const res = await api.get(`/v1/assets/projects/${projectId}`)
       return res.data.assets || res.data
     },
   })

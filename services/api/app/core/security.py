@@ -22,11 +22,18 @@ _redis_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def _get_redis_url() -> str:
-    # Use dedicated revoked DB (4) if configured, fallback to REDIS_URL (3)
+    # Use dedicated revoked DB (4) if configured, else derive DB 4 from REDIS_URL
+    # to avoid colliding with job-queue DB 0 (FLUSHDB/queue pressure evicts revocations).
     revoked = getattr(settings, "REDIS_REVOKED_URL", None)
     if isinstance(revoked, str) and revoked:
         return revoked
-    return settings.REDIS_URL
+    base = settings.REDIS_URL
+    # Replace trailing /<n> with /4; fall back to base if unparseable.
+    try:
+        prefix = base.rsplit("/", 1)[0]
+        return f"{prefix}/4"
+    except Exception:
+        return base
 
 
 async def _get_redis() -> aioredis.Redis:

@@ -1,0 +1,187 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: cymatic
+  labels: { app: api }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: api } }
+  template:
+    metadata: { labels: { app: api } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      containers:
+        - name: api
+          image: cymatic/api:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1000m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: cymatic
+spec:
+  selector: { app: api }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: cymatic
+  labels: { app: worker }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: worker } }
+  template:
+    metadata: { labels: { app: worker } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      containers:
+        - name: worker
+          image: cymatic/worker:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8002 }]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1000m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8002 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: 8002 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  namespace: cymatic
+spec:
+  selector: { app: worker }
+  ports: [{ port: 8002, targetPort: 8002 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-router
+  namespace: cymatic
+  labels: { app: llm-router }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: llm-router } }
+  template:
+    metadata: { labels: { app: llm-router } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      containers:
+        - name: llm-router
+          image: cymatic/llm-router:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8001 }]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1000m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8001 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: 8001 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-router
+  namespace: cymatic
+spec:
+  selector: { app: llm-router }
+  ports: [{ port: 8001, targetPort: 8001 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cymatic
+  labels: { app: web }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata: { labels: { app: web } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1001, fsGroup: 1001 }
+      containers:
+        - name: web
+          image: cymatic/web:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 3000 }]
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          livenessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: cymatic
+spec:
+  selector: { app: web }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cymatic
+  namespace: cymatic
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["cymatic.example.com"]
+      secretName: cymatic-tls
+  rules:
+    - host: cymatic.example.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend: { service: { name: api, port: { number: 8000 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: web, port: { number: 3000 } } }

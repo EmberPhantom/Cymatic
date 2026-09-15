@@ -178,6 +178,14 @@ class LiteLLMClient:
     def _is_local_provider(provider: ProviderName | str) -> bool:
         return provider == ProviderName.LOCAL or str(provider) == ProviderName.LOCAL.value
 
+    @staticmethod
+    def _is_apinex_provider(provider: ProviderName | str) -> bool:
+        return (
+            provider == ProviderName.APINEX
+            or str(provider) == ProviderName.APINEX.value
+            or str(provider) == "apinex"
+        )
+
     def _semaphore_for(self, provider: ProviderName | str) -> asyncio.Semaphore:
         """CPU-bound local SLM gets its own small semaphore to avoid OOM."""
         if self._is_local_provider(provider):
@@ -216,6 +224,8 @@ class LiteLLMClient:
                 raise ValueError(
                     f"Provider {provider_name} does not support sensitivity {request.sensitivity}"
                 )
+            if not cfg.enabled:
+                raise ValueError(f"Provider {provider_name} is disabled")
             # Check blocked providers per policy
             if provider_name in policy.blocked_providers:
                 raise ValueError(f"Provider {provider_name} blocked for {request.sensitivity}")
@@ -289,6 +299,10 @@ class LiteLLMClient:
             # Route to the Ollama sidecar instead of a cloud endpoint.
             # getattr keeps this working before OLLAMA_URL lands in Settings (W1.5).
             params["api_base"] = getattr(settings, "OLLAMA_URL", "http://ollama:11434")
+        elif self._is_apinex_provider(provider_name):
+            # Route to APInex OpenAI-compatible multi-model gateway
+            params["api_base"] = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+            params["api_key"] = getattr(settings, "APINEX_API_KEY", "")
 
         if request.response_format:
             params["response_format"] = request.response_format
@@ -413,8 +427,13 @@ class LiteLLMClient:
                     latency_ms=latency_ms,
                 )
 
-            except (ValueError, OSError, HTTPException) as e:
-                # Do not swallow HTTPException 429
+            except Exception as e:
+                # P0-1: litellm raises APIConnectionError/BadRequestError/
+                # RateLimitError/Timeout etc., none of which subclass
+                # (ValueError, OSError). Catching only those bypassed
+                # policy.max_retries fallback rotation and surfaced 502
+                # whenever Ollama was down or a key was missing.
+                # Do not swallow quota 429 — propagate immediately.
                 if isinstance(e, HTTPException) and e.status_code == 429:
                     raise
                 last_error = e
@@ -457,6 +476,15 @@ class LiteLLMClient:
                         )
                         model = routing_decision.model
                         params["model"] = self._to_litellm_model(provider_name, model)
+                        if self._is_local_provider(provider_name):
+                            params["api_base"] = getattr(settings, "OLLAMA_URL", "http://ollama:11434")
+                            params.pop("api_key", None)
+                        elif self._is_apinex_provider(provider_name):
+                            params["api_base"] = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+                            params["api_key"] = getattr(settings, "APINEX_API_KEY", "")
+                        else:
+                            params.pop("api_base", None)
+                            params.pop("api_key", None)
                         # Re-check quota for fallback provider
                         try:
                             allowed_fb = await self.usage_tracker.check_quota(provider_str, estimated_tokens)
@@ -513,7 +541,9 @@ class LiteLLMClient:
                     total_usage["total_tokens"] = (
                         total_usage["prompt_tokens"] + total_usage["completion_tokens"]
                     )
-        except (ValueError, KeyError, asyncio.TimeoutError, OSError) as e:
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise HTTPException(status_code=502, detail=f"Streaming failed: {e}") from e
             logger.warning("stream_completion_chunk_error", error=str(e))
             raise HTTPException(status_code=502, detail=f"Streaming failed: {e}") from e
 
@@ -623,7 +653,7 @@ class LiteLLMClient:
                 latency_ms=latency_ms,
             )
 
-        except (ValueError, OSError, HTTPException) as e:
+        except Exception as e:
             if isinstance(e, HTTPException):
                 raise
             latency_ms = int((time.time() - start_time) * 1000)
@@ -705,7 +735,7 @@ class LiteLLMClient:
                 latency_ms=latency_ms,
             )
 
-        except (ValueError, OSError, HTTPException) as e:
+        except Exception as e:
             if isinstance(e, HTTPException):
                 raise
             latency_ms = int((time.time() - start_time) * 1000)
@@ -788,7 +818,7 @@ class LiteLLMClient:
                 latency_ms=latency_ms,
             )
 
-        except (ValueError, OSError, HTTPException) as e:
+        except Exception as e:
             if isinstance(e, HTTPException):
                 raise
             latency_ms = int((time.time() - start_time) * 1000)
@@ -848,6 +878,13 @@ class LiteLLMClient:
             if ollama_model.startswith("ollama/"):
                 return ollama_model
             return f"ollama/{ollama_model}"
+        if provider_val == ProviderName.APINEX.value or provider_val == "apinex":
+            clean_model = model
+            if clean_model.startswith("apinex/"):
+                clean_model = clean_model[len("apinex/"):]
+            if clean_model.startswith("openai/"):
+                return clean_model
+            return f"openai/{clean_model}"
         # Dedup: if model already starts with provider_val/
         if model.startswith(f"{provider_val}/"):
             return model

@@ -2,7 +2,10 @@ import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
 export function middleware(request: NextRequest) {
-  const token = request.cookies.get("cymatic_access_token")?.value
+  const raw = request.cookies.get("cymatic_access_token")?.value ?? ""
+  // Edge runtime cannot verify HS256 without secret; at least enforce JWT shape
+  // so garbage/empty cookies don't pass as authenticated (full verify in API).
+  const token = raw.split(".").length === 3 ? raw : undefined
   const isAuthPage = request.nextUrl.pathname.startsWith("/login") || 
                      request.nextUrl.pathname.startsWith("/register")
   const isDashboard = request.nextUrl.pathname.startsWith("/dashboard") ||

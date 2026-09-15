@@ -1,6 +1,6 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, EmailStr
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -26,13 +26,13 @@ class UserResponse(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
-    name: str
+    password: str = Field(min_length=12, max_length=128)
+    name: str = Field(min_length=1, max_length=100)
     role: str = "creator"
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     role: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -41,8 +41,8 @@ class UserUpdate(BaseModel):
 async def list_users(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
 ):
     result = await db.execute(
         select(User)

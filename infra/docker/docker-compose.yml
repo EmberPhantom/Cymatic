@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -12,6 +18,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     mem_limit: 1g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cymatic} -d $${POSTGRES_DB:-cymatic}"]
       interval: 5s
@@ -36,6 +43,7 @@ services:
       - redis_data:/data
     restart: unless-stopped
     mem_limit: 512m
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
       interval: 5s
@@ -44,7 +52,7 @@ services:
       start_period: 10s
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -56,6 +64,7 @@ services:
       - minio_data:/data
     restart: unless-stopped
     mem_limit: 512m
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live > /dev/null || exit 1"]
       interval: 10s
@@ -81,6 +90,7 @@ services:
       --external-ip=$${COTURN_EXTERNAL_IP:-127.0.0.1}
     restart: unless-stopped
     mem_limit: 256m
+    logging: *default-logging
     profiles: ["turn"]
     healthcheck:
       test: ["CMD-SHELL", "turnutils_uclient -p 3478 -u $${TURN_USERNAME:-cymatic} -w $${TURN_PASSWORD:-cymatic_turn_pass} 127.0.0.1 || exit 1"]
@@ -90,6 +100,7 @@ services:
       start_period: 15s
 
   api:
+    image: cymatic/api:latest
     build:
       context: ../../services/api
       dockerfile: Dockerfile
@@ -122,33 +133,34 @@ services:
       API_RELOAD: "false"
     restart: unless-stopped
     mem_limit: 512m
+    logging: *default-logging
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 20s
 
   worker:
+    image: cymatic/worker:latest
     build:
       context: ../../services/worker
       dockerfile: Dockerfile
       target: runtime
       additional_contexts:
         shared: ../../packages/cymatic-shared
+    ports:
+      - "${WORKER_PORT:-8002}:8002"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      api:
-        condition: service_healthy
-      llm-router:
-        condition: service_healthy
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/0
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/3
       REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/5
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -162,14 +174,16 @@ services:
       DEBUG: "false"
     restart: unless-stopped
     mem_limit: 512m
+    logging: *default-logging
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8002/health').raise_for_status()"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/health"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 20s
 
   llm-router:
+    image: cymatic/llm-router:latest
     build:
       context: ../../services/llm-router
       dockerfile: Dockerfile
@@ -178,6 +192,9 @@ services:
         shared: ../../packages/cymatic-shared
     ports:
       - "${LLM_ROUTER_PORT:-8001}:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
     env_file: ../../.env
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/1
@@ -191,8 +208,9 @@ services:
       DEBUG: "false"
     restart: unless-stopped
     mem_limit: 512m
+    logging: *default-logging
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health').raise_for_status()"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -202,7 +220,8 @@ services:
     # Offline <3B SLM inference (phi-3-mini q4, ~2.3GB, CPU-only for 8GB LAN box).
     # Started only with `--profile local`; LAN sets ENABLE_LOCAL_LLM=true.
     # First run: docker compose --profile local up -d ollama && docker exec <ctr> ollama pull phi3:mini
-    image: ollama/ollama:latest
+    # Pinned (was :latest): reproducible pulls, stable layer cache.
+    image: ollama/ollama:0.12.0
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
@@ -215,6 +234,7 @@ services:
       OLLAMA_KEEP_ALIVE: 24h
     restart: unless-stopped
     mem_limit: 4g
+    logging: *default-logging
     profiles: ["local"]
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -224,6 +244,7 @@ services:
       start_period: 60s
 
   web:
+    image: cymatic/web:latest
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
@@ -245,6 +266,7 @@ services:
       NEXT_PUBLIC_MINIO_URL: ${NEXT_PUBLIC_MINIO_URL:-http://localhost:9000}
     restart: unless-stopped
     mem_limit: 256m
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000"]
       interval: 10s
@@ -253,6 +275,9 @@ services:
       start_period: 20s
 
   migrate:
+    # Same content as the api runtime image; explicit tag lets `up --build`
+    # and `bake` share layers instead of rebuilding from scratch.
+    image: cymatic/api:latest
     build:
       context: ../../services/api
       dockerfile: Dockerfile
@@ -270,6 +295,7 @@ services:
     restart: "no"
 
   test-api:
+    image: cymatic/api:test
     build:
       context: ../../services/api
       dockerfile: Dockerfile
@@ -285,14 +311,13 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_test
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -303,6 +328,7 @@ services:
     profiles: ["test"]
 
   test-worker:
+    image: cymatic/worker:test
     build:
       context: ../../services/worker
       dockerfile: Dockerfile
@@ -316,18 +342,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      api:
-        condition: service_healthy
-      llm-router:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_worker_test
-      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
-      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
-      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
+      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
+      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -337,6 +358,7 @@ services:
     profiles: ["test"]
 
   test-llm-router:
+    image: cymatic/llm-router:test
     build:
       context: ../../services/llm-router
       dockerfile: Dockerfile
@@ -348,8 +370,10 @@ services:
         condition: service_healthy
     env_file: ../../.env
     environment:
-      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
-      REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
+      REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
+      REDIS_USAGE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
       DEBUG: "false"
       ENABLE_LOCAL_LLM: "false"
     profiles: ["test"]
@@ -366,6 +390,7 @@ services:
       - test_postgres_data:/var/lib/postgresql/data
     restart: "no"
     mem_limit: 512m
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cymatic}"]
       interval: 5s
@@ -392,6 +417,7 @@ services:
     restart: "no"
 
   test-migrate:
+    image: cymatic/api:latest
     build:
       context: ../../services/api
       dockerfile: Dockerfile
@@ -427,6 +453,7 @@ services:
     restart: "no"
 
   test-migrate-worker:
+    image: cymatic/worker:latest
     build:
       context: ../../services/worker
       dockerfile: Dockerfile

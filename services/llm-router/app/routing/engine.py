@@ -46,25 +46,72 @@ class RoutingEngine:
         self.providers: dict[ProviderName, ProviderConfig] = copy.deepcopy(DEFAULT_PROVIDERS)
         self.policies: dict[str, RoutingPolicy] = {}
         self.status: dict[ProviderName, ProviderStatus] = {}
-        self._apply_local_llm_flag()
+        self._apply_provider_flags()
         self._initialize_default_policies()
         self._initialize_status()
 
-    def _apply_local_llm_flag(self) -> None:
-        """Enable/disable the LOCAL (Ollama SLM) provider from settings.
+    def _apply_provider_flags(self) -> None:
+        """Enable/disable providers from settings.
 
-        Defaults to disabled so cloud CI is unaffected; LAN compose with
-        `--profile local` sets ENABLE_LOCAL_LLM=true.
+        - LOCAL: enabled if ENABLE_LOCAL_LLM=true
+        - GROQ/OPENROUTER/NVIDIA/OPENAI/SARVAM/APINEX: enabled iff API key non-empty.
+          This prevents routing to providers without credentials (P0-2:
+          OPENAI was marked enabled with empty key and shadowed working GROQ).
         """
         try:
             from app.core.config import get_settings
 
-            enabled = bool(get_settings().ENABLE_LOCAL_LLM)
+            settings = get_settings()
+
+            def _has_key(value: object) -> bool:
+                return bool(value and isinstance(value, str) and value.strip())
+
+            local_enabled = bool(settings.ENABLE_LOCAL_LLM)
+            apinex_key = getattr(settings, "APINEX_API_KEY", "")
+            apinex_enabled = _has_key(apinex_key)
+            groq_enabled = _has_key(getattr(settings, "GROQ_API_KEY", ""))
+            openrouter_enabled = _has_key(getattr(settings, "OPENROUTER_API_KEY", ""))
+            nvidia_enabled = _has_key(getattr(settings, "NVIDIA_NIM_API_KEY", ""))
+            openai_enabled = _has_key(getattr(settings, "OPENAI_API_KEY", ""))
+            sarvam_enabled = _has_key(getattr(settings, "SARVAM_API_KEY", ""))
         except Exception:
-            enabled = False
+            local_enabled = False
+            apinex_enabled = False
+            groq_enabled = False
+            openrouter_enabled = False
+            nvidia_enabled = False
+            openai_enabled = False
+            sarvam_enabled = False
+            apinex_key = ""
+
         local = self.providers.get(ProviderName.LOCAL)
         if local is not None:
-            local.enabled = enabled
+            local.enabled = local_enabled
+
+        for name, enabled in (
+            (ProviderName.GROQ, groq_enabled),
+            (ProviderName.OPENROUTER, openrouter_enabled),
+            (ProviderName.NVIDIA_NIM, nvidia_enabled),
+            (ProviderName.OPENAI, openai_enabled),
+            (ProviderName.SARVAM, sarvam_enabled),
+        ):
+            cfg = self.providers.get(name)
+            if cfg is not None:
+                cfg.enabled = enabled
+
+        apinex = self.providers.get(ProviderName.APINEX)
+        if apinex is not None:
+            apinex.enabled = apinex_enabled
+            if apinex_enabled:
+                try:
+                    apinex.api_key = apinex_key
+                    apinex.base_url = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+                except Exception:
+                    pass
+
+    def _apply_local_llm_flag(self) -> None:
+        """Backward-compatible alias for _apply_provider_flags."""
+        self._apply_provider_flags()
 
     def _initialize_status(self) -> None:
         """Initialize provider status for all configured providers."""
@@ -73,57 +120,148 @@ class RoutingEngine:
 
     def _initialize_default_policies(self) -> None:
         """Initialize default routing policies."""
+        try:
+            from app.core.config import get_settings
+
+            settings = get_settings()
+            local_enabled = bool(getattr(settings, "ENABLE_LOCAL_LLM", False))
+            apinex_key = getattr(settings, "APINEX_API_KEY", "")
+            apinex_active = bool(apinex_key and apinex_key.strip())
+        except Exception:
+            local_enabled = False
+            apinex_active = False
+
+        # When APInex is active, it is the primary cloud provider with free/glm-5.3-flash.
+        # When LOCAL is off and APInex is off, prefer a keyed cloud model directly
+        # (P0-2: previously preferred phi-3-mini with LOCAL not in allowed list,
+        # forcing every request through fallback/last-resort and pinning SPEC
+        # fallback to OPENAI gpt-4o-mini even when OPENAI had no key).
+        if local_enabled:
+            intent_pref = "phi-3-mini-3.8b-q4"
+            spec_pref = "phi-3-mini-3.8b-q4"
+            clarify_pref = "phi-3-mini-3.8b-q4"
+        elif apinex_active:
+            intent_pref = "free/glm-5.3-flash"
+            spec_pref = "free/glm-5.3-flash"
+            clarify_pref = "free/glm-5.3-flash"
+        else:
+            intent_pref = "openai/gpt-oss-20b"
+            spec_pref = "openai/gpt-oss-120b"
+            clarify_pref = "openai/gpt-oss-20b"
+        intent_fb = "free/glm-5.3-flash" if (local_enabled and apinex_active) else "openai/gpt-oss-20b"
+        # SPEC fallback stays OPENAI for paid path, but last-resort in route()
+        # covers GROQ/NVIDIA when OPENAI has no key (providers filtered by enabled).
+        intent_providers = (
+            ([ProviderName.LOCAL] if local_enabled else [])
+            + ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI]
+        )
+
+        spec_fb = "free/glm-5.3-flash" if (local_enabled and apinex_active) else "gpt-4o-mini"
+        spec_providers = (
+            ([ProviderName.LOCAL] if local_enabled else [])
+            + ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.OPENAI, ProviderName.NVIDIA_NIM, ProviderName.GROQ, ProviderName.OPENROUTER]
+        )
+
+        val_pref = "free/glm-5.3-flash" if apinex_active else "openai/gpt-oss-120b"
+        val_fb = "openai/gpt-oss-120b" if apinex_active else "anthropic/claude-3.5-sonnet"
+        val_providers = (
+            ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.GROQ, ProviderName.OPENROUTER]
+        )
+
+        copilot_pref = "free/glm-5.3-flash" if apinex_active else "openai/gpt-oss-20b"
+        copilot_fb = "openai/gpt-oss-20b" if apinex_active else "gpt-4o-mini"
+        copilot_providers = (
+            ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.GROQ, ProviderName.OPENAI]
+        )
+
+        clarify_fb = "free/glm-5.3-flash" if (local_enabled and apinex_active) else "openai/gpt-oss-20b"
+        clarify_providers = (
+            ([ProviderName.LOCAL] if local_enabled else [])
+            + ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI]
+        )
+
+        research_pref = "free/glm-5.3-flash" if apinex_active else "google/gemini-pro-1.5"
+        research_fb = "google/gemini-pro-1.5" if apinex_active else "anthropic/claude-3.5-sonnet"
+        research_providers = (
+            ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.OPENROUTER]
+        )
+
+        domain_pref = "free/glm-5.3-flash" if apinex_active else "openai/gpt-oss-120b"
+        domain_fb = "openai/gpt-oss-120b" if apinex_active else "anthropic/claude-3.5-sonnet"
+        domain_providers = (
+            ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.GROQ, ProviderName.OPENROUTER]
+        )
+
+        asset_pref = "free/glm-5.3-flash" if apinex_active else "google/gemini-pro-1.5"
+        asset_fb = "google/gemini-pro-1.5" if apinex_active else "anthropic/claude-3.5-sonnet"
+        asset_providers = (
+            ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.OPENROUTER]
+        )
+
+        comp_pref = "free/glm-5.3-flash" if apinex_active else "google/gemini-pro-1.5"
+        comp_fb = "google/gemini-pro-1.5" if apinex_active else "anthropic/claude-3.5-sonnet"
+        comp_providers = (
+            ([ProviderName.APINEX] if apinex_active else [])
+            + [ProviderName.OPENROUTER]
+        )
+
         # Task-based routing with sensitivity
         self.policies = {
-            # Qwen for intent extraction / planning (Groq primary, OpenRouter fallback)
             f"{TaskType.INTENT_EXTRACTION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.INTENT_EXTRACTION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="qwen-qwq-32b",
-                fallback_profile="qwen/qwen-2.5-72b-instruct",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
+                preferred_profile=intent_pref,
+                fallback_profile=intent_fb,
+                allowed_providers=intent_providers,
+                timeout_seconds=150,
             ),
             f"{TaskType.INTENT_EXTRACTION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.INTENT_EXTRACTION,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="qwen-qwq-32b",
-                fallback_profile="qwen/qwen-2.5-72b-instruct",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
+                preferred_profile=intent_pref,
+                fallback_profile=intent_fb,
+                allowed_providers=intent_providers,
+                timeout_seconds=150,
             ),
             f"{TaskType.INTENT_EXTRACTION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
                 task_type=TaskType.INTENT_EXTRACTION,
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
-                preferred_profile="gpt-4o-mini",
-                fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                preferred_profile="phi-3-mini-3.8b-q4",
+                fallback_profile="gpt-4o-mini",
+                allowed_providers=[ProviderName.LOCAL, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+                timeout_seconds=150,
             ),
-            # Offline-first spec generation: local phi-3-mini SLM preferred,
-            # cloud fallback when Ollama is down or ENABLE_LOCAL_LLM=false.
+            f"{TaskType.INTENT_EXTRACTION}_{SensitivityLevel.REGULATED}": RoutingPolicy(
+                task_type=TaskType.INTENT_EXTRACTION,
+                sensitivity=SensitivityLevel.REGULATED,
+                preferred_profile="phi-3-mini-3.8b-q4",
+                fallback_profile="gpt-4o-mini",
+                allowed_providers=[ProviderName.LOCAL, ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+                timeout_seconds=150,
+            ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="phi-3-mini-3.8b-q4",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[
-                    ProviderName.LOCAL,
-                    ProviderName.OPENAI,
-                    ProviderName.NVIDIA_NIM,
-                    ProviderName.GROQ,
-                    ProviderName.OPENROUTER,
-                ],
+                preferred_profile=spec_pref,
+                fallback_profile=spec_fb,
+                allowed_providers=spec_providers,
             ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="phi-3-mini-3.8b-q4",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[
-                    ProviderName.LOCAL,
-                    ProviderName.OPENAI,
-                    ProviderName.NVIDIA_NIM,
-                    ProviderName.GROQ,
-                    ProviderName.OPENROUTER,
-                ],
+                preferred_profile=spec_pref,
+                fallback_profile=spec_fb,
+                allowed_providers=spec_providers,
             ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
@@ -131,7 +269,7 @@ class RoutingEngine:
                 preferred_profile="phi-3-mini-3.8b-q4",
                 fallback_profile="gpt-4o-mini",
                 allowed_providers=[ProviderName.LOCAL, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
-                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
             ),
             f"{TaskType.SPEC_GENERATION}_{SensitivityLevel.REGULATED}": RoutingPolicy(
                 task_type=TaskType.SPEC_GENERATION,
@@ -139,53 +277,68 @@ class RoutingEngine:
                 preferred_profile="phi-3-mini-3.8b-q4",
                 fallback_profile="gpt-4o-mini",
                 allowed_providers=[ProviderName.LOCAL, ProviderName.OPENAI],
-                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
             ),
-            # Structured output reliable for validation
             f"{TaskType.VALIDATION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.VALIDATION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="openai/gpt-oss-120b",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                preferred_profile=val_pref,
+                fallback_profile=val_fb,
+                allowed_providers=val_providers,
             ),
             f"{TaskType.VALIDATION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.VALIDATION,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="openai/gpt-oss-120b",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                preferred_profile=val_pref,
+                fallback_profile=val_fb,
+                allowed_providers=val_providers,
             ),
             f"{TaskType.VALIDATION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
                 task_type=TaskType.VALIDATION,
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
             ),
-            # Low latency for copilot chat
+            f"{TaskType.VALIDATION}_{SensitivityLevel.REGULATED}": RoutingPolicy(
+                task_type=TaskType.VALIDATION,
+                sensitivity=SensitivityLevel.REGULATED,
+                preferred_profile="gpt-4o",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.NVIDIA_NIM, ProviderName.APINEX],
+            ),
             f"{TaskType.COPILOT_CHAT}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.COPILOT_CHAT,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="openai/gpt-oss-20b",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI],
+                preferred_profile=copilot_pref,
+                fallback_profile=copilot_fb,
+                allowed_providers=copilot_providers,
             ),
             f"{TaskType.COPILOT_CHAT}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.COPILOT_CHAT,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="openai/gpt-oss-20b",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI],
+                preferred_profile=copilot_pref,
+                fallback_profile=copilot_fb,
+                allowed_providers=copilot_providers,
             ),
             f"{TaskType.COPILOT_CHAT}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
                 task_type=TaskType.COPILOT_CHAT,
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o-mini",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
             ),
-            # Embeddings
+            f"{TaskType.COPILOT_CHAT}_{SensitivityLevel.REGULATED}": RoutingPolicy(
+                task_type=TaskType.COPILOT_CHAT,
+                sensitivity=SensitivityLevel.REGULATED,
+                preferred_profile="gpt-4o-mini",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.NVIDIA_NIM, ProviderName.APINEX],
+            ),
             f"{TaskType.EMBEDDING}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.EMBEDDING,
                 sensitivity=SensitivityLevel.PUBLIC,
@@ -207,73 +360,150 @@ class RoutingEngine:
                 fallback_profile=None,
                 allowed_providers=[ProviderName.OPENAI],
             ),
-            # Clarification - Qwen planning (Groq primary, OpenRouter fallback)
             f"{TaskType.CLARIFICATION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.CLARIFICATION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="qwen-qwq-32b",
-                fallback_profile="qwen/qwen-2.5-72b-instruct",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
+                preferred_profile=clarify_pref,
+                fallback_profile=clarify_fb,
+                allowed_providers=clarify_providers,
+                timeout_seconds=180,
             ),
             f"{TaskType.CLARIFICATION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.CLARIFICATION,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="qwen-qwq-32b",
-                fallback_profile="qwen/qwen-2.5-72b-instruct",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.OPENAI],
+                preferred_profile=clarify_pref,
+                fallback_profile=clarify_fb,
+                allowed_providers=clarify_providers,
+                timeout_seconds=180,
             ),
-            # Research - larger context
+            f"{TaskType.CLARIFICATION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
+                task_type=TaskType.CLARIFICATION,
+                sensitivity=SensitivityLevel.TENANT_SENSITIVE,
+                preferred_profile="phi-3-mini-3.8b-q4",
+                fallback_profile="gpt-4o-mini",
+                allowed_providers=[ProviderName.LOCAL, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+                timeout_seconds=180,
+            ),
             f"{TaskType.RESEARCH}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.RESEARCH,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="google/gemini-pro-1.5",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.OPENROUTER],
+                preferred_profile=research_pref,
+                fallback_profile=research_fb,
+                allowed_providers=research_providers,
             ),
             f"{TaskType.RESEARCH}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.RESEARCH,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="google/gemini-pro-1.5",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.OPENROUTER],
+                preferred_profile=research_pref,
+                fallback_profile=research_fb,
+                allowed_providers=research_providers,
             ),
-            # Domain expert - strong reasoning
+            f"{TaskType.RESEARCH}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
+                task_type=TaskType.RESEARCH,
+                sensitivity=SensitivityLevel.TENANT_SENSITIVE,
+                preferred_profile="gpt-4o",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+            ),
+            f"{TaskType.RESEARCH}_{SensitivityLevel.REGULATED}": RoutingPolicy(
+                task_type=TaskType.RESEARCH,
+                sensitivity=SensitivityLevel.REGULATED,
+                preferred_profile="gpt-4o",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+            ),
             f"{TaskType.DOMAIN_EXPERT}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.DOMAIN_EXPERT,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="openai/gpt-oss-120b",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                preferred_profile=domain_pref,
+                fallback_profile=domain_fb,
+                allowed_providers=domain_providers,
             ),
             f"{TaskType.DOMAIN_EXPERT}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
                 task_type=TaskType.DOMAIN_EXPERT,
                 sensitivity=SensitivityLevel.INTERNAL,
-                preferred_profile="openai/gpt-oss-120b",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENROUTER],
+                preferred_profile=domain_pref,
+                fallback_profile=domain_fb,
+                allowed_providers=domain_providers,
             ),
             f"{TaskType.DOMAIN_EXPERT}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
                 task_type=TaskType.DOMAIN_EXPERT,
                 sensitivity=SensitivityLevel.TENANT_SENSITIVE,
                 preferred_profile="gpt-4o",
                 fallback_profile="nvidia/nemotron-3-ultra",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                allowed_providers=[ProviderName.OPENAI, ProviderName.NVIDIA_NIM],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
             ),
-            # Asset selection
+            f"{TaskType.DOMAIN_EXPERT}_{SensitivityLevel.REGULATED}": RoutingPolicy(
+                task_type=TaskType.DOMAIN_EXPERT,
+                sensitivity=SensitivityLevel.REGULATED,
+                preferred_profile="gpt-4o",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.NVIDIA_NIM, ProviderName.APINEX],
+            ),
             f"{TaskType.ASSET_SELECTION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.ASSET_SELECTION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="google/gemini-pro-1.5",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.OPENROUTER],
+                preferred_profile=asset_pref,
+                fallback_profile=asset_fb,
+                allowed_providers=asset_providers,
             ),
-            # Composition
+            f"{TaskType.ASSET_SELECTION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
+                task_type=TaskType.ASSET_SELECTION,
+                sensitivity=SensitivityLevel.INTERNAL,
+                preferred_profile=asset_pref,
+                fallback_profile=asset_fb,
+                allowed_providers=asset_providers,
+            ),
+            f"{TaskType.ASSET_SELECTION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
+                task_type=TaskType.ASSET_SELECTION,
+                sensitivity=SensitivityLevel.TENANT_SENSITIVE,
+                preferred_profile="gpt-4o-mini",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+            ),
+            f"{TaskType.ASSET_SELECTION}_{SensitivityLevel.REGULATED}": RoutingPolicy(
+                task_type=TaskType.ASSET_SELECTION,
+                sensitivity=SensitivityLevel.REGULATED,
+                preferred_profile="gpt-4o-mini",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+            ),
             f"{TaskType.COMPOSITION}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
                 task_type=TaskType.COMPOSITION,
                 sensitivity=SensitivityLevel.PUBLIC,
-                preferred_profile="google/gemini-pro-1.5",
-                fallback_profile="anthropic/claude-3.5-sonnet",
-                allowed_providers=[ProviderName.OPENROUTER],
+                preferred_profile=comp_pref,
+                fallback_profile=comp_fb,
+                allowed_providers=comp_providers,
+            ),
+            f"{TaskType.COMPOSITION}_{SensitivityLevel.INTERNAL}": RoutingPolicy(
+                task_type=TaskType.COMPOSITION,
+                sensitivity=SensitivityLevel.INTERNAL,
+                preferred_profile=comp_pref,
+                fallback_profile=comp_fb,
+                allowed_providers=comp_providers,
+            ),
+            f"{TaskType.COMPOSITION}_{SensitivityLevel.TENANT_SENSITIVE}": RoutingPolicy(
+                task_type=TaskType.COMPOSITION,
+                sensitivity=SensitivityLevel.TENANT_SENSITIVE,
+                preferred_profile="gpt-4o-mini",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+            ),
+            f"{TaskType.COMPOSITION}_{SensitivityLevel.REGULATED}": RoutingPolicy(
+                task_type=TaskType.COMPOSITION,
+                sensitivity=SensitivityLevel.REGULATED,
+                preferred_profile="gpt-4o-mini",
+                fallback_profile=None,
+                allowed_providers=[ProviderName.OPENAI],
+                blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
             ),
             # STT - Sarvam for Telugu support
             f"{TaskType.STT}_{SensitivityLevel.PUBLIC}": RoutingPolicy(
@@ -322,17 +552,21 @@ class RoutingEngine:
         }
 
     def get_policy(self, task_type: TaskType, sensitivity: SensitivityLevel) -> RoutingPolicy:
-        """Get routing policy for task and sensitivity."""
+        """Get routing policy for task and sensitivity (fail-closed to paid)."""
         key = f"{task_type}_{sensitivity}"
-        return self.policies.get(
-            key,
-            RoutingPolicy(
-                task_type=task_type,
-                sensitivity=sensitivity,
-                preferred_profile="openai/gpt-oss-20b",
-                fallback_profile="gpt-4o-mini",
-                allowed_providers=[ProviderName.GROQ, ProviderName.OPENAI],
-            ),
+        policy = self.policies.get(key)
+        if policy is not None:
+            return policy
+        logger.warning("routing_policy_missing", task=str(task_type), sensitivity=str(sensitivity))
+        # Fail-closed: never fall back to free GROQ/OPENROUTER for unknown combos,
+        # especially TENANT_SENSITIVE/REGULATED. Default to paid OpenAI.
+        return RoutingPolicy(
+            task_type=task_type,
+            sensitivity=sensitivity,
+            preferred_profile="gpt-4o-mini",
+            fallback_profile=None,
+            allowed_providers=[ProviderName.OPENAI],
+            blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
         )
 
     def route(
@@ -435,7 +669,7 @@ class RoutingEngine:
             f"No available provider for {task_type} at {sensitivity} sensitivity. "
             "Check /health hint: start ollama with '--profile local' + "
             "'ollama pull phi3:mini' and ENABLE_LOCAL_LLM=true, or set "
-            "GROQ_API_KEY/OPENROUTER_API_KEY."
+            "APINEX_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY."
         )
 
     def record_provider_result(

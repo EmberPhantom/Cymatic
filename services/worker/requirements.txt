@@ -1,4 +1,10 @@
+# Full dev/test install for local venvs and CI (pr-gate, dependabot).
+# Docker images use the split files instead: requirements.runtime.txt
+# (lean production image) + requirements.test.txt (test stage only).
+# When adding a dependency, put it in the right split file AND here.
 # Worker Service Dependencies
+# Local editable install of shared package (Docker uses COPY --from=shared instead).
+-e ../../packages/cymatic-shared
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 pydantic==2.13.5
@@ -11,6 +17,7 @@ minio==7.2.20
 httpx==0.28.1
 python-dotenv==1.2.3
 structlog==26.1.0
+tenacity==9.1.4
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.3.0

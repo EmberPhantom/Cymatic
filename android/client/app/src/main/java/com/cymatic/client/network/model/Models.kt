@@ -148,13 +148,18 @@ data class ICECandidate(
 )
 
 data class InputPacket(
-    @SerializedName("timestamp") val timestamp: Long,
-    @SerializedName("head_pose") val headPose: HeadPoseData,
-    @SerializedName("gaze") val gaze: GazeData,
-    @SerializedName("controller") val controller: ControllerData,
-    @SerializedName("voice") val voice: VoiceData,
-    @SerializedName("hand_tracking") val handTracking: HandTrackingData?
-)
+    @SerializedName("input_type") val inputType: String,
+    @SerializedName("payload") val payload: Map<String, Any>,
+    @SerializedName("timestamp") val timestamp: Double
+) {
+    companion object {
+        const val TYPE_HEAD_POSE = "head_pose"
+        const val TYPE_GAZE = "gaze"
+        const val TYPE_CONTROLLER = "controller"
+        const val TYPE_VOICE = "voice"
+        const val TYPE_HAND_TRACKING = "hand_tracking"
+    }
+}
 
 data class HeadPoseData(
     @SerializedName("position") val position: FloatArray,

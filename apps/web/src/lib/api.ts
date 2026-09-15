@@ -2,14 +2,20 @@
 // Bundle cost ~14kB gz; tree-shaking N/A (CJS) but deduped via optimizePackageImports is not applicable.
 // Fetch-native alternative would save ~10kB but requires rewriting queue + interceptors — defer until bundle budget tightens.
 // If migrating: replace with `fetch` + custom `fetchWithRefresh` wrapper; keep same `api` export shape.
-import axios from "axios"
+import axios, { type AxiosRequestConfig, type InternalAxiosRequestConfig } from "axios"
 import { useAuthStore } from "@/stores/auth-store"
+
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+// Intake/clarify are synchronous LLM calls (120s/180s router timeouts + cold
+// Ollama warmup ~60-180s). The 30s default aborts first-run generation with
+// "timeout of 30000ms exceeded", so long LLM endpoints override per-request.
+export const LONG_REQUEST_TIMEOUT_MS = 180_000
 
 export const api = axios.create({
   baseURL: "",
   withCredentials: true,
   headers: { "Content-Type": "application/json" },
-  timeout: 30_000,
+  timeout: DEFAULT_REQUEST_TIMEOUT_MS,
 })
 
 // Attach the in-memory access token as a fallback for deployments where the
@@ -41,7 +47,7 @@ function processQueue(error: unknown, token: string | null = null) {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest: any = error.config
+    const originalRequest = error.config as (AxiosRequestConfig & { _retry?: boolean }) | undefined
     if (error.response?.status === 401 && !originalRequest?._retry && typeof window !== "undefined") {
       const path = window.location.pathname
       if (path.startsWith("/login") || path.startsWith("/register")) return Promise.reject(error)
@@ -50,16 +56,33 @@ api.interceptors.response.use(
         return Promise.reject(error)
       }
       if (isRefreshing) {
+        if (!originalRequest) return Promise.reject(error)
+        const req = originalRequest
         return new Promise((resolve, reject) => failedQueue.push({ resolve, reject }))
-          .then(() => api(originalRequest))
+          .then(() => api(req))
           .catch((err) => Promise.reject(err))
       }
+      if (!originalRequest) return Promise.reject(error)
       originalRequest._retry = true
       isRefreshing = true
       try {
-        await api.post("/v1/auth/refresh", {}, { withCredentials: true })
-        processQueue(null, "refreshed")
-        return api(originalRequest)
+        const refreshRes = await api.post("/v1/auth/refresh", {}, { withCredentials: true })
+        // Store refreshed access token so retry uses fresh header (was stale).
+        const newToken = (refreshRes.data as { access_token?: string })?.access_token ?? null
+        if (newToken) {
+          try {
+            const st = useAuthStore.getState()
+            if (st.user) st.setAuth(st.user, newToken)
+          } catch {
+            // SSR-safe: cookies remain primary
+          }
+        }
+        processQueue(null, newToken ?? "refreshed")
+        if (originalRequest.headers && newToken) {
+          const h = originalRequest.headers as unknown as Record<string, string>
+          h.Authorization = `Bearer ${newToken}`
+        }
+        return api(originalRequest as InternalAxiosRequestConfig)
       } catch (refreshError) {
         processQueue(refreshError, null)
         window.location.assign(`/login?next=${encodeURIComponent(path)}`)

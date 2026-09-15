@@ -1,6 +1,6 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, Query, status, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -30,10 +30,17 @@ class CreditLedgerResponse(BaseModel):
 
 
 class CreditAdjustment(BaseModel):
-    amount: int
-    reason: str
+    amount: int = Field(ge=-10000, le=10000)
+    reason: str = Field(min_length=1, max_length=500)
     reference_id: Optional[int] = None
-    reference_type: Optional[str] = None
+    reference_type: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("amount")
+    @classmethod
+    def _amount_nonzero(cls, v: int) -> int:
+        if v == 0:
+            raise ValueError("Amount must be non-zero")
+        return v
 
 
 # Credit costs for different operations
@@ -66,8 +73,8 @@ async def get_credit_balance(
 async def get_credit_usage(
     current_user: User = Depends(require_viewer),
     db: AsyncSession = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
     event_type: Optional[str] = None,
 ):
     query = select(CreditLedger).where(
@@ -91,6 +98,8 @@ async def adjust_credits(
     db: AsyncSession = Depends(get_db),
 ):
     """Adjust credit balance (admin/owner only) - positive for adding, negative for deducting"""
+    if adjustment.amount == 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-zero")
     # Compute balance before and after
     result = await db.execute(
         select(func.sum(CreditLedger.amount)).where(
@@ -98,6 +107,8 @@ async def adjust_credits(
         )
     )
     current_balance = result.scalar() or 0
+    if current_balance + adjustment.amount < 0:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
     ledger = CreditLedger(
         organization_id=current_user.organization_id,
         event_type="manual_adjustment",
@@ -137,8 +148,17 @@ async def deduct_credits(
     reference_id: Optional[int] = None,
     reference_type: Optional[str] = None,
 ) -> bool:
-    """Deduct credits from organization balance. Returns True if successful."""
-    # Check current balance
+    """Deduct credits from organization balance. Returns True if successful.
+
+    Uses SELECT FOR UPDATE on a locked read to avoid check-then-insert races
+    under concurrency; caller must commit (or rollback on False).
+    """
+    # Lock organization ledger rows for this org to serialize deductions.
+    await db.execute(
+        select(CreditLedger.id)
+        .where(CreditLedger.organization_id == organization_id)
+        .with_for_update()
+    )
     result = await db.execute(
         select(func.sum(CreditLedger.amount)).where(
             CreditLedger.organization_id == organization_id

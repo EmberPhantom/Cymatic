@@ -1,14 +1,15 @@
-import asyncio
 import copy
 import hashlib
 import json
+import time
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from app.core.dependencies import require_creator, require_viewer
 from app.core.rate_limit import rate_limit
 from app.db.session import get_db
@@ -60,16 +61,16 @@ class SpecResponse(BaseModel):
 
 
 class SpecGenerateRequest(BaseModel):
-    prompt: str
-    context: Optional[Dict[str, Any]] = {}
-    run_id: Optional[str] = None
-    clarification_answers: Dict[str, Any] = {}
+    prompt: str = Field(min_length=1, max_length=10000)
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    run_id: Optional[str] = Field(default=None, max_length=64)
+    clarification_answers: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SpecClarifyRequest(BaseModel):
-    answers: Dict[str, str]
-    run_id: Optional[str] = None
-    current_intake: Dict[str, Any] = {}
+    answers: Dict[str, str] = Field(max_length=100)
+    run_id: Optional[str] = Field(default=None, max_length=64)
+    current_intake: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SpecValidateResponse(BaseModel):
@@ -138,7 +139,18 @@ async def intake_prompt(
     # domain alongside the prompt (frontend sends only {prompt} today).
     effective_context = dict(request.context or {})
     effective_context.setdefault("project_domain", project.domain)
+    import time as _time
+
+    import structlog as _structlog
+
+    _intake_start = _time.monotonic()
     intake_result = await process_intake(request.prompt, effective_context)
+    _structlog.get_logger().info(
+        "intake_completed",
+        project_id=project_id,
+        analyser_mode=intake_result.analyser_mode,
+        duration_ms=round((_time.monotonic() - _intake_start) * 1000, 2),
+    )
     # Deep copy context to avoid mutation after enqueue
     context_copy = copy.deepcopy(effective_context)
     input_hash = hashlib.sha256(
@@ -146,10 +158,14 @@ async def intake_prompt(
             {"prompt": request.prompt, "context": context_copy}, sort_keys=True
         ).encode()
     ).hexdigest()
+    # Stash plain values now: after a rollback below, ORM attribute access on
+    # project/current_user would lazy-load (expired state) and raise
+    # MissingGreenlet in async context.
+    org_id = project.organization_id
     run = GenerationRun(
         id=f"run_{uuid.uuid4().hex}",
         project_id=project_id,
-        organization_id=project.organization_id,
+        organization_id=org_id,
         prompt=request.prompt,
         context_json=copy.deepcopy(context_copy),
         intake_json=copy.deepcopy(intake_result.model_dump()),
@@ -162,7 +178,39 @@ async def intake_prompt(
         progress=15 if intake_result.missing_fields else 25,
     )
     db.add(run)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Retry-after-timeout resubmits the same prompt+context, tripping the
+        # unique (project_id, input_hash) constraint. Return the existing run
+        # instead of a 500 (mirrors generate-spec's "already queued" dedupe).
+        await db.rollback()
+        import structlog as _structlog_dedupe
+
+        _structlog_dedupe.get_logger().info(
+            "intake_dedupe_hit", project_id=project_id, input_hash=input_hash
+        )
+        existing = await db.scalar(
+            select(GenerationRun).where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.organization_id == org_id,
+                GenerationRun.input_hash == input_hash,
+            )
+        )
+        if existing is None:
+            raise
+        stored = existing.intake_json or {}
+        return {
+            "detected_domain": stored.get("detected_domain"),
+            "objective": stored.get("objective"),
+            "missing_fields": stored.get("missing_fields", []),
+            "suggested_questions": stored.get("suggested_questions", []),
+            "extracted_entities": stored.get("extracted_entities", {}),
+            "confidence": stored.get("confidence"),
+            "analyser_mode": stored.get("analyser_mode"),
+            "run_id": existing.id,
+            "deduped": True,
+        }
 
     return {
         "detected_domain": intake_result.detected_domain,
@@ -470,7 +518,7 @@ async def validate_spec(
 
     # Enqueue validation job
     job = Job(
-        id=f"validate_{spec.id}_{int(asyncio.get_event_loop().time())}",
+        id=f"validate_{spec.id}_{int(time.monotonic())}",
         type="validate_spec",
         payload={"spec_id": spec.id},
         priority=JobPriority.NORMAL,
@@ -661,7 +709,7 @@ async def publish_scene(
 
     # Enqueue publish job
     job = Job(
-        id=f"publish_{project_id}_{int(asyncio.get_event_loop().time())}",
+        id=f"publish_{project_id}_{int(time.monotonic())}",
         type="publish_scene",
         payload={
             "project_id": project_id,

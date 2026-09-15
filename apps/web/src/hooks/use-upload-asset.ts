@@ -13,11 +13,14 @@ export function useUploadAsset(projectId: number) {
       const lower = file.name.toLowerCase()
       const mime = file.type || ""
       let type: string
-      if (mime.startsWith("image/")) type = "image"
-      else if (mime.startsWith("audio/")) type = "audio"
-      else if (/\.(glb|gltf|fbx|obj)$/i.test(lower) || mime.includes("model") || mime === "model/gltf-binary")
+      // Check 3D formats first (may also report model/* mime).
+      if (/\.(glb|gltf|fbx|obj)$/i.test(lower) || mime.includes("model") || mime === "model/gltf-binary")
         type = "model_3d"
-      else if (/\.(png|jpg|jpeg|webp|hdr|exr)$/i.test(lower)) type = "texture"
+      else if (mime.startsWith("audio/")) type = "audio"
+      // HDR/EXR are texture-only (browsers never serve them as image/*).
+      else if (/\.(hdr|exr)$/i.test(lower)) type = "texture"
+      else if (mime.startsWith("image/")) type = "image"
+      else if (/\.(png|jpg|jpeg|webp)$/i.test(lower)) type = "image"
       else type = "other"
       const init = await api.post(
         "/v1/assets/upload/init",

@@ -8,7 +8,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, Dict, Set, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -17,7 +17,7 @@ import httpx
 import structlog
 from jose import JWTError
 from app.core.config import get_settings
-from app.core.dependencies import require_viewer
+from app.core.dependencies import require_creator, require_viewer
 from app.core.security import decode_token, is_token_revoked
 from app.core.rate_limit import is_rate_limited
 from app.db.session import get_db, AsyncSessionLocal
@@ -85,20 +85,20 @@ class ICECandidate(BaseModel):
 
 
 class InputPacket(BaseModel):
-    input_type: str
-    payload: Dict[str, Any]
-    timestamp: float
+    input_type: Literal["gaze", "controller", "head_pose", "voice", "hand_tracking"]
+    payload: Dict[str, Any] = Field(default_factory=dict, max_length=50)
+    timestamp: float = Field(ge=0)
 
 
 class CopilotMessage(BaseModel):
-    message: str
-    context: Optional[Dict[str, Any]] = {}
+    message: str = Field(min_length=1, max_length=10000)
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
 class VoiceTranscript(BaseModel):
-    transcript: str
-    language: str = "en"
-    confidence: Optional[float] = None
+    transcript: str = Field(min_length=1, max_length=25000)
+    language: str = Field(default="en", max_length=10)
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
 
 
 @router.post(
@@ -108,7 +108,7 @@ class VoiceTranscript(BaseModel):
 )
 async def create_stream_session(
     session_data: StreamSessionCreate,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(require_creator),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -125,6 +125,26 @@ async def create_stream_session(
         raise HTTPException(
             status_code=400, detail="Project must be published to stream"
         )
+
+    # MVP: one concurrent stream per user unless multiplayer enabled.
+    if not settings.ENABLE_MULTIPLAYER:
+        active = await db.scalar(
+            select(StreamSession).where(
+                StreamSession.user_id == current_user.id,
+                StreamSession.status.in_(
+                    [
+                        StreamSessionStatus.PENDING,
+                        StreamSessionStatus.CONNECTING,
+                        StreamSessionStatus.ACTIVE,
+                    ]
+                ),
+            )
+        )
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="A stream session is already active",
+            )
 
     session = StreamSession(
         project_id=session_data.project_id,

@@ -12,4 +12,6 @@ from cymatic_shared.models import (  # noqa: F401
     VoiceSession,
     CreditLedger,
     AuditLog,
+    GenerationRun,
+    PlanningSheet, SheetStatus,
 )

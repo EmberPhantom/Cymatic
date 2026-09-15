@@ -18,8 +18,9 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
 
-    # Redis DB 0 = queue, 5 = pubsub
+    # Redis DB 0 = queue, 3 = rate, 5 = pubsub
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_RATE_URL: str | None = None
     REDIS_PUBSUB_URL: str | None = None
     REDIS_PASSWORD: str = ""
 

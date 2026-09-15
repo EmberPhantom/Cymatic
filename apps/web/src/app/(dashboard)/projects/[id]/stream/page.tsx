@@ -54,8 +54,15 @@ export default function StreamPage() {
     }
     const wsBase = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
     const token = useAuthStore.getState().token
+    // Prefer Sec-WebSocket-Protocol for JWT (backend supports it); query ?token=
+    // is deprecated fallback that leaks JWT in logs/history. Only use query
+    // when in-memory token is missing (cookie auth still applies server-side).
     const qs = new URLSearchParams({ type: "web" })
-    if (token) qs.set("token", token)
+    const protocols: string[] = []
+    if (token) protocols.push(`Bearer ${token}`)
+    else {
+      // No in-memory token (e.g. after reload): rely on HttpOnly cookie.
+    }
     const wsUrl = `${wsBase.replace(/^http/, "ws")}/v1/stream/ws/${encodeURIComponent(sessionId)}?${qs.toString()}`
     const iceServers: RTCIceServer[] = [
       { urls: process.env.NEXT_PUBLIC_STUN_URL || "stun:stun.l.google.com:19302" },
@@ -102,7 +109,7 @@ export default function StreamPage() {
         wsRef.current.send(JSON.stringify({ type: "candidate", payload: e.candidate }))
       }
     }
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsUrl, protocols.length ? protocols : undefined)
     wsRef.current = ws
     ws.onopen = () => {
       setSessionError(null)
