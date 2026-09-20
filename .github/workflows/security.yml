@@ -34,11 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -51,13 +51,13 @@ jobs:
           sarif_file: trivy-results.sarif
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Secret scan (TruffleHog)
-        uses: trufflesecurity/trufflehog@v3.8.0
+        uses: trufflesecurity/trufflehog@v3.97.5
         with:
           path: ./
           base: main
           head: HEAD
       - name: Secret scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         with:
           args: detect --source=. --verbose --redact --config=.gitleaks.toml
         continue-on-error: true
