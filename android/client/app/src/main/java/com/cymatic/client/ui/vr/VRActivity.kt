@@ -303,8 +303,34 @@ class VRActivity : AppCompatActivity() {
         gazeReticle.x = reticlePos.x
         gazeReticle.y = reticlePos.y
         gazeReticle.visibility = View.VISIBLE
-        
+
+        // Controller must work without hand tracking (docs/05) - send its state at
+        // the same throttled 20Hz cadence as head pose, only while a controller is
+        // actually connected.
+        if (controllerManager.isConnected()) {
+            webRTCManager.sendControllerState(controllerManager.getState())
+        }
+
         handler.postDelayed(sensorRunnable, 50)
+    }
+
+    /** Forward hardware key events (Bluetooth VR controller buttons) to ControllerManager. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (!::controllerManager.isInitialized) return super.dispatchKeyEvent(event)
+        val handled = when (event.action) {
+            android.view.KeyEvent.ACTION_DOWN -> controllerManager.onKeyDown(event.keyCode, event)
+            android.view.KeyEvent.ACTION_UP -> controllerManager.onKeyUp(event.keyCode, event)
+            else -> false
+        }
+        return handled || super.dispatchKeyEvent(event)
+    }
+
+    /** Forward analog controller axes (touchpad/trigger/thumbstick) to ControllerManager. */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (::controllerManager.isInitialized && controllerManager.onGenericMotionEvent(event)) {
+            return true
+        }
+        return super.onGenericMotionEvent(event)
     }
 
     private fun shouldSendPose(orientation: FloatArray, now: Long): Boolean {

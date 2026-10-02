@@ -10,7 +10,9 @@ class InputManager {
         val rotation: FloatArray
     )
 
-    private fun nowSeconds(): Double = System.currentTimeMillis() / 1000.0
+    // Epoch ms, matching Unity's InputManager.InputPacket.timestamp (long, ms) -
+    // packets are relayed to the render server unchanged over the signaling channel.
+    private fun nowMillis(): Long = System.currentTimeMillis()
 
     fun createInputPacket(
         headPose: HeadPosePacket,
@@ -28,7 +30,7 @@ class InputManager {
         return InputPacket(
             inputType = InputPacket.TYPE_HEAD_POSE,
             payload = payload,
-            timestamp = nowSeconds()
+            timestamp = nowMillis()
         )
     }
 
@@ -39,7 +41,7 @@ class InputManager {
                 "position" to position.toList(),
                 "rotation" to rotation.toList()
             ),
-            timestamp = nowSeconds()
+            timestamp = nowMillis()
         )
     }
 
@@ -50,7 +52,27 @@ class InputManager {
                 "origin" to origin.toList(),
                 "direction" to direction.toList()
             ),
-            timestamp = nowSeconds()
+            timestamp = nowMillis()
+        )
+    }
+
+    fun createControllerPacket(state: ControllerManager.ControllerState): InputPacket {
+        return InputPacket(
+            inputType = InputPacket.TYPE_CONTROLLER,
+            payload = mapOf(
+                "select_pressed" to state.selectPressed,
+                "menu_pressed" to state.menuPressed,
+                "ptt_pressed" to state.pttPressed,
+                "touchpad_x" to state.touchpadX,
+                "touchpad_y" to state.touchpadY,
+                "touchpad_touched" to state.touchpadTouched,
+                "trigger" to state.triggerValue,
+                "grip" to state.gripValue,
+                "thumbstick_x" to state.thumbstickX,
+                "thumbstick_y" to state.thumbstickY,
+                "battery_level" to state.batteryLevel
+            ),
+            timestamp = nowMillis()
         )
     }
 }

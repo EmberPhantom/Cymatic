@@ -261,6 +261,11 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         val packet = cachedInputManager.createInputPacket(input, FloatArray(3))
         signalingClient?.sendInput(packet)
     }
+
+    fun sendControllerState(state: com.cymatic.client.input.ControllerManager.ControllerState) {
+        val packet = cachedInputManager.createControllerPacket(state)
+        signalingClient?.sendInput(packet)
+    }
     
     fun sendAudioData(data: ByteArray) {
         // 233 audio send: previously logged per 20ms chunk (50 logs/s) and blocked with no throttling.
