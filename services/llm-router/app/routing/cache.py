@@ -324,26 +324,6 @@ class LLMCache:
             "redis_keys": redis_keys,
         }
 
-    async def warm_cache(self, entries: list[dict[str, Any]]) -> None:
-        """Pre-warm cache with common responses."""
-        for entry in entries:
-            params_val = entry.get("params")
-            params: dict[str, Any] | None = params_val if isinstance(params_val, dict) else None
-            ttl_hours = entry.get("ttl_hours", 1)
-            ttl_val: timedelta = timedelta(hours=int(ttl_hours) if isinstance(ttl_hours, (int, float)) else 1)
-            await self.set(
-                task_type=str(entry["task_type"]),
-                model=str(entry["model"]),
-                prompt=str(entry["prompt"]),
-                response=entry["response"],
-                params=params,
-                ttl=ttl_val,
-                sensitivity=str(entry["sensitivity"]) if entry.get("sensitivity") else None,
-                provider=str(entry["provider"]) if entry.get("provider") else None,
-                organization_id=str(entry["organization_id"]) if entry.get("organization_id") else None,
-            )
-
-
 # Global cache instance
 llm_cache = LLMCache()
 
