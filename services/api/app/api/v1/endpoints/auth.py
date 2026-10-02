@@ -70,7 +70,9 @@ class OrganizationResponse(BaseModel):
 
 
 @router.post(
-    "/login", response_model=Token, dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH))]
+    "/login",
+    response_model=Token,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH))],
 )
 async def login(
     response: Response,
@@ -174,7 +176,11 @@ async def get_current_user_info(
     return current_user
 
 
-@router.post("/refresh", response_model=Token, dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH_REFRESH))])
+@router.post(
+    "/refresh",
+    response_model=Token,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH_REFRESH))],
+)
 async def refresh_token(
     response: Response,
     http_request: Request,

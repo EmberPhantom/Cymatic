@@ -19,15 +19,15 @@ namespace Cymatic
         [SerializeField] private float _nearClip = 0.1f;
         [SerializeField] private float _farClip = 1000f;
         [SerializeField] private float _fov = 90f;
-        
+
         [Header("Tracking")]
         [SerializeField] private Transform _headAnchor;
         [SerializeField] private bool _useHeadTracking = true;
-        
+
         // Navigation
         private List<NavigationPointData> _navigationPoints = new List<NavigationPointData>();
         private int _currentNavIndex = 0;
-        
+
         // Head pose
         private Vector3 _headPosition = Vector3.zero;
         private Quaternion _headRotation = Quaternion.identity;
@@ -52,21 +52,21 @@ namespace Cymatic
                 return _blitMaterial;
             }
         }
-        
+
         public Camera LeftCamera => _leftCamera;
         public Camera RightCamera => _rightCamera;
         public float IPD => _ipd;
         public Vector3 HeadPosition => _smoothedPosition;
         public Quaternion HeadRotation => _smoothedRotation;
         public IReadOnlyList<NavigationPointData> NavigationPoints => _navigationPoints;
-        
+
         private void Awake()
         {
             if (_leftCamera == null || _rightCamera == null)
             {
                 CreateCameras();
             }
-            
+
             if (_headAnchor == null)
             {
                 // P0 FIX: 55 feedback loop - do NOT parent headAnchor to this transform
@@ -80,7 +80,7 @@ namespace Cymatic
                 // Keep unparented (world space) to break loop
             }
         }
-        
+
         private void CreateCameras()
         {
             // Left camera
@@ -88,31 +88,31 @@ namespace Cymatic
             leftGO.transform.SetParent(transform);
             _leftCamera = leftGO.AddComponent<Camera>();
             _leftCamera.stereoTargetEye = StereoTargetEyeMask.Left;
-            
+
             // Right camera
             var rightGO = new GameObject("RightCamera");
             rightGO.transform.SetParent(transform);
             _rightCamera = rightGO.AddComponent<Camera>();
             _rightCamera.stereoTargetEye = StereoTargetEyeMask.Right;
         }
-        
+
         public void Configure(float ipd, int width, int height)
         {
             _ipd = ipd / 1000f; // Convert mm to meters
             // P0 FIX: clamp to prevent VRAM overflow (width*2 = 3840 etc)
             _renderWidth = Mathf.Clamp(width, 64, 1920);
             _renderHeight = Mathf.Clamp(height, 64, 1080);
-            
+
             ConfigureCamera(_leftCamera);
             ConfigureCamera(_rightCamera);
-            
+
             // Position cameras for IPD
             if (_leftCamera != null)
                 _leftCamera.transform.localPosition = new Vector3(-_ipd / 2f, 0, 0);
             if (_rightCamera != null)
                 _rightCamera.transform.localPosition = new Vector3(_ipd / 2f, 0, 0);
         }
-        
+
         private void ConfigureCamera(Camera cam)
         {
             if (cam == null) return;
@@ -126,32 +126,32 @@ namespace Cymatic
             cam.allowMSAA = false;
             // Use 1x MSAA implicitly via render texture antiAliasing=1
         }
-        
+
         private void LateUpdate()
         {
             if (!_useHeadTracking) return;
             if (_headAnchor == null) return;
-            
+
             // Smooth head pose
             _smoothedPosition = Vector3.Lerp(_smoothedPosition, _headPosition, Time.deltaTime * _positionSmoothing);
             _smoothedRotation = Quaternion.Slerp(_smoothedRotation, _headRotation, Time.deltaTime * _rotationSmoothing);
-            
+
             // Apply to head anchor (world space, not child, so no feedback)
             _headAnchor.position = _smoothedPosition;
             _headAnchor.rotation = _smoothedRotation;
-            
+
             // Cameras follow head anchor - rig itself follows anchor
             // Since headAnchor is NOT child, this is safe (no loop)
             transform.position = _headAnchor.position;
             transform.rotation = _headAnchor.rotation;
         }
-        
+
         public void UpdateHeadPose(Vector3 position, Quaternion rotation)
         {
             _headPosition = position;
             _headRotation = rotation;
         }
-        
+
         public void SetNavigationPoints(List<NavigationPointData> points)
         {
             _navigationPoints = points ?? new List<NavigationPointData>();
@@ -166,11 +166,11 @@ namespace Cymatic
             else
                 _navigationPoints = new List<NavigationPointData>();
         }
-        
+
         public void TeleportToNavigationPoint(int index)
         {
             if (index < 0 || index >= _navigationPoints.Count) return;
-            
+
             var point = _navigationPoints[index];
             _headPosition = point.position;
             _headRotation = Quaternion.Euler(0, point.rotation.y, 0);
@@ -198,28 +198,28 @@ namespace Cymatic
             }
             Debug.LogWarning($"[StereoCameraRig] Teleport target not found: {id}");
         }
-        
+
         public NavigationPointData GetCurrentNavigationPoint()
         {
             if (_currentNavIndex >= 0 && _currentNavIndex < _navigationPoints.Count)
                 return _navigationPoints[_currentNavIndex];
             return null;
         }
-        
+
         public NavigationPointData GetNextNavigationPoint()
         {
             if (_navigationPoints.Count == 0) return null;
             int next = (_currentNavIndex + 1) % _navigationPoints.Count;
             return _navigationPoints[next];
         }
-        
+
         public NavigationPointData GetPreviousNavigationPoint()
         {
             if (_navigationPoints.Count == 0) return null;
             int prev = (_currentNavIndex - 1 + _navigationPoints.Count) % _navigationPoints.Count;
             return _navigationPoints[prev];
         }
-        
+
         // Render textures for WebRTC
         public RenderTexture GetLeftEyeTexture()
         {
@@ -237,7 +237,7 @@ namespace Cymatic
             }
             return _leftCamera.targetTexture;
         }
-        
+
         public RenderTexture GetRightEyeTexture()
         {
             if (_rightCamera == null) return null;
@@ -253,14 +253,14 @@ namespace Cymatic
             }
             return _rightCamera.targetTexture;
         }
-        
+
         // Side-by-side stereo rendering - P0 FIX: use GetTemporary + cached material, not new RenderTexture / Graphics.Blit(Rect)
         public RenderTexture GetSideBySideTexture()
         {
             var leftTex = GetLeftEyeTexture();
             var rightTex = GetRightEyeTexture();
             if (leftTex == null || rightTex == null) return null;
-            
+
             // P0 FIX: 184 leak new RenderTexture -> use GetTemporary
             // Clamp combined width to avoid 3840 overflow on low-end
             int combinedWidth = _renderWidth * 2;
@@ -280,7 +280,7 @@ namespace Cymatic
             Graphics.DrawTexture(new Rect(0.5f, 0, 0.5f, 1), rightTex, mat);
             GL.PopMatrix();
             Graphics.SetRenderTarget(null);
-            
+
             return combined; // Caller must ReleaseTemporary
         }
 
@@ -313,7 +313,7 @@ namespace Cymatic
             }
         }
     }
-    
+
     // P0 FIX: NavigationPointData is defined in SceneLoader.cs to avoid duplicate type error.
     // StereoCameraRig uses that same type (Cymatic.NavigationPointData) for navigation.
 }

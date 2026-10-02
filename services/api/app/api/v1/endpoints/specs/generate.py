@@ -1,4 +1,5 @@
 """Specs sub-router (split from specs.py, no logic change)."""
+
 import copy
 import hashlib
 import json
@@ -16,12 +17,15 @@ from app.models import GenerationRun
 from cymatic_shared.ids import new_run_id
 from cymatic_shared.model_enums import RunStatus, RunStage
 from .schemas import (
-    SpecGenerateRequest, JobResponse, GenerationRunResponse,
+    SpecGenerateRequest,
+    JobResponse,
+    GenerationRunResponse,
 )
 
 settings = get_settings()
 
 router = APIRouter()
+
 
 @router.post(
     "/{project_id}/generate-spec",
@@ -175,5 +179,3 @@ async def get_generation_run(
         created_at=run.created_at,
         updated_at=run.updated_at,
     )
-
-

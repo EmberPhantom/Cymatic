@@ -1,4 +1,5 @@
 """Shared outbound HTTP helpers. Single source for pool/timeout shapes."""
+
 import httpx
 
 

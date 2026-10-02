@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 # Add the app directory to the path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from app.db.session import Base
 from app.models import *  # noqa: F403,F401
@@ -34,6 +34,7 @@ def get_url():
     from cymatic_shared.utils import to_async_db_url
 
     from app.core.config import get_settings
+
     settings = get_settings()
     return to_async_db_url(settings.DATABASE_URL)
 
@@ -80,6 +81,7 @@ async def run_async_migrations() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     import asyncio
+
     asyncio.run(run_async_migrations())
 
 

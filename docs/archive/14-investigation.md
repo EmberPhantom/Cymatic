@@ -1,6 +1,6 @@
 # CYMATIC Follow-up Investigation
 
-**Investigation date:** 2026-08-21  
+**Investigation date:** 2026-08-21
 **Compared with:** [`docs/13-investigation.md`](13-investigation.md)
 
 ## Verdict

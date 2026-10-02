@@ -8,7 +8,9 @@ _CONFIG_PATH = Path(__file__).resolve()
 # services/worker/app/core/config.py is 4 levels below repo root;
 # container image is rooted at /app with fewer parents. Compose injects
 # env directly, so a missing container-local .env is valid.
-_ENV_FILE = str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+_ENV_FILE = (
+    str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+)
 
 
 class Settings(BaseSettings):

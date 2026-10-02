@@ -34,18 +34,18 @@ class UvcCameraManager(
     private var imageReader: ImageReader? = null
     private var isCameraActive = false
     private var currentDevice: UsbDevice? = null
-    
+
     // Frame callback
     private val frameChannel = Channel<ImageProxy>(10)
     private var onFrameAvailable: ((ImageProxy) -> Unit)? = null
-    
+
     init {
         cameraProvider = ProcessCameraProvider.getInstance(context)
     }
-    
+
     fun startCamera(device: UsbDevice) {
         currentDevice = device
-        
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
@@ -56,16 +56,16 @@ class UvcCameraManager(
             }
         }, ContextCompat.getMainExecutor(context))
     }
-    
+
     private fun bindCamera(provider: ProcessCameraProvider) {
         // For UVC cameras, we need to use a custom camera selector
         // This is simplified - real implementation would enumerate UVC devices
-        
+
         val preview = Preview.Builder()
             .setTargetRotation(previewView.display.rotation)
             .build()
             .also { it.setSurfaceProvider(previewView.surfaceProvider) }
-        
+
         val imageAnalysis = ImageAnalysis.Builder()
             .setTargetResolution(Size(640, 480))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -75,10 +75,10 @@ class UvcCameraManager(
                     processFrame(imageProxy)
                 }
             }
-        
+
         // For UVC, we'd need a custom camera selector
         // This is a placeholder - real implementation needs USB camera enumeration
-        
+
         try {
             // provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageAnalysis)
             isCameraActive = true
@@ -86,35 +86,35 @@ class UvcCameraManager(
             Log.e("UvcCamera", "Camera bind failed", e)
         }
     }
-    
+
     private fun processFrame(imageProxy: ImageProxy) {
         // Send frame to hand tracking
         frameChannel.trySend(imageProxy)
         onFrameAvailable?.invoke(imageProxy)
-        
+
         // Don't close - let the analyzer handle it
     }
-    
+
     fun setOnFrameAvailable(listener: (ImageProxy) -> Unit) {
         onFrameAvailable = listener
     }
-    
+
     fun stopCamera() {
         isCameraActive = false
         cameraExecutor.shutdown()
     }
-    
+
     fun setFrameListener(listener: (ImageProxy) -> Unit) {
         onFrameAvailable = listener
     }
-    
+
     fun getFrameChannel(): Channel<ImageProxy> = frameChannel
-    
+
     companion object {
         fun getUvcDevices(context: Context): List<UsbDevice> {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
             val devices = mutableListOf<UsbDevice>()
-            
+
             for (device in usbManager.deviceList.values) {
                 if (isUvcCamera(device)) {
                     devices.add(device)
@@ -122,17 +122,17 @@ class UvcCameraManager(
             }
             return devices
         }
-        
+
         private fun isUvcCamera(device: UsbDevice): Boolean {
             // Check for UVC video class (0x0E) or common camera interfaces
             if (device.deviceClass == 0x0E) return true // Video class
-            
+
             for (i in 0 until device.interfaceCount) {
                 val usbInterface = device.getInterface(i)
                 if (usbInterface.interfaceClass == 0x0E) return true // Video class
                 if (usbInterface.interfaceClass == 0x01 && usbInterface.interfaceSubclass == 0x04) return true // Audio/Video
             }
-            
+
             // Check device name
             val name = device.deviceName.lowercase()
             return name.contains("uvc") || name.contains("camera") || name.contains("webcam")

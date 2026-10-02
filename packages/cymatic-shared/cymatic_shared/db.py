@@ -1,9 +1,17 @@
 """Shared SQLAlchemy Base and database utilities."""
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine, AsyncSession, async_sessionmaker
+
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    create_async_engine,
+    AsyncSession,
+    async_sessionmaker,
+)
 from sqlalchemy.orm import DeclarativeBase
+
 
 class Base(DeclarativeBase):
     pass
+
 
 # Keep total pooled connections well below Postgres max_connections (100)
 # Services: api (5+10) + worker (5+10) = 30, plus migrate/test overhead <50 safe

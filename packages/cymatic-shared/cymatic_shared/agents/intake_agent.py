@@ -1,4 +1,5 @@
 """Intake Agent - Parses prompt and detects domain/missing fields using LLM"""
+
 import difflib
 import re
 from typing import Dict, Any, List
@@ -15,13 +16,21 @@ class IntakeResult(BaseModel):
     detected_domain: str = Field(description="Detected domain: real_estate or heritage")
     objective: str = Field(description="Original user objective")
     missing_fields: List[str] = Field(description="Fields not mentioned in prompt")
-    suggested_questions: List[str] = Field(description="Prioritized follow-up questions")
-    extracted_entities: Dict[str, Any] = Field(default_factory=dict, description="Entities extracted from prompt")
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Detection confidence")
+    suggested_questions: List[str] = Field(
+        description="Prioritized follow-up questions"
+    )
+    extracted_entities: Dict[str, Any] = Field(
+        default_factory=dict, description="Entities extracted from prompt"
+    )
+    confidence: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Detection confidence"
+    )
     # Which analyser produced this result: "llm" (idea-grounded) or "fallback"
     # (keyword templates, not grounded in the idea). Surfaced to the UI so it
     # can show "basic questions (offline mode)" instead of pretending.
-    analyser_mode: str = Field(default="llm", description="Analyser path: llm or fallback")
+    analyser_mode: str = Field(
+        default="llm", description="Analyser path: llm or fallback"
+    )
 
 
 INTAKE_SYSTEM_PROMPT = """You are the Analyser for an AI simulation builder. A user describes an idea or imagination for a walkthrough simulation. Dissect the idea before asking anything.
@@ -66,12 +75,17 @@ def sanitize_prompt(prompt: str) -> str:
     return prompt.strip()
 
 
-async def process_intake_llm(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
+async def process_intake_llm(
+    prompt: str, context: Dict[str, Any] | None = None
+) -> IntakeResult:
     """Process user prompt using LLM for intelligent analysis."""
     prompt = sanitize_prompt(prompt)
     messages = [
         {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Prompt: {prompt}\nContext: {json.dumps(context or {})}"}
+        {
+            "role": "user",
+            "content": f"Prompt: {prompt}\nContext: {json.dumps(context or {})}",
+        },
     ]
 
     try:
@@ -116,7 +130,11 @@ async def process_intake_llm(prompt: str, context: Dict[str, Any] | None = None)
             logger.warning("intake_llm_empty_content_fallback")
             return await process_intake_fallback(prompt, context)
 
-        logger.info("intake_llm_completed", domain=intake_result.detected_domain, confidence=intake_result.confidence)
+        logger.info(
+            "intake_llm_completed",
+            domain=intake_result.detected_domain,
+            confidence=intake_result.confidence,
+        )
         return intake_result
 
     except (ValueError, KeyError, OSError, httpx.HTTPError) as e:
@@ -129,16 +147,46 @@ async def process_intake_llm(prompt: str, context: Dict[str, Any] | None = None)
 # Fallback implementation (keyword-based)
 DOMAIN_KEYWORDS = {
     "real_estate": [
-        "apartment", "house", "home", "property", "real estate", "listing",
-        "bedroom", "bathroom", "kitchen", "living room", "furnished",
-        "walkthrough", "tour", "viewing", "showing", "open house",
-        "square feet", "sqft", "floor plan", "layout", "interior"
+        "apartment",
+        "house",
+        "home",
+        "property",
+        "real estate",
+        "listing",
+        "bedroom",
+        "bathroom",
+        "kitchen",
+        "living room",
+        "furnished",
+        "walkthrough",
+        "tour",
+        "viewing",
+        "showing",
+        "open house",
+        "square feet",
+        "sqft",
+        "floor plan",
+        "layout",
+        "interior",
     ],
     "heritage": [
-        "heritage", "historic", "monument", "temple", "palace", "courtyard",
-        "museum", "cultural", "ancient", "archaeological", "preservation",
-        "landmark", "site", "ruins", "traditional", "historic building"
-    ]
+        "heritage",
+        "historic",
+        "monument",
+        "temple",
+        "palace",
+        "courtyard",
+        "museum",
+        "cultural",
+        "ancient",
+        "archaeological",
+        "preservation",
+        "landmark",
+        "site",
+        "ruins",
+        "traditional",
+        "historic building",
+    ],
 }
 
 FIELD_PATTERNS = {
@@ -146,31 +194,139 @@ FIELD_PATTERNS = {
     # extracted_entities merge cleanly into clarification current_answers.
     # Covers BOTH domains now (heritage previously had no patterns, so heritage
     # ideas matched nothing and always fell back to generic templates).
-    "style": ["modern", "traditional", "contemporary", "minimalist", "luxury", "rustic", "victorian", "colonial", "mediterranean"],
+    "style": [
+        "modern",
+        "traditional",
+        "contemporary",
+        "minimalist",
+        "luxury",
+        "rustic",
+        "victorian",
+        "colonial",
+        "mediterranean",
+    ],
     "bedrooms": ["bedroom", "bhk", "master bedroom"],
     "bathrooms": ["bathroom", "bath", "toilet", "ensuite"],
     "square_footage": ["square", "sqft", "sq ft", "feet", "meter", "acre"],
-    "budget": ["budget", "price", "cost", "affordable", "expensive", "cheap", "million", "thousand"],
+    "budget": [
+        "budget",
+        "price",
+        "cost",
+        "affordable",
+        "expensive",
+        "cheap",
+        "million",
+        "thousand",
+    ],
     "floors": ["floor", "story", "storey", "level", "basement", "attic"],
     "furnished": ["furnished", "unfurnished", "semi-furnished"],
     "outdoor_spaces": ["garden", "yard", "pool", "terrace", "balcony", "patio", "deck"],
-    "special_rooms": ["office", "study", "gym", "theater", "theatre", "library", "garage"],
-    "lighting_preference": ["lighting", "bright", "cozy", "ambient", "sunset", "natural light"],
-    "site_type": ["temple", "palace", "courtyard", "monument", "museum", "fort", "mosque", "church", "heritage", "historic"],
-    "historical_period": ["century", "ancient", "medieval", "colonial", "mughal", "chola", "vijayanagara", "dynasty", "era"],
-    "key_pois": ["mandapa", "sanctum", "garbhagriha", "gopuram", "shikhara", "courtyard", "hall", "shrine", "entrance", "tower"],
-    "narration": ["narration", "narrated", "guide", "guided", "audio guide", "commentary"],
-    "languages": ["english", "telugu", "hindi", "tamil", "spanish", "french", "language"],
+    "special_rooms": [
+        "office",
+        "study",
+        "gym",
+        "theater",
+        "theatre",
+        "library",
+        "garage",
+    ],
+    "lighting_preference": [
+        "lighting",
+        "bright",
+        "cozy",
+        "ambient",
+        "sunset",
+        "natural light",
+    ],
+    "site_type": [
+        "temple",
+        "palace",
+        "courtyard",
+        "monument",
+        "museum",
+        "fort",
+        "mosque",
+        "church",
+        "heritage",
+        "historic",
+    ],
+    "historical_period": [
+        "century",
+        "ancient",
+        "medieval",
+        "colonial",
+        "mughal",
+        "chola",
+        "vijayanagara",
+        "dynasty",
+        "era",
+    ],
+    "key_pois": [
+        "mandapa",
+        "sanctum",
+        "garbhagriha",
+        "gopuram",
+        "shikhara",
+        "courtyard",
+        "hall",
+        "shrine",
+        "entrance",
+        "tower",
+    ],
+    "narration": [
+        "narration",
+        "narrated",
+        "guide",
+        "guided",
+        "audio guide",
+        "commentary",
+    ],
+    "languages": [
+        "english",
+        "telugu",
+        "hindi",
+        "tamil",
+        "spanish",
+        "french",
+        "language",
+    ],
     "scale": ["complex", "single structure", "site", "acres", "compound", "campus"],
-    "focus": ["educational", "architectural", "cultural", "spiritual", "tourism", "exploration"],
+    "focus": [
+        "educational",
+        "architectural",
+        "cultural",
+        "spiritual",
+        "tourism",
+        "exploration",
+    ],
     "indoor_outdoor": ["indoor", "outdoor", "mixed", "open-air", "covered"],
 }
 
 # Canonical required fields per domain (missing_fields is computed against the
 # DETECTED domain's set, not the whole pattern superset).
 DOMAIN_FIELDS = {
-    "real_estate": ["style", "bedrooms", "bathrooms", "square_footage", "floors", "budget", "furnished", "outdoor_spaces", "special_rooms", "lighting_preference"],
-    "heritage": ["site_type", "historical_period", "key_pois", "narration", "languages", "scale", "focus", "indoor_outdoor"],
+    "real_estate": [
+        "style",
+        "bedrooms",
+        "bathrooms",
+        "square_footage",
+        "floors",
+        "budget",
+        "furnished",
+        "outdoor_spaces",
+        "special_rooms",
+        "lighting_preference",
+    ],
+    "heritage": [
+        "site_type",
+        "historical_period",
+        "key_pois",
+        "narration",
+        "languages",
+        "scale",
+        "focus",
+        "indoor_outdoor",
+    ],
 }
 
 # Explicit field -> intake question index for reliable prioritization
@@ -216,7 +372,7 @@ DOMAIN_QUESTIONS = {
         "Any specific architectural features to emphasize?",
         "Indoor, outdoor, or mixed experience?",
         "Educational focus or pure exploration?",
-    ]
+    ],
 }
 
 
@@ -226,83 +382,182 @@ DOMAIN_QUESTIONS = {
 LANDMARK_GAZETTEER: Dict[str, Dict[str, Any]] = {
     "taj mahal": {
         "domain": "heritage",
-        "entities": {"site_type": "mausoleum", "historical_period": "Mughal", "key_pois": "main gateway, charbagh gardens, mosque, reflection pools", "focus": "architectural"},
+        "entities": {
+            "site_type": "mausoleum",
+            "historical_period": "Mughal",
+            "key_pois": "main gateway, charbagh gardens, mosque, reflection pools",
+            "focus": "architectural",
+        },
     },
     "eiffel tower": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "19th century", "key_pois": "esplanade, first floor, summit", "focus": "architectural"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "19th century",
+            "key_pois": "esplanade, first floor, summit",
+            "focus": "architectural",
+        },
     },
     "colosseum": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "ancient Roman", "key_pois": "arena floor, hypogeum, upper tiers", "focus": "historical"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "ancient Roman",
+            "key_pois": "arena floor, hypogeum, upper tiers",
+            "focus": "historical",
+        },
     },
     "pyramids of giza": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "ancient Egyptian", "key_pois": "great pyramid, sphinx, valley temple", "focus": "historical"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "ancient Egyptian",
+            "key_pois": "great pyramid, sphinx, valley temple",
+            "focus": "historical",
+        },
     },
     "great wall": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "Ming dynasty", "key_pois": "watchtowers, passes, wall walk", "focus": "historical"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "Ming dynasty",
+            "key_pois": "watchtowers, passes, wall walk",
+            "focus": "historical",
+        },
     },
     "machu picchu": {
         "domain": "heritage",
-        "entities": {"site_type": "archaeological site", "historical_period": "Inca", "key_pois": "temple of the sun, terraces, guardhouse viewpoint", "focus": "exploration"},
+        "entities": {
+            "site_type": "archaeological site",
+            "historical_period": "Inca",
+            "key_pois": "temple of the sun, terraces, guardhouse viewpoint",
+            "focus": "exploration",
+        },
     },
     "petra": {
         "domain": "heritage",
-        "entities": {"site_type": "archaeological site", "historical_period": "Nabataean", "key_pois": "treasury, monastery, siq canyon", "focus": "exploration"},
+        "entities": {
+            "site_type": "archaeological site",
+            "historical_period": "Nabataean",
+            "key_pois": "treasury, monastery, siq canyon",
+            "focus": "exploration",
+        },
     },
     "angkor wat": {
         "domain": "heritage",
-        "entities": {"site_type": "temple", "historical_period": "Khmer", "key_pois": "central sanctuary, bas-reliefs, moat causeway", "focus": "spiritual"},
+        "entities": {
+            "site_type": "temple",
+            "historical_period": "Khmer",
+            "key_pois": "central sanctuary, bas-reliefs, moat causeway",
+            "focus": "spiritual",
+        },
     },
     "alhambra": {
         "domain": "heritage",
-        "entities": {"site_type": "palace", "historical_period": "Nasrid", "key_pois": "court of lions, nasrid palaces, generalife gardens", "focus": "architectural"},
+        "entities": {
+            "site_type": "palace",
+            "historical_period": "Nasrid",
+            "key_pois": "court of lions, nasrid palaces, generalife gardens",
+            "focus": "architectural",
+        },
     },
     "sydney opera house": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "modern", "key_pois": "sails, concert hall, harbour forecourt", "focus": "architectural"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "modern",
+            "key_pois": "sails, concert hall, harbour forecourt",
+            "focus": "architectural",
+        },
     },
     "statue of liberty": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "19th century", "key_pois": "pedestal, crown observatory, liberty island", "focus": "historical"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "19th century",
+            "key_pois": "pedestal, crown observatory, liberty island",
+            "focus": "historical",
+        },
     },
     "big ben": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "Victorian", "key_pois": "clock tower, westminster bridge, parliament square", "focus": "historical"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "Victorian",
+            "key_pois": "clock tower, westminster bridge, parliament square",
+            "focus": "historical",
+        },
     },
     "forbidden city": {
         "domain": "heritage",
-        "entities": {"site_type": "palace", "historical_period": "Ming dynasty", "key_pois": "hall of supreme harmony, imperial gardens, meridian gate", "focus": "cultural"},
+        "entities": {
+            "site_type": "palace",
+            "historical_period": "Ming dynasty",
+            "key_pois": "hall of supreme harmony, imperial gardens, meridian gate",
+            "focus": "cultural",
+        },
     },
     "blue mosque": {
         "domain": "heritage",
-        "entities": {"site_type": "mosque", "historical_period": "Ottoman", "key_pois": "prayer hall, six minarets, courtyard", "focus": "spiritual"},
+        "entities": {
+            "site_type": "mosque",
+            "historical_period": "Ottoman",
+            "key_pois": "prayer hall, six minarets, courtyard",
+            "focus": "spiritual",
+        },
     },
     "hagia sophia": {
         "domain": "heritage",
-        "entities": {"site_type": "mosque", "historical_period": "Byzantine", "key_pois": "main dome, mosaics, gallery", "focus": "cultural"},
+        "entities": {
+            "site_type": "mosque",
+            "historical_period": "Byzantine",
+            "key_pois": "main dome, mosaics, gallery",
+            "focus": "cultural",
+        },
     },
     "chichen itza": {
         "domain": "heritage",
-        "entities": {"site_type": "archaeological site", "historical_period": "Maya", "key_pois": "el castillo pyramid, great ball court, cenote", "focus": "exploration"},
+        "entities": {
+            "site_type": "archaeological site",
+            "historical_period": "Maya",
+            "key_pois": "el castillo pyramid, great ball court, cenote",
+            "focus": "exploration",
+        },
     },
     "louvre": {
         "domain": "heritage",
-        "entities": {"site_type": "museum", "historical_period": "Renaissance", "key_pois": "glass pyramid, denon wing, courtyards", "focus": "educational"},
+        "entities": {
+            "site_type": "museum",
+            "historical_period": "Renaissance",
+            "key_pois": "glass pyramid, denon wing, courtyards",
+            "focus": "educational",
+        },
     },
     "santorini": {
         "domain": "heritage",
-        "entities": {"site_type": "historic town", "key_pois": "caldera viewpoint, blue domes, narrow lanes", "focus": "exploration"},
+        "entities": {
+            "site_type": "historic town",
+            "key_pois": "caldera viewpoint, blue domes, narrow lanes",
+            "focus": "exploration",
+        },
     },
     "kiyomizu": {
         "domain": "heritage",
-        "entities": {"site_type": "temple", "historical_period": "Japanese Edo", "key_pois": "wooden stage, otowa waterfall, pagoda", "focus": "spiritual"},
+        "entities": {
+            "site_type": "temple",
+            "historical_period": "Japanese Edo",
+            "key_pois": "wooden stage, otowa waterfall, pagoda",
+            "focus": "spiritual",
+        },
     },
     "burj khalifa": {
         "domain": "heritage",
-        "entities": {"site_type": "monument", "historical_period": "modern", "key_pois": "observation deck, fountains, plaza", "focus": "architectural"},
+        "entities": {
+            "site_type": "monument",
+            "historical_period": "modern",
+            "key_pois": "observation deck, fountains, plaza",
+            "focus": "architectural",
+        },
     },
     # Real-estate idea cues that read as proper fragments
     "2bhk": {
@@ -328,7 +583,9 @@ LANDMARK_GAZETTEER: Dict[str, Dict[str, Any]] = {
 }
 
 
-async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
+async def process_intake_fallback(
+    prompt: str, context: Dict[str, Any] | None = None
+) -> IntakeResult:
     """Fallback keyword-based intake processing.
 
     Typo-tolerant (spaceless + fuzzy word match) with a landmark gazetteer
@@ -352,7 +609,10 @@ async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = 
         # patterns long enough to avoid false positives.
         if len(flat_pat) >= 5:
             for word in prompt_words:
-                if len(word) >= 4 and difflib.SequenceMatcher(None, word, flat_pat).ratio() >= 0.8:
+                if (
+                    len(word) >= 4
+                    and difflib.SequenceMatcher(None, word, flat_pat).ratio() >= 0.8
+                ):
                     return word
         return None
 
@@ -373,7 +633,7 @@ async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = 
                 continue
             # Sliding window over the flat prompt so "angkorvat" ~= "angkorwat".
             for i in range(0, max(1, len(prompt_flat) - len(flat_name) + 1)):
-                window = prompt_flat[i:i + len(flat_name)]
+                window = prompt_flat[i : i + len(flat_name)]
                 ratio = difflib.SequenceMatcher(None, window, flat_name).ratio()
                 if ratio > best_ratio:
                     best_ratio = ratio
@@ -392,8 +652,14 @@ async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = 
         detected_domain = landmark_hit["domain"]
         confidence = 0.85
     else:
-        detected_domain = max(domain_scores, key=domain_scores.get) if max(domain_scores.values()) > 0 else "real_estate"
-        confidence = max(domain_scores.values()) / max(len(DOMAIN_KEYWORDS[detected_domain]), 1)
+        detected_domain = (
+            max(domain_scores, key=domain_scores.get)
+            if max(domain_scores.values()) > 0
+            else "real_estate"
+        )
+        confidence = max(domain_scores.values()) / max(
+            len(DOMAIN_KEYWORDS[detected_domain]), 1
+        )
 
     # Extract mentioned fields
     extracted = {}
@@ -460,8 +726,14 @@ async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = 
     grounded = list(prioritized_questions[:6])
     if extracted and grounded:
         first_hit = next(iter(extracted.values()), "")
-        if isinstance(first_hit, str) and first_hit and grounded[0].lower().find(first_hit.lower()) == -1:
-            grounded[0] = f"You mentioned '{first_hit}' — {grounded[0][0].lower() + grounded[0][1:]}"
+        if (
+            isinstance(first_hit, str)
+            and first_hit
+            and grounded[0].lower().find(first_hit.lower()) == -1
+        ):
+            grounded[0] = (
+                f"You mentioned '{first_hit}' — {grounded[0][0].lower() + grounded[0][1:]}"
+            )
     elif not extracted:
         # Nothing recognized: be honest instead of faking entities. Cap
         # confidence and lead with open questions that invite real detail.
@@ -489,7 +761,9 @@ async def process_intake_fallback(prompt: str, context: Dict[str, Any] | None = 
     )
 
 
-def merge_intake_answers(intake_result: IntakeResult, answers: Dict[str, str]) -> IntakeResult:
+def merge_intake_answers(
+    intake_result: IntakeResult, answers: Dict[str, str]
+) -> IntakeResult:
     """Merge clarification answers into intake result."""
     for key, value in answers.items():
         intake_result.extracted_entities[key] = value
@@ -511,7 +785,9 @@ def merge_intake_answers(intake_result: IntakeResult, answers: Dict[str, str]) -
 
 
 # Main entry point
-async def process_intake(prompt: str, context: Dict[str, Any] | None = None) -> IntakeResult:
+async def process_intake(
+    prompt: str, context: Dict[str, Any] | None = None
+) -> IntakeResult:
     """Main intake processing - uses LLM with keyword fallback."""
     prompt = sanitize_prompt(prompt)
     return await process_intake_llm(prompt, context)

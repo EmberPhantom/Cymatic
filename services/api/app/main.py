@@ -136,7 +136,8 @@ async def health_check():
 
         async with AsyncSessionLocal() as db:
             await asyncio.wait_for(
-                db.execute(text("SELECT 1")), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS
+                db.execute(text("SELECT 1")),
+                timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS,
             )
         checks["db"] = "healthy"
     except Exception:
@@ -149,7 +150,9 @@ async def health_check():
 
         r = _get_redis()
         if r is not None:
-            await asyncio.wait_for(r.ping(), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS)
+            await asyncio.wait_for(
+                r.ping(), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS
+            )
             checks["redis"] = "healthy"
         else:
             checks["redis"] = "unknown"

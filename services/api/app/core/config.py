@@ -8,7 +8,9 @@ _CONFIG_PATH = Path(__file__).resolve()
 # services/api/app/core/config.py is 4 levels below repo root;
 # container image is rooted at /app with fewer parents. Compose injects
 # env directly, so a missing container-local .env is valid.
-_ENV_FILE = str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+_ENV_FILE = (
+    str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+)
 
 
 class Settings(BaseSettings):
@@ -158,9 +160,13 @@ class Settings(BaseSettings):
         env = info.data.get("ENVIRONMENT") if hasattr(info, "data") else None
         if env == "production":
             if "localhost" in v or "127.0.0.1" in v:
-                raise ValueError("DATABASE_URL must not contain localhost in production")
+                raise ValueError(
+                    "DATABASE_URL must not contain localhost in production"
+                )
             if ":cymatic@" in v or "cymatic:cymatic" in v:
-                raise ValueError("DATABASE_URL uses insecure default credentials in production")
+                raise ValueError(
+                    "DATABASE_URL uses insecure default credentials in production"
+                )
         return v
 
     @field_validator("POSTGRES_PASSWORD")
@@ -168,7 +174,9 @@ class Settings(BaseSettings):
     def validate_postgres_password(cls, v: str, info: Any) -> str:
         env = info.data.get("ENVIRONMENT") if hasattr(info, "data") else None
         if env == "production" and v in ("cymatic", "", "postgres", "password"):
-            raise ValueError("POSTGRES_PASSWORD must be set to non-default in production")
+            raise ValueError(
+                "POSTGRES_PASSWORD must be set to non-default in production"
+            )
         return v
 
     @field_validator("MINIO_ROOT_PASSWORD", "S3_SECRET_KEY")
@@ -183,7 +191,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_redis_password(cls, v: str, info: Any) -> str:
         env = info.data.get("ENVIRONMENT") if hasattr(info, "data") else None
-        if env == "production" and (not v or v in ("cymatic_redis_pass", "password", "redis")):
+        if env == "production" and (
+            not v or v in ("cymatic_redis_pass", "password", "redis")
+        ):
             raise ValueError("REDIS_PASSWORD must be set in production")
         return v
 

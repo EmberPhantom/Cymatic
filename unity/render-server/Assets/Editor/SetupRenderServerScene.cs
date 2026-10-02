@@ -15,11 +15,11 @@ namespace Cymatic.Editor
         public static void CreateRenderServerScene()
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-            
+
             // Create main RenderServer object
             var renderServerGO = new GameObject("RenderServer");
             var renderServer = renderServerGO.AddComponent<Cymatic.RenderServer>();
-            
+
             // Configure
             var serializedObject = new SerializedObject(renderServer);
             serializedObject.FindProperty("backendUrl").stringValue = "http://localhost:8000";
@@ -33,29 +33,29 @@ namespace Cymatic.Editor
             serializedObject.FindProperty("minBitrate").intValue = 5000000;
             serializedObject.FindProperty("maxBitrate").intValue = 30000000;
             serializedObject.ApplyModifiedProperties();
-            
+
             // Create scene root for loaded scenes
             var sceneRoot = new GameObject("SceneRoot");
             sceneRoot.transform.SetParent(renderServerGO.transform);
             sceneRoot.transform.localPosition = Vector3.zero;
-            
+
             // Setup lighting
             SetupLighting();
-            
+
             // Setup physics
             Physics.defaultSolverIterations = 6;
             Physics.defaultSolverVelocityIterations = 4;
             Physics.sleepThreshold = 0.005f;
             Physics.autoSimulation = true;
-            
+
             // Save scene
             var scenePath = "Assets/Scenes/RenderServer.unity";
             System.IO.Directory.CreateDirectory("Assets/Scenes");
             EditorSceneManager.SaveScene(scene, scenePath);
-            
+
             // Add to build settings
             AddSceneToBuildSettings(scenePath);
-            
+
             Debug.Log("[CYMATIC] Render Server scene created successfully!");
             Debug.Log("Next steps:");
             Debug.Log("1. Install required packages (WebRTC, Netcode)");
@@ -63,7 +63,7 @@ namespace Cymatic.Editor
             Debug.Log("3. Set Build Target to Windows/Standalone");
             Debug.Log("4. Build and run on gaming laptop");
         }
-        
+
         private static void SetupLighting()
         {
             // Main directional light
@@ -76,7 +76,7 @@ namespace Cymatic.Editor
             light.lightmapBakeType = LightmapBakeType.Baked;
             light.shadowStrength = 0f;
             light.transform.rotation = Quaternion.Euler(50, -30, 0);
-            
+
             // Ambient
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
             RenderSettings.ambientLight = new Color(0.3f, 0.25f, 0.2f);
@@ -85,12 +85,12 @@ namespace Cymatic.Editor
             RenderSettings.reflectionIntensity = 1f;
             RenderSettings.reflectionBounces = 1;
         }
-        
+
         private static void AddSceneToBuildSettings(string scenePath)
         {
             var scenes = EditorBuildSettings.scenes;
             var sceneList = new System.Collections.Generic.List<EditorBuildSettingsScene>(scenes);
-            
+
             // Check if already exists
             bool exists = false;
             foreach (var s in sceneList)
@@ -101,7 +101,7 @@ namespace Cymatic.Editor
                     break;
                 }
             }
-            
+
             if (!exists)
             {
                 sceneList.Add(new EditorBuildSettingsScene(scenePath, true));

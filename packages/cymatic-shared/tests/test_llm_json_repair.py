@@ -4,6 +4,7 @@ A 3B SLM occasionally emits EOS mid-object; the router caches the truncated
 output, so without repair + cache-bypassed retries the architect fails twice
 on the same garbage (seen live: Taj Mahal run, cut mid `key_pois`).
 """
+
 import json
 
 from cymatic_shared.agents.llm_client import _repair_truncated_json

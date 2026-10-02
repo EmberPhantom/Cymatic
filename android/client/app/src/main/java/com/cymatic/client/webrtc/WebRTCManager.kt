@@ -18,10 +18,10 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     private var audioTrack: AudioTrack? = null
     private var audioSource: AudioSource? = null
     private val cachedInputManager = InputManager()
-    
+
     private var signalingClient: SignalingClient? = null
     private var currentSessionId: String? = null
-    
+
     // Bitrate delta state (285)
     private var lastBytesReceived = -1L
     private var lastBitrateCalcTimeMs = 0L
@@ -30,21 +30,21 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     // Audio send throttling (233) — avoid log spam per 20ms chunk
     private var audioSendCount = 0
     private var lastAudioLogMs = 0L
-    
+
     // Callbacks
     private var onConnected: ((String) -> Unit)? = null
     private var onDisconnected: ((String) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
     private var onStats: ((StreamStats) -> Unit)? = null
     private var onRemoteVideoFrame: ((VideoFrame) -> Unit)? = null
-    
+
     // Stats
     private val statsExecutor = Executors.newSingleThreadScheduledExecutor()
     private var statsJob: java.util.concurrent.ScheduledFuture<*>? = null
-    
+
     // Input channel — bounded to avoid backpressure on low-end
     private val inputChannel = Channel<InputPacket>(10)
-    
+
     init {
         // Initialize WebRTC — tracer disabled for perf
         PeerConnectionFactory.initialize(
@@ -52,15 +52,15 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 .setEnableInternalTracer(false)
                 .createInitializationOptions()
         )
-        
+
         val options = PeerConnectionFactory.Options()
         options.networkIgnoreMask = 0
-        
+
         factory = PeerConnectionFactory.builder()
             .setOptions(options)
             .createPeerConnectionFactory()
     }
-    
+
     fun setCallbacks(
         onConnected: ((String) -> Unit)? = null,
         onDisconnected: ((String) -> Unit)? = null,
@@ -74,7 +74,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         this.onStats = onStats
         this.onRemoteVideoFrame = onRemoteVideoFrame
     }
-    
+
     fun connect(signalingUrl: String, sessionId: String, authToken: String? = null) {
         currentSessionId = sessionId
         lastBytesReceived = -1L
@@ -115,10 +115,10 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 onDisconnected?.invoke(reason)
             }
         )
-        
+
         signalingClient?.connect()
     }
-    
+
     private fun createPeerConnection() {
         // 107 STUN LAN: Local LAN streaming should not require internet STUN (adds DNS + gathering delay).
         // For MVP over LAN, use no STUN; host candidates suffice. WAN fallback can add STUN via config.
@@ -129,11 +129,11 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
             // Prefer low latency: host candidates only via empty iceServers (LAN)
         }
-        
+
         val constraints = MediaConstraints()
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
-        
+
         peerConnection = factory.createPeerConnection(configuration, constraints, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {
                 val sid = currentSessionId ?: return
@@ -143,7 +143,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                     Log.w("WebRTC", "IceCandidate sdpMid null, skipping")
                 }
             }
-            
+
             override fun onAddTrack(rtpReceiver: RtpReceiver, mediaStreams: Array<MediaStream>) {
                 if (rtpReceiver.track()?.kind() == "video") {
                     rtpReceiver.track()?.addSink { frame ->
@@ -151,7 +151,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                     }
                 }
             }
-            
+
             override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
                 when (newState) {
                     PeerConnection.PeerConnectionState.CONNECTED -> {
@@ -176,7 +176,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             override fun onDataChannel(channel: DataChannel) {}
             override fun onRenegotiationNeeded() {}
         })
-        
+
         // Create audio track — mono for low-end (send only when PTT, not always)
         audioSource = factory.createAudioSource(MediaConstraints().apply {
             // Disable echo cancellation heavy processing on low-end? Keep but low cost
@@ -190,7 +190,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         audioTrack?.setEnabled(false)
         audioTrack?.let { track -> peerConnection?.addTrack(track, listOf("stream")) }
     }
-    
+
     private fun handleOffer(sdp: String) {
         val offer = SessionDescription(SessionDescription.Type.OFFER, sdp)
         peerConnection?.setRemoteDescription(object : SdpObserver {
@@ -206,12 +206,12 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             }
         }, offer)
     }
-    
+
     private fun createAnswer() {
         val constraints = MediaConstraints()
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
         constraints.mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
-        
+
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
                 desc?.let { answer ->
@@ -234,7 +234,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             override fun onSetFailure(error: String) {}
         }, constraints)
     }
-    
+
     private fun handleAnswer(sdp: String) {
         val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
         peerConnection?.setRemoteDescription(object : SdpObserver {
@@ -246,12 +246,12 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             override fun onCreateFailure(error: String) {}
         }, answer)
     }
-    
+
     private fun handleIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
         val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
         peerConnection?.addIceCandidate(iceCandidate)
     }
-    
+
     fun sendHeadPose(position: FloatArray, rotation: FloatArray) {
         val input = InputManager.HeadPosePacket(
             timestamp = System.currentTimeMillis(),
@@ -266,7 +266,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         val packet = cachedInputManager.createControllerPacket(state)
         signalingClient?.sendInput(packet)
     }
-    
+
     fun sendAudioData(data: ByteArray) {
         // 233 audio send: previously logged per 20ms chunk (50 logs/s) and blocked with no throttling.
         // Now: enable track only when actually sending, throttle logs.
@@ -286,21 +286,21 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     fun notifyAudioStop() {
         audioTrack?.setEnabled(false)
     }
-    
+
     fun sendInput(input: InputPacket) {
         inputChannel.trySend(input)
     }
-    
+
     fun resume() {
         peerConnection?.let { /* resume */ }
         audioTrack?.setEnabled(false) // resume muted until PTT
     }
-    
+
     fun pause() {
         peerConnection?.let { /* pause */ }
         audioTrack?.setEnabled(false)
     }
-    
+
     fun disconnect() {
         stopStatsCollection()
         signalingClient?.disconnect()
@@ -309,7 +309,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         currentSessionId = null
         audioTrack?.setEnabled(false)
     }
-    
+
     fun reduceQuality() {
         // Guard: getSenders may be empty if remote-only; check encodings size
         peerConnection?.getSenders()?.forEach { sender ->
@@ -327,7 +327,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             }
         }
     }
-    
+
     fun dispose() {
         disconnect()
         try { audioTrack?.dispose() } catch (_: Exception) {}
@@ -336,7 +336,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         try { inputChannel.close() } catch (_: Exception) {}
         try { statsExecutor.shutdownNow() } catch (_: Exception) {}
     }
-    
+
     private fun startStatsCollection() {
         // Throttle to 2s vs 1s to halve CPU on low-end
         if (statsJob != null) return
@@ -361,12 +361,12 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             }
         }, 0, 2, java.util.concurrent.TimeUnit.SECONDS)
     }
-    
+
     private fun stopStatsCollection() {
         statsJob?.cancel(false)
         statsJob = null
     }
-    
+
     @Suppress("DEPRECATION")
     private fun parseStats(report: StatsReport): StreamStats {
         var fps = 0
@@ -436,7 +436,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         }
         return StreamStats(fps, latencyMs, bitrateKbpsLocal, 0.0, packetsLost, packetsReceived)
     }
-    
+
     data class StreamStats(
         val fps: Int = 0,
         val latencyMs: Int = 0,
@@ -445,7 +445,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         val packetsLost: Int = 0,
         val packetsReceived: Int = 0
     )
-    
+
     // Signaling client inner class
     private class SignalingClient(
         private val url: String,
@@ -457,7 +457,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         private val client = okhttp3.OkHttpClient.Builder()
             .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
             .build()
-        
+
         var onOffer: ((String) -> Unit)? = null
         var onAnswer: ((String) -> Unit)? = null
         var onCandidate: ((String, String, Int) -> Unit)? = null
@@ -466,7 +466,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         var onConnected: ((String) -> Unit)? = null
         var onDisconnected: ((String) -> Unit)? = null
         var onError: ((String) -> Unit)? = errorHandler
-        
+
         fun connect() {
             val builder = okhttp3.Request.Builder().url(url)
             // Prefer Authorization header; backend falls back to ?token= (deprecated).
@@ -481,31 +481,31 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                     webSocket.send("""{"type":"register","payload":{"server_id":"android-client","type":"android"}}""")
                     sessionProvider()?.let { onConnected?.invoke(it) }
                 }
-                
+
                 override fun onMessage(webSocket: okhttp3.WebSocket, text: String) {
                     parseAndHandleMessage(text)
                 }
-                
+
                 override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
                     Log.e("Signaling", "WebSocket error", t)
                     onError?.invoke("WebSocket error: ${t.message}")
                 }
-                
+
                 override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
                     Log.d("Signaling", "WebSocket closed: $code $reason")
                     onDisconnected?.invoke("WebSocket closed: $reason")
                 }
             }
-            
+
             this.webSocket = client.newWebSocket(request, listener)
         }
-        
+
         private fun parseAndHandleMessage(text: String) {
             try {
                 val json = com.google.gson.Gson().fromJson(text, com.google.gson.JsonObject::class.java)
                 val type = json.get("type").asString
                 val payload = json.get("payload").asJsonObject
-                
+
                 when (type) {
                     "offer" -> {
                         val sdp = payload.get("sdp").asString
@@ -534,7 +534,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 Log.e("Signaling", "Failed to parse message: $text", e)
             }
         }
-        
+
         fun sendIceCandidate(sessionId: String, candidate: String, sdpMid: String, sdpMLineIndex: Int) {
             val msg = com.google.gson.Gson().toJson(mapOf(
                 "type" to "candidate",
@@ -547,7 +547,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             ))
             webSocket?.send(msg)
         }
-        
+
         fun sendAnswer(sessionId: String, sdp: String) {
             val msg = com.google.gson.Gson().toJson(mapOf(
                 "type" to "answer",
@@ -558,7 +558,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             ))
             webSocket?.send(msg)
         }
-        
+
         fun sendOffer(sessionId: String, sdp: String) {
             val msg = com.google.gson.Gson().toJson(mapOf(
                 "type" to "offer",
@@ -569,7 +569,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             ))
             webSocket?.send(msg)
         }
-        
+
         fun sendInput(input: com.cymatic.client.network.model.InputPacket) {
             val msg = com.google.gson.Gson().toJson(mapOf(
                 "type" to "input",
@@ -577,13 +577,13 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
             ))
             webSocket?.send(msg)
         }
-        
+
         fun disconnect() {
             try { webSocket?.close(1000, "Client disconnect") } catch (_: Exception) {}
             webSocket = null
             try { client.dispatcher.executorService.shutdown() } catch (_: Exception) {}
         }
-        
+
         fun setCallbacks(
             onOffer: ((String) -> Unit)? = null,
             onAnswer: ((String) -> Unit)? = null,

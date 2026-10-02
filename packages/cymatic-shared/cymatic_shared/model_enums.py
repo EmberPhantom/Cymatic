@@ -4,6 +4,7 @@ Placed here rather than beside the ORM models so api code — which keeps
 its own model duplicates on the same MetaData — can use the enums without
 triggering duplicate table registration.
 """
+
 import enum
 
 

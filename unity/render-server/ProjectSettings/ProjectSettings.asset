@@ -26,10 +26,10 @@ androidVersion: 0.1.0
 androidEnableProGuard: 0
 androidEnableR8: 1
 androidUseCustomKeystore: 0
-androidKeystoreName: 
-androidKeystorePass: 
-androidKeyaliasName: 
-androidKeyaliasPass: 
+androidKeystoreName:
+androidKeystorePass:
+androidKeyaliasName:
+androidKeyaliasPass:
 androidTVCompatibility: 0
 androidSupportsLargeScreens: 1
 androidSupportsNormalScreens: 1
@@ -83,7 +83,7 @@ qualitySettings:
     streamingMipmapsRenderersPerFrame: 512
     streamingMipmapsMaxLevelReduction: 2
     streamingMipmapsMaxFileIORequests: 1024
-  
+
   - name: High
     pixelLightCount: 3
     shadows: HardShadows
@@ -111,7 +111,7 @@ qualitySettings:
     streamingMipmapsRenderersPerFrame: 256
     streamingMipmapsMaxLevelReduction: 2
     streamingMipmapsMaxFileIORequests: 512
-  
+
   - name: Medium
     pixelLightCount: 2
     shadows: HardShadows
@@ -139,7 +139,7 @@ qualitySettings:
     streamingMipmapsRenderersPerFrame: 128
     streamingMipmapsMaxLevelReduction: 2
     streamingMipmapsMaxFileIORequests: 256
-  
+
   - name: Low
     pixelLightCount: 1
     shadows: HardShadows
@@ -210,7 +210,7 @@ iconSizes:
 # Splash Screen
 showUnitySplashScreen: 0
 splashScreenBackground: 0x000000FF
-splashScreenLogo: 
+splashScreenLogo:
 splashScreenOverlayOpacity: 1
 splashScreenAnimation: 0
 

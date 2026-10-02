@@ -1,6 +1,6 @@
 # CYMATIC Containerization Investigation
 
-**Investigation date:** 2026-08-21  
+**Investigation date:** 2026-08-21
 **Scope:** Local development and testing containerization
 
 ## Verdict

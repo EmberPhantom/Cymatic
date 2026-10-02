@@ -1,4 +1,5 @@
 """Stream session REST endpoints (split, no logic change)."""
+
 from datetime import datetime, timezone
 from fastapi import (
     APIRouter,
@@ -35,6 +36,8 @@ settings = get_settings()
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+
 @router.post(
     "/sessions",
     response_model=StreamSessionResponse,
@@ -384,5 +387,3 @@ async def handle_input(
         raise HTTPException(status_code=500, detail="Failed to forward input")
 
     return {"status": "input_received", "session_id": session_id}
-
-

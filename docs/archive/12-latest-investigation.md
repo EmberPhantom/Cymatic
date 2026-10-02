@@ -1,6 +1,6 @@
 # CYMATIC Latest Investigation
 
-**Investigation date:** 2026-08-20  
+**Investigation date:** 2026-08-20
 **Baseline:** [`docs/11-current-investigation.md`](11-current-investigation.md)
 
 ## Verdict
@@ -61,7 +61,7 @@ The project still cannot be called execution-ready because worker startup perfor
 
 ### C-01: Worker startup performs a live MinIO request during import
 
-**Severity:** Critical  
+**Severity:** Critical
 **Evidence:** `services/worker/app/services/minio_client.py`, `packages/cymatic-shared/cymatic_shared/services/minio_client.py`.
 
 Importing `app.main` imports the worker generation tasks, which creates a global `MinIOClient`. Its constructor calls `_ensure_bucket()`, which performs `bucket_exists()` immediately. With MinIO unavailable, import fails with a connection-refused exception.
@@ -70,28 +70,28 @@ This breaks test collection, health checks, local startup diagnostics, and any c
 
 ### C-02: API and router test dependencies are not installed in the active environment
 
-**Severity:** High  
+**Severity:** High
 **Evidence:** current pytest output; `services/api/requirements.txt`; `services/llm-router/requirements.txt`.
 
 API tests fail before collection because `python-jose` is unavailable. Router tests fail because `litellm` is unavailable. The requirements declare these packages, so either the active environment was not installed from requirements or the setup process is not being followed consistently. A clean CI run remains unproven.
 
 ### C-03: Web production build remains broken
 
-**Severity:** High  
+**Severity:** High
 **Evidence:** `npm run build` output.
 
 Next.js cannot load `@next/swc-win32-x64-msvc`; the installed native module is reported as not a valid Win32 application. Type-check success is insufficient. The repository needs a clean lockfile-based install and successful production build on the supported development/CI platform.
 
 ### C-04: Web Dockerfile does not match the current repository-root build context
 
-**Severity:** Critical; Docker build verification pending  
+**Severity:** Critical; Docker build verification pending
 **Evidence:** `infra/docker/docker-compose.yml:115-116`, `apps/web/Dockerfile:9-12`.
 
 Compose builds the web service with repository root as context and `apps/web/Dockerfile`, but the Dockerfile runs `COPY package*.json ./` and `COPY . .`, which now read from the repository root rather than `apps/web`. The root does not contain the web package manifest in the expected location. The Dockerfile must either use `apps/web` as its context or copy `apps/web/package*.json` and `apps/web/` explicitly.
 
 ### C-05: Container service URLs are inconsistent
 
-**Severity:** High  
+**Severity:** High
 **Evidence:** resolved Compose output and `.env`-derived environment values.
 
 Inside the Compose network, API configuration still uses `LLM_ROUTER_URL=http://localhost:8001`, while worker configuration uses `http://llm-router:8001`. API-to-router calls from the API container will target the API container itself, not the router. Similar localhost defaults remain in signaling, MinIO, Unity, and Android configurations. Container-internal service URLs must use service DNS names and be separated from host/device development URLs.

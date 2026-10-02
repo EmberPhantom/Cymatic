@@ -14,15 +14,15 @@ namespace Cymatic.Prefabs
         [SerializeField] private string style = "modern";
         [SerializeField] private bool hasWindows = true;
         [SerializeField] private bool hasDoors = true;
-        
+
         [Header("Dimensions")]
         [SerializeField] private Vector3 roomSize = new Vector3(10f, 3f, 10f);
         [SerializeField] private float ceilingHeight = 3f;
-        
+
         [Header("Connections")]
         [SerializeField] private Transform[] doorPositions;
         [SerializeField] private Transform[] windowPositions;
-        
+
         public string RoomName => roomName;
         public RoomType RoomType => roomType;
         public bool IsFurnished => isFurnished;
@@ -31,30 +31,30 @@ namespace Cymatic.Prefabs
         public float CeilingHeight => ceilingHeight;
         public Transform[] DoorPositions => doorPositions;
         public Transform[] WindowPositions => windowPositions;
-        
+
         public Bounds GetRoomBounds()
         {
             var collider = GetComponent<BoxCollider>();
             if (collider != null)
                 return collider.bounds;
-            
+
             return new Bounds(transform.position, new Vector3(roomSize.x, ceilingHeight, roomSize.z));
         }
-        
+
         public bool IsPointInside(Vector3 worldPoint)
         {
             var bounds = GetRoomBounds();
             return bounds.Contains(worldPoint);
         }
-        
+
         public Transform GetNearestDoor(Vector3 fromPosition)
         {
             if (doorPositions == null || doorPositions.Length == 0)
                 return transform;
-            
+
             Transform nearest = null;
             float minDist = float.MaxValue;
-            
+
             foreach (var door in doorPositions)
             {
                 if (door == null) continue;
@@ -67,12 +67,12 @@ namespace Cymatic.Prefabs
             }
             return nearest;
         }
-        
+
         private void OnDrawGizmosSelected()
         {
             Gizmos.color = Color.cyan;
             Gizmos.DrawWireCube(transform.position + Vector3.up * (ceilingHeight / 2f), new Vector3(roomSize.x, ceilingHeight, roomSize.z));
-            
+
             Gizmos.color = Color.green;
             if (doorPositions != null)
             {
@@ -84,7 +84,7 @@ namespace Cymatic.Prefabs
             }
         }
     }
-    
+
     public enum RoomType
     {
         Generic,

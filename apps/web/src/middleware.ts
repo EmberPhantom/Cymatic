@@ -6,7 +6,7 @@ export function middleware(request: NextRequest) {
   // Edge runtime cannot verify HS256 without secret; at least enforce JWT shape
   // so garbage/empty cookies don't pass as authenticated (full verify in API).
   const token = raw.split(".").length === 3 ? raw : undefined
-  const isAuthPage = request.nextUrl.pathname.startsWith("/login") || 
+  const isAuthPage = request.nextUrl.pathname.startsWith("/login") ||
                      request.nextUrl.pathname.startsWith("/register")
   const isDashboard = request.nextUrl.pathname.startsWith("/dashboard") ||
                       request.nextUrl.pathname.startsWith("/projects")

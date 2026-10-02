@@ -1,4 +1,5 @@
 """GET /v1/projects/{id}/scene-package/view - mobile browser viewer read path."""
+
 import json
 import uuid
 
@@ -15,11 +16,21 @@ from app.services.minio_client import get_minio_client
 
 async def _ready_scene_package(db_session, test_project) -> dict:
     body = {
-        "metadata": {"format": "cymatic_v1", "spec_version": 1, "generated_at": "2026-01-01T00:00:00+00:00"},
+        "metadata": {
+            "format": "cymatic_v1",
+            "spec_version": 1,
+            "generated_at": "2026-01-01T00:00:00+00:00",
+        },
         "domain": "real_estate",
         "entities": [],
         "navigation": {"points": [], "paths": [], "default_start_point": "start"},
-        "lighting": {"preset": "neutral", "time_of_day": "noon", "ambient_intensity": 0.5, "sun_direction": [0.5, -1, 0.3], "custom_lights": []},
+        "lighting": {
+            "preset": "neutral",
+            "time_of_day": "noon",
+            "ambient_intensity": 0.5,
+            "sun_direction": [0.5, -1, 0.3],
+            "custom_lights": [],
+        },
         "copilot_policy": {},
         "performance_budget": {},
         "asset_manifest": {},
@@ -72,26 +83,38 @@ async def _other_org_headers(db_session) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_view_scene_package_requires_published_project(client, auth_headers, test_project):
-    resp = await client.get(f"/v1/projects/{test_project.id}/scene-package/view", headers=auth_headers)
+async def test_view_scene_package_requires_published_project(
+    client, auth_headers, test_project
+):
+    resp = await client.get(
+        f"/v1/projects/{test_project.id}/scene-package/view", headers=auth_headers
+    )
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_view_scene_package_404_before_scene_ready(client, auth_headers, db_session, test_project):
+async def test_view_scene_package_404_before_scene_ready(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
-    resp = await client.get(f"/v1/projects/{test_project.id}/scene-package/view", headers=auth_headers)
+    resp = await client.get(
+        f"/v1/projects/{test_project.id}/scene-package/view", headers=auth_headers
+    )
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_view_scene_package_returns_scene_json(client, auth_headers, db_session, test_project):
+async def test_view_scene_package_returns_scene_json(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
     expected = await _ready_scene_package(db_session, test_project)
 
-    resp = await client.get(f"/v1/projects/{test_project.id}/scene-package/view", headers=auth_headers)
+    resp = await client.get(
+        f"/v1/projects/{test_project.id}/scene-package/view", headers=auth_headers
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["project"]["id"] == test_project.id
@@ -104,5 +127,7 @@ async def test_view_scene_package_404_for_other_org(client, db_session, test_pro
     await db_session.commit()
     other_headers = await _other_org_headers(db_session)
 
-    resp = await client.get(f"/v1/projects/{test_project.id}/scene-package/view", headers=other_headers)
+    resp = await client.get(
+        f"/v1/projects/{test_project.id}/scene-package/view", headers=other_headers
+    )
     assert resp.status_code == 404

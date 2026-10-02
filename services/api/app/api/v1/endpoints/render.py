@@ -77,7 +77,9 @@ class RenderSessionResponse(BaseModel):
     ended_at: Optional[datetime] = None
 
 
-async def _check_device(db: AsyncSession, user: User, device_id: str, app_version: str) -> MobileDevice:
+async def _check_device(
+    db: AsyncSession, user: User, device_id: str, app_version: str
+) -> MobileDevice:
     """Register-or-verify a mobile device. Revoked devices get 403."""
     if _version_tuple(app_version) < _version_tuple(settings.MOBILE_MIN_APP_VERSION):
         raise HTTPException(
@@ -92,8 +94,10 @@ async def _check_device(db: AsyncSession, user: User, device_id: str, app_versio
     now = datetime.now(timezone.utc)
     if device is None:
         device = MobileDevice(
-            user_id=user.id, device_id=device_id,
-            app_version=app_version, last_seen_at=now,
+            user_id=user.id,
+            device_id=device_id,
+            app_version=app_version,
+            last_seen_at=now,
         )
         db.add(device)
         await db.flush()
@@ -105,7 +109,9 @@ async def _check_device(db: AsyncSession, user: User, device_id: str, app_versio
     return device
 
 
-async def _get_owned_session(db: AsyncSession, session_id: int, user: User) -> StreamSession:
+async def _get_owned_session(
+    db: AsyncSession, session_id: int, user: User
+) -> StreamSession:
     session = await db.scalar(
         select(StreamSession).where(
             StreamSession.id == session_id, StreamSession.user_id == user.id
@@ -116,14 +122,20 @@ async def _get_owned_session(db: AsyncSession, session_id: int, user: User) -> S
     return session
 
 
-@router.post("/sessions", response_model=RenderSessionResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sessions",
+    response_model=RenderSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_render_session(
     session_data: RenderSessionCreate,
     current_user: User = Depends(require_creator),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a native render session and hand the renderer everything it needs."""
-    device = await _check_device(db, current_user, session_data.device_id, session_data.app_version)
+    device = await _check_device(
+        db, current_user, session_data.device_id, session_data.app_version
+    )
 
     project = await db.scalar(
         select(Project).where(
@@ -134,19 +146,27 @@ async def create_render_session(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if project.status != ProjectStatus.PUBLISHED:
-        raise HTTPException(status_code=400, detail="Project must be published to render")
+        raise HTTPException(
+            status_code=400, detail="Project must be published to render"
+        )
 
     if not settings.ENABLE_MULTIPLAYER:
         active = await db.scalar(
             select(StreamSession).where(
                 StreamSession.user_id == current_user.id,
                 StreamSession.status.in_(
-                    [StreamSessionStatus.PENDING, StreamSessionStatus.CONNECTING, StreamSessionStatus.ACTIVE]
+                    [
+                        StreamSessionStatus.PENDING,
+                        StreamSessionStatus.CONNECTING,
+                        StreamSessionStatus.ACTIVE,
+                    ]
                 ),
             )
         )
         if active is not None:
-            raise HTTPException(status_code=409, detail="A render session is already active")
+            raise HTTPException(
+                status_code=409, detail="A render session is already active"
+            )
 
     now = datetime.now(timezone.utc)
     session = StreamSession(
@@ -203,27 +223,39 @@ async def render_heartbeat(
     # Cutoff pushed into SQL: sessions never heartbeated (NULL) or silent
     # past the timeout. Bounded scan, no full-table Python filter.
     stale = (
-        await db.execute(
-            select(StreamSession)
-            .where(
-                StreamSession.user_id == current_user.id,
-                StreamSession.id != session_id,
-                StreamSession.status.in_(
-                    [StreamSessionStatus.PENDING, StreamSessionStatus.CONNECTING, StreamSessionStatus.ACTIVE]
-                ),
-                (StreamSession.last_heartbeat_at.is_(None))
-                | (StreamSession.last_heartbeat_at < cutoff_dt),
+        (
+            await db.execute(
+                select(StreamSession)
+                .where(
+                    StreamSession.user_id == current_user.id,
+                    StreamSession.id != session_id,
+                    StreamSession.status.in_(
+                        [
+                            StreamSessionStatus.PENDING,
+                            StreamSessionStatus.CONNECTING,
+                            StreamSessionStatus.ACTIVE,
+                        ]
+                    ),
+                    (StreamSession.last_heartbeat_at.is_(None))
+                    | (StreamSession.last_heartbeat_at < cutoff_dt),
+                )
+                .limit(100)
             )
-            .limit(100)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     swept = 0
     for s in stale:
         s.status = StreamSessionStatus.DISCONNECTED
         s.ended_at = now
         swept += 1
     await db.commit()
-    return {"session_id": session.id, "status": session.status.value, "swept_stale": swept}
+    return {
+        "session_id": session.id,
+        "status": session.status.value,
+        "swept_stale": swept,
+    }
 
 
 @router.post("/sessions/{session_id}/end")
@@ -279,7 +311,11 @@ async def render_voice_audio(
         if not transcript:
             return JSONResponse(
                 status_code=502,
-                content={"transcript": "", "response": "I didn't catch that.", "audio_data": None},
+                content={
+                    "transcript": "",
+                    "response": "I didn't catch that.",
+                    "audio_data": None,
+                },
             )
 
         voice_session = VoiceSession(session_id=session.id, transcript=transcript)
@@ -296,7 +332,9 @@ async def render_voice_audio(
         )
         chat_resp.raise_for_status()
         data = chat_resp.json()
-        response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        response_text = (
+            data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        )
         voice_session.response_text = response_text
 
         tts_audio: Any = None
@@ -318,7 +356,11 @@ async def render_voice_audio(
             )
 
         await db.commit()
-        return {"transcript": transcript, "response": response_text, "audio_data": tts_audio}
+        return {
+            "transcript": transcript,
+            "response": response_text,
+            "audio_data": tts_audio,
+        }
     except httpx.ConnectError:
         logger.warning(
             "render_voice_unavailable",
@@ -328,12 +370,20 @@ async def render_voice_audio(
         )
         return JSONResponse(
             status_code=503,
-            content={"transcript": "", "response": "Service temporarily unavailable.", "audio_data": None},
+            content={
+                "transcript": "",
+                "response": "Service temporarily unavailable.",
+                "audio_data": None,
+            },
         )
     except httpx.TimeoutException:
         return JSONResponse(
             status_code=504,
-            content={"transcript": "", "response": "Service temporarily unavailable.", "audio_data": None},
+            content={
+                "transcript": "",
+                "response": "Service temporarily unavailable.",
+                "audio_data": None,
+            },
         )
     except httpx.HTTPStatusError as e:
         logger.warning(
@@ -345,5 +395,9 @@ async def render_voice_audio(
         )
         return JSONResponse(
             status_code=502,
-            content={"transcript": "", "response": "Service temporarily unavailable.", "audio_data": None},
+            content={
+                "transcript": "",
+                "response": "Service temporarily unavailable.",
+                "audio_data": None,
+            },
         )

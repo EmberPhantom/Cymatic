@@ -49,7 +49,9 @@ class TenantScopingMiddleware(BaseHTTPMiddleware):
     }
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.EXEMPT_PATHS or request.url.path.startswith("/static"):
+        if request.url.path in self.EXEMPT_PATHS or request.url.path.startswith(
+            "/static"
+        ):
             return await call_next(request)
         request.state.request_id = str(uuid.uuid4())
         start_time = time.time()

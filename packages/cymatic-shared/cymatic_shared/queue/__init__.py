@@ -1,4 +1,5 @@
 """Shared job queue infrastructure - Redis-based task queue."""
+
 import json
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -73,7 +74,11 @@ class JobQueue:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if self._client is not None and running is not None and self._loop is not running:
+        if (
+            self._client is not None
+            and running is not None
+            and self._loop is not running
+        ):
             # Stale client bound to a previous (possibly closed) loop, e.g.
             # across pytest tests or uvicorn reloads. Drop and recreate.
             self._client = None
@@ -108,15 +113,23 @@ class JobQueue:
             pipe.zadd(queue_key, {job_json: job.priority.value})
             pipe.hset(
                 f"job:{job.id}",
-                mapping={"data": job_json, "status": job.status.value, "queue": queue_name},
+                mapping={
+                    "data": job_json,
+                    "status": job.status.value,
+                    "queue": queue_name,
+                },
             )
             pipe.expire(f"job:{job.id}", 604800)
             await pipe.execute()
 
-        logger.info("job_enqueued", job_id=job.id, queue=queue_name, priority=job.priority.name)
+        logger.info(
+            "job_enqueued", job_id=job.id, queue=queue_name, priority=job.priority.name
+        )
         return job.id
 
-    async def acquire_job_lock(self, job_id: str, worker_id: str, ttl: int | None = None) -> str | None:
+    async def acquire_job_lock(
+        self, job_id: str, worker_id: str, ttl: int | None = None
+    ) -> str | None:
         ttl = ttl or self.LOCK_TTL
         lock_token = str(uuid.uuid4())
         lock_key = f"job:lock:{job_id}"
@@ -127,7 +140,9 @@ class JobQueue:
                 f"job:{job_id}",
                 mapping={
                     "lock_token": lock_token,
-                    "lock_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat(),
+                    "lock_expires_at": (
+                        datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                    ).isoformat(),
                     "worker_id": worker_id,
                 },
             )
@@ -146,7 +161,9 @@ class JobQueue:
         result = await self.client.eval(lua_script, 1, lock_key, lock_token)
         return result == 1
 
-    async def renew_job_lock(self, job_id: str, lock_token: str, ttl: int | None = None) -> bool:
+    async def renew_job_lock(
+        self, job_id: str, lock_token: str, ttl: int | None = None
+    ) -> bool:
         ttl = ttl or self.LOCK_TTL
         lock_key = f"job:lock:{job_id}"
         lua_script = """
@@ -160,12 +177,18 @@ class JobQueue:
         if result == 1:
             await self.client.hset(
                 f"job:{job_id}",
-                mapping={"lock_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()},
+                mapping={
+                    "lock_expires_at": (
+                        datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                    ).isoformat()
+                },
             )
             return True
         return False
 
-    async def dequeue(self, queue_name: str = "generation", worker_id: str | None = None) -> Optional[Job]:
+    async def dequeue(
+        self, queue_name: str = "generation", worker_id: str | None = None
+    ) -> Optional[Job]:
         await self.connect()
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
 
@@ -267,7 +290,9 @@ class JobQueue:
             logger.error("job_failed_max_retries", job_id=job.id, error=error)
         else:
             job.status = JobStatus.RETRY
-            logger.warning("job_retry", job_id=job.id, attempt=job.retry_count, error=error)
+            logger.warning(
+                "job_retry", job_id=job.id, attempt=job.retry_count, error=error
+            )
 
         await self.client.hset(
             f"job:{job.id}",
@@ -275,7 +300,7 @@ class JobQueue:
         )
 
         if job.status == JobStatus.RETRY:
-            delay = min(2 ** job.retry_count * 5, 300)
+            delay = min(2**job.retry_count * 5, 300)
             # Resolve original queue from stored hash to avoid job.type fragmentation (e.g., generate_spec vs generation)
             stored_queue: str | None = queue_name
             if not stored_queue:
@@ -287,6 +312,7 @@ class JobQueue:
                 except Exception:
                     stored_queue = None
             target_queue = stored_queue or job.type
+
             # Non-blocking delayed requeue; task is held by event loop, but retry survives restart via job:{id} status RETRY
             async def _delayed_requeue():
                 await asyncio.sleep(delay)
@@ -295,6 +321,7 @@ class JobQueue:
                     await self.enqueue(job, target_queue)
                 except Exception as e:
                     logger.error("delayed_requeue_failed", job_id=job.id, error=str(e))
+
             asyncio.create_task(_delayed_requeue())
 
     async def get_queue_stats(self, queue_name: str = "generation") -> dict:
@@ -332,7 +359,9 @@ class JobQueue:
             stored_queue = raw
         except Exception:
             stored_queue = None
-        queue_key = self._queues.get(stored_queue or "", f"queue:{stored_queue or job.type}")
+        queue_key = self._queues.get(
+            stored_queue or "", f"queue:{stored_queue or job.type}"
+        )
         # Job JSON changes across state transitions, so exact-match ZREM
         # often misses: scan known queues (bounded) and remove by parsed id.
         queues_to_try = [queue_key, *self._queues.values()]
@@ -369,9 +398,11 @@ JOB_HANDLERS: dict[str, Callable] = {}
 
 def register_job_handler(job_type: str):
     """Decorator to register job handlers."""
+
     def decorator(func: Callable):
         JOB_HANDLERS[job_type] = func
         return func
+
     return decorator
 
 

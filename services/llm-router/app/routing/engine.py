@@ -43,7 +43,9 @@ class RoutingEngine:
     def __init__(self) -> None:
         # Deep copy so per-engine toggles (e.g. LOCAL enabled flag) never
         # mutate the global DEFAULT_PROVIDERS shared across engines/tests.
-        self.providers: dict[ProviderName, ProviderConfig] = copy.deepcopy(DEFAULT_PROVIDERS)
+        self.providers: dict[ProviderName, ProviderConfig] = copy.deepcopy(
+            DEFAULT_PROVIDERS
+        )
         self.policies: dict[str, RoutingPolicy] = {}
         self.status: dict[ProviderName, ProviderStatus] = {}
         self._apply_provider_flags()
@@ -105,7 +107,9 @@ class RoutingEngine:
             if apinex_enabled:
                 try:
                     apinex.api_key = apinex_key
-                    apinex.base_url = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+                    apinex.base_url = getattr(
+                        settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1"
+                    )
                 except Exception:
                     pass
 
@@ -145,13 +149,18 @@ class RoutingEngine:
         )
         # --- legacy inline table follows (now unreachable, kept for reference
         # during review; delete after one green cycle) ---
-    def get_policy(self, task_type: TaskType, sensitivity: SensitivityLevel) -> RoutingPolicy:
+
+    def get_policy(
+        self, task_type: TaskType, sensitivity: SensitivityLevel
+    ) -> RoutingPolicy:
         """Get routing policy for task and sensitivity (fail-closed to paid)."""
         key = f"{task_type}_{sensitivity}"
         policy = self.policies.get(key)
         if policy is not None:
             return policy
-        logger.warning("routing_policy_missing", task=str(task_type), sensitivity=str(sensitivity))
+        logger.warning(
+            "routing_policy_missing", task=str(task_type), sensitivity=str(sensitivity)
+        )
         # Fail-closed: never fall back to free GROQ/OPENROUTER for unknown combos,
         # especially TENANT_SENSITIVE/REGULATED. Default to paid OpenAI.
         return RoutingPolicy(
@@ -160,11 +169,17 @@ class RoutingEngine:
             preferred_profile="gpt-4o-mini",
             fallback_profile=None,
             allowed_providers=[ProviderName.OPENAI],
-            blocked_providers=[ProviderName.GROQ, ProviderName.OPENROUTER, ProviderName.APINEX],
+            blocked_providers=[
+                ProviderName.GROQ,
+                ProviderName.OPENROUTER,
+                ProviderName.APINEX,
+            ],
         )
 
     def route(
-        self, task_type: TaskType, sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
+        self,
+        task_type: TaskType,
+        sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL,
     ) -> RoutingDecision:
         """Route request to best provider with circuit breaker protection (single source of truth)."""
         policy = self.get_policy(task_type, sensitivity)
@@ -299,8 +314,12 @@ class RoutingEngine:
             else:
                 # On success, decay error count if circuit closed
                 if healthy and self.status[provider_key].error_count > 0:
-                    self.status[provider_key].error_count = max(0, self.status[provider_key].error_count - 1)
-            self.status[provider_key].last_check = datetime.now(timezone.utc).isoformat()
+                    self.status[provider_key].error_count = max(
+                        0, self.status[provider_key].error_count - 1
+                    )
+            self.status[provider_key].last_check = datetime.now(
+                timezone.utc
+            ).isoformat()
 
     def get_circuit_breaker_status(self) -> dict[str, dict[str, Any]]:
         """Get circuit breaker status for all providers."""
@@ -311,7 +330,11 @@ class RoutingEngine:
         self.providers[provider.name] = provider
 
     def update_provider_status(
-        self, name: ProviderName, healthy: bool, latency_ms: float = 0, error_count: int = 0
+        self,
+        name: ProviderName,
+        healthy: bool,
+        latency_ms: float = 0,
+        error_count: int = 0,
     ) -> None:
         """Update provider health status."""
         self.status[name].healthy = healthy
@@ -334,6 +357,8 @@ def route_request(
     return routing_engine.route(task_type, sensitivity)
 
 
-def get_routing_policy(task_type: TaskType, sensitivity: SensitivityLevel) -> RoutingPolicy:
+def get_routing_policy(
+    task_type: TaskType, sensitivity: SensitivityLevel
+) -> RoutingPolicy:
     """Get routing policy."""
     return routing_engine.get_policy(task_type, sensitivity)

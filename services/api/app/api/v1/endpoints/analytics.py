@@ -66,7 +66,9 @@ async def get_project_analytics(
 
     # Aggregate sessions via SQL to avoid N+1 / loading all rows
     total_sessions_res = await db.execute(
-        select(func.count(StreamSession.id)).where(StreamSession.project_id == project_id)
+        select(func.count(StreamSession.id)).where(
+            StreamSession.project_id == project_id
+        )
     )
     total_sessions = int(total_sessions_res.scalar() or 0)
 
@@ -116,9 +118,7 @@ async def get_project_analytics(
         )
     )
     completed_sessions = int(completed_sessions_res.scalar() or 0)
-    completion_rate = (
-        completed_sessions / total_sessions if total_sessions else 0.0
-    )
+    completion_rate = completed_sessions / total_sessions if total_sessions else 0.0
 
     return ProjectAnalytics(
         project_id=project_id,
@@ -154,11 +154,14 @@ async def get_session_analytics(
 
     # Total via COUNT (exact even for huge sessions); breakdown scans only the
     # latest MAX_EVENTS_SCAN rows so a 10k-event session can't OOM the worker.
-    total_events = await db.scalar(
-        select(func.count())
-        .select_from(RuntimeEvent)
-        .where(RuntimeEvent.session_id == session_id)
-    ) or 0
+    total_events = (
+        await db.scalar(
+            select(func.count())
+            .select_from(RuntimeEvent)
+            .where(RuntimeEvent.session_id == session_id)
+        )
+        or 0
+    )
     events_result = await db.execute(
         select(RuntimeEvent)
         .where(RuntimeEvent.session_id == session_id)

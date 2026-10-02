@@ -1,4 +1,5 @@
 """Worker MinIO client - lazy-loaded singleton."""
+
 from cymatic_shared.services.minio_client import MinIOClient
 from app.core.config import get_settings
 import structlog

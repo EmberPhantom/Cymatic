@@ -33,7 +33,7 @@ export interface Entity {
   children?: Entity[];
 }
 
-export type EntityType = 
+export type EntityType =
   | 'room'
   | 'wall'
   | 'floor'
@@ -99,7 +99,7 @@ export interface CopilotPolicy {
 
 export type CopilotPersonality = 'helpful_guide' | 'expert_narrator' | 'friendly_assistant' | 'professional_host';
 
-export type CopilotAction = 
+export type CopilotAction =
   | 'highlight_object'
   | 'show_label'
   | 'move_to_point'

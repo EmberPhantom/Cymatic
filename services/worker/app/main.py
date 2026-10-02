@@ -1,4 +1,5 @@
 """CYMATIC Worker - Background job processor"""
+
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
@@ -43,7 +44,12 @@ async def worker_loop():
 
                 job = await job_queue.dequeue(queue_name, worker_id)
                 if job:
-                    logger.info("processing_job", worker_id=worker_id, job_id=job.id, type=job.type)
+                    logger.info(
+                        "processing_job",
+                        worker_id=worker_id,
+                        job_id=job.id,
+                        type=job.type,
+                    )
 
                     async def _heartbeat(j: Job):
                         while True:
@@ -56,15 +62,28 @@ async def worker_loop():
 
                     heartbeat_task = asyncio.create_task(_heartbeat(job))
                     try:
-                        result = await asyncio.wait_for(process_job(job), timeout=settings.WORKER_JOB_TIMEOUT_SECONDS)
+                        result = await asyncio.wait_for(
+                            process_job(job),
+                            timeout=settings.WORKER_JOB_TIMEOUT_SECONDS,
+                        )
                         await job_queue.complete_job(job, result)
                     except asyncio.TimeoutError:
                         logger.error("job_timeout", worker_id=worker_id, job_id=job.id)
-                        await job_queue.fail_job(job, f"Job timeout after {settings.WORKER_JOB_TIMEOUT_SECONDS}s", queue_name=queue_name)
+                        await job_queue.fail_job(
+                            job,
+                            f"Job timeout after {settings.WORKER_JOB_TIMEOUT_SECONDS}s",
+                            queue_name=queue_name,
+                        )
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
-                        logger.error("job_failed", worker_id=worker_id, job_id=job.id, error=str(e), exc_info=True)
+                        logger.error(
+                            "job_failed",
+                            worker_id=worker_id,
+                            job_id=job.id,
+                            error=str(e),
+                            exc_info=True,
+                        )
                         await job_queue.fail_job(job, str(e), queue_name=queue_name)
                     finally:
                         heartbeat_task.cancel()
@@ -82,7 +101,9 @@ async def worker_loop():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error("worker_error", worker_id=worker_id, error=str(e), exc_info=True)
+            logger.error(
+                "worker_error", worker_id=worker_id, error=str(e), exc_info=True
+            )
             await asyncio.sleep(5)
 
     logger.info("worker_stopped", worker_id=worker_id)
@@ -163,4 +184,5 @@ from app.tasks import generation  # noqa: F401, E402
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8002)

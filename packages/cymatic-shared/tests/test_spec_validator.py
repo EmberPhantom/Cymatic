@@ -8,17 +8,41 @@ def valid_spec():
         "domain": "real_estate",
         "metadata": {"title": "Test", "description": "Test", "version": "1"},
         "entities": [
-            {"id": "room-1", "type": "room", "name": "Living Room", "position": [0, 0, 0], "properties": {"size": [5, 4, 3]}},
-            {"id": "nav-1", "type": "navigation_point", "name": "Entry", "position": [0, 1.6, 0]},
+            {
+                "id": "room-1",
+                "type": "room",
+                "name": "Living Room",
+                "position": [0, 0, 0],
+                "properties": {"size": [5, 4, 3]},
+            },
+            {
+                "id": "nav-1",
+                "type": "navigation_point",
+                "name": "Entry",
+                "position": [0, 1.6, 0],
+            },
         ],
         "navigation": {
             "points": [{"id": "nav-1", "name": "Entry", "position": [0, 1.6, 0]}],
             "paths": [],
             "default_start_point": "nav-1",
         },
-        "lighting": {"preset": "warm", "time_of_day": "evening", "ambient_intensity": 0.8},
-        "copilot_policy": {"enabled": True, "languages": ["en"], "default_language": "en"},
-        "performance_budget": {"target_fps": 60, "max_triangles": 100000, "max_draw_calls": 50, "texture_budget_mb": 100},
+        "lighting": {
+            "preset": "warm",
+            "time_of_day": "evening",
+            "ambient_intensity": 0.8,
+        },
+        "copilot_policy": {
+            "enabled": True,
+            "languages": ["en"],
+            "default_language": "en",
+        },
+        "performance_budget": {
+            "target_fps": 60,
+            "max_triangles": 100000,
+            "max_draw_calls": 50,
+            "texture_budget_mb": 100,
+        },
     }
 
 
@@ -32,7 +56,14 @@ def test_missing_required_fields_are_reported_without_schema_crash():
     result = validate_spec({"domain": "real_estate"})
     fields = {error.field for error in result.errors}
     assert result.valid is False
-    assert {"metadata", "entities", "navigation", "lighting", "copilot_policy", "performance_budget"} <= fields
+    assert {
+        "metadata",
+        "entities",
+        "navigation",
+        "lighting",
+        "copilot_policy",
+        "performance_budget",
+    } <= fields
 
 
 def test_duplicate_entity_and_invalid_default_navigation_are_rejected():
@@ -56,7 +87,14 @@ def test_heritage_requires_poi():
 
 def test_high_performance_budgets_generate_warnings_not_errors():
     spec = valid_spec()
-    spec["performance_budget"].update({"max_triangles": 90000, "max_draw_calls": 45, "texture_budget_mb": 90, "target_fps": 20})
+    spec["performance_budget"].update(
+        {
+            "max_triangles": 90000,
+            "max_draw_calls": 45,
+            "texture_budget_mb": 90,
+            "target_fps": 20,
+        }
+    )
 
     result = validate_spec(spec)
     assert result.valid is True
@@ -74,7 +112,9 @@ def test_unknown_path_points_are_errors():
 
 def test_navigation_cycles_warn():
     spec = valid_spec()
-    spec["navigation"]["points"].append({"id": "nav-2", "name": "B", "position": [3, 1.6, 0]})
+    spec["navigation"]["points"].append(
+        {"id": "nav-2", "name": "B", "position": [3, 1.6, 0]}
+    )
     spec["navigation"]["paths"] = [
         {"from": "nav-1", "to": "nav-2", "type": "walk"},
         {"from": "nav-2", "to": "nav-1", "type": "walk"},
@@ -89,8 +129,13 @@ def test_excess_rooms_warn():
     spec = valid_spec()
     for i in range(100, 121):
         spec["entities"].append(
-            {"id": f"room-{i}", "type": "room", "name": f"R{i}", "position": [0, 0, 0],
-             "properties": {"size": [5, 4, 3]}}
+            {
+                "id": f"room-{i}",
+                "type": "room",
+                "name": f"R{i}",
+                "position": [0, 0, 0],
+                "properties": {"size": [5, 4, 3]},
+            }
         )
 
     result = validate_spec(spec)
@@ -102,8 +147,14 @@ def test_malformed_rotation_rejected_at_schema():
     # Schema pins rotation to exactly 3; business rule is defense-in-depth.
     spec = valid_spec()
     spec["entities"].append(
-        {"id": "room-bad-rot", "type": "room", "name": "Bad", "position": [0, 0, 0],
-         "rotation": [0, 0], "properties": {"size": [5, 4, 3]}}
+        {
+            "id": "room-bad-rot",
+            "type": "room",
+            "name": "Bad",
+            "position": [0, 0, 0],
+            "rotation": [0, 0],
+            "properties": {"size": [5, 4, 3]},
+        }
     )
 
     result = validate_spec(spec)

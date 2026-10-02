@@ -1,4 +1,5 @@
 """Shared MinIO client for object storage operations."""
+
 import asyncio
 import io
 from datetime import timedelta
@@ -25,8 +26,16 @@ class MinIOClient:
     _pool_manager: PoolManager | None = None
     _pool_lock = Lock()
 
-    def __init__(self, endpoint: str, access_key: str, secret_key: str, bucket_name: str, region: str = "us-east-1",
-                 pool_size: int = 10, max_retries: int = 3):
+    def __init__(
+        self,
+        endpoint: str,
+        access_key: str,
+        secret_key: str,
+        bucket_name: str,
+        region: str = "us-east-1",
+        pool_size: int = 10,
+        max_retries: int = 3,
+    ):
         with MinIOClient._pool_lock:
             if MinIOClient._pool_manager is None:
                 MinIOClient._pool_manager = PoolManager(
@@ -61,9 +70,13 @@ class MinIOClient:
                 self.client.make_bucket(self.bucket_name, location=self.region)
                 logger.info("bucket_created", bucket=self.bucket_name)
         except S3Error as e:
-            logger.error("bucket_creation_failed", bucket=self.bucket_name, error=str(e))
+            logger.error(
+                "bucket_creation_failed", bucket=self.bucket_name, error=str(e)
+            )
         except OSError as e:
-            logger.warning("bucket_check_deferred", bucket=self.bucket_name, error=str(e))
+            logger.warning(
+                "bucket_check_deferred", bucket=self.bucket_name, error=str(e)
+            )
 
     # ---- Sync core (blocking) ----
     def _upload_sync(
@@ -125,7 +138,9 @@ class MinIOClient:
         metadata: dict | None = None,
     ) -> str:
         try:
-            return await asyncio.to_thread(self._upload_sync, object_name, data, content_type, metadata)
+            return await asyncio.to_thread(
+                self._upload_sync, object_name, data, content_type, metadata
+            )
         except S3Error as e:
             logger.error("data_upload_failed", object=object_name, error=str(e))
             raise
@@ -153,7 +168,9 @@ class MinIOClient:
         expires: timedelta = timedelta(hours=1),
     ) -> str:
         def _url():
-            return self.client.presigned_get_object(self.bucket_name, object_name, expires=expires)
+            return self.client.presigned_get_object(
+                self.bucket_name, object_name, expires=expires
+            )
 
         try:
             return await asyncio.to_thread(_url)
@@ -171,7 +188,9 @@ class MinIOClient:
         """Upload a file from local path."""
         try:
             self.client.fput_object(
-                self.bucket_name, object_name, file_path,
+                self.bucket_name,
+                object_name,
+                file_path,
                 content_type=content_type or "application/octet-stream",
                 metadata=metadata,
             )
@@ -192,8 +211,12 @@ class MinIOClient:
         """Upload from a file-like stream."""
         try:
             self.client.put_object(
-                self.bucket_name, object_name, stream,
-                length=length, content_type=content_type, metadata=metadata,
+                self.bucket_name,
+                object_name,
+                stream,
+                length=length,
+                content_type=content_type,
+                metadata=metadata,
             )
             logger.info("stream_uploaded", object=object_name, size=length)
             return object_name
@@ -222,9 +245,13 @@ class MinIOClient:
         try:
             m = method.upper()
             if m == "PUT":
-                url = self.client.presigned_put_object(self.bucket_name, object_name, expires=expires)
+                url = self.client.presigned_put_object(
+                    self.bucket_name, object_name, expires=expires
+                )
             else:
-                url = self.client.presigned_get_object(self.bucket_name, object_name, expires=expires)
+                url = self.client.presigned_get_object(
+                    self.bucket_name, object_name, expires=expires
+                )
             logger.info("presigned_url_generated", object=object_name, method=m)
             return url
         except S3Error as e:
@@ -238,7 +265,9 @@ class MinIOClient:
     ) -> str:
         """Presigned URL for uploading."""
         try:
-            url = self.client.presigned_put_object(self.bucket_name, object_name, expires=expires)
+            url = self.client.presigned_put_object(
+                self.bucket_name, object_name, expires=expires
+            )
             logger.info("presigned_put_url_generated", object=object_name)
             return url
         except S3Error as e:
@@ -260,24 +289,39 @@ class MinIOClient:
     def list_objects(self, prefix: str = "", recursive: bool = True) -> list[dict]:
         try:
             return [
-                {"name": o.object_name, "size": o.size,
-                 "last_modified": o.last_modified, "etag": o.etag}
-                for o in self.client.list_objects(self.bucket_name, prefix=prefix, recursive=recursive)
+                {
+                    "name": o.object_name,
+                    "size": o.size,
+                    "last_modified": o.last_modified,
+                    "etag": o.etag,
+                }
+                for o in self.client.list_objects(
+                    self.bucket_name, prefix=prefix, recursive=recursive
+                )
             ]
         except S3Error as e:
             logger.error("list_objects_failed", prefix=prefix, error=str(e))
             raise
 
-    def copy_object(self, source_object: str, dest_object: str, metadata: dict | None = None) -> str:
+    def copy_object(
+        self, source_object: str, dest_object: str, metadata: dict | None = None
+    ) -> str:
         try:
             self.client.copy_object(
-                self.bucket_name, dest_object,
-                CopySource(self.bucket_name, source_object), metadata=metadata,
+                self.bucket_name,
+                dest_object,
+                CopySource(self.bucket_name, source_object),
+                metadata=metadata,
             )
             logger.info("object_copied", source=source_object, dest=dest_object)
             return dest_object
         except S3Error as e:
-            logger.error("object_copy_failed", source=source_object, dest=dest_object, error=str(e))
+            logger.error(
+                "object_copy_failed",
+                source=source_object,
+                dest=dest_object,
+                error=str(e),
+            )
             raise
 
     def object_exists(self, object_name: str) -> bool:

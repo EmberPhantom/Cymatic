@@ -33,7 +33,7 @@ class VoiceManager(private val context: Context) {
         channelConfig,
         audioFormat
     ).coerceAtLeast(2048) * 2
-    
+
     private var audioChannel = Channel<ByteArray>(10)
     private val scope = CoroutineScope(Dispatchers.IO)
     private var captureJob: Job? = null
@@ -53,7 +53,7 @@ class VoiceManager(private val context: Context) {
     private var onTranscript: ((String) -> Unit)? = null
     private var onResponse: ((VoiceResponse) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
-    
+
     fun setCallbacks(
         onTranscript: ((String) -> Unit)? = null,
         onResponse: ((VoiceResponse) -> Unit)? = null,
@@ -63,7 +63,7 @@ class VoiceManager(private val context: Context) {
         this.onResponse = onResponse
         this.onError = onError
     }
-    
+
     fun startRecording() {
         if (isRecording) return
         if (audioChannel.isClosedForSend) audioChannel = Channel(10)
@@ -79,13 +79,13 @@ class VoiceManager(private val context: Context) {
             audioFormat,
             bufferSize
         )
-        
+
         try { audioRecord?.startRecording() } catch (e: Exception) {
             Log.e("VoiceManager", "startRecording failed", e)
             isRecording = false
             return
         }
-        
+
         captureJob = scope.launch {
             val buffer = ByteArray(bufferSize)
             while (isRecording) {
@@ -106,7 +106,7 @@ class VoiceManager(private val context: Context) {
             }
         }
     }
-    
+
     fun stopRecording() {
         if (!isRecording) return
         isRecording = false
@@ -199,7 +199,7 @@ class VoiceManager(private val context: Context) {
         val rms = kotlin.math.sqrt(sumSq.toDouble() / samples)
         return rms >= STT_VAD_THRESHOLD_RMS
     }
-    
+
     private fun sendBatchedToStt(pcmBatch: ByteArray, nowMs: Long) {
         if (isSttInFlight) return
         val sid = sessionId?.takeIf { it.isNotBlank() }
@@ -227,7 +227,7 @@ class VoiceManager(private val context: Context) {
                     sessionId = sid,
                     request
                 )
-                
+
                 if (response.isSuccessful) {
                     val voiceResponse = response.body()!!
                     onTranscript?.invoke(voiceResponse.response)
@@ -248,13 +248,13 @@ class VoiceManager(private val context: Context) {
     private fun sendToSTT(audioData: ByteArray) {
         enqueueForStt(audioData)
     }
-    
+
     fun playTTS(audioBase64: String) {
         scope.launch {
             var track: android.media.AudioTrack? = null
             try {
                 val audioBytes = Base64.decode(audioBase64, Base64.NO_WRAP)
-                
+
                 track = android.media.AudioTrack.Builder()
                     .setAudioAttributes(
                         android.media.AudioAttributes.Builder()
@@ -272,10 +272,10 @@ class VoiceManager(private val context: Context) {
                     .setBufferSizeInBytes(maxOf(audioBytes.size, AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)))
                     .setTransferMode(android.media.AudioTrack.MODE_STATIC)
                     .build()
-                
+
                 track.write(audioBytes, 0, audioBytes.size)
                 track.play()
-                
+
                 while (track.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
                     delay(50)
                 }
@@ -287,19 +287,19 @@ class VoiceManager(private val context: Context) {
             }
         }
     }
-    
+
     fun setOnTranscript(listener: (String) -> Unit) {
         onTranscript = listener
     }
-    
+
     fun setOnResponse(listener: (VoiceResponse) -> Unit) {
         onResponse = listener
     }
-    
+
     fun setOnError(listener: (String) -> Unit) {
         onError = listener
     }
-    
+
     fun dispose() {
         stopRecording()
         try { if (!audioChannel.isClosedForSend) audioChannel.close() } catch (_: Exception) {}

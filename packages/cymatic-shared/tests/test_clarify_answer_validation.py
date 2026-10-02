@@ -5,6 +5,7 @@ overwrite clean entities as canonical field values (live Taj run: site_type
 became "palace." and poisoned the architect + domain check). Raw text is
 kept in answer_notes; only validated values become entities.
 """
+
 from cymatic_shared.agents.clarification_agent import (
     _clean_fallback_answer,
     process_clarification_fallback,
@@ -31,7 +32,9 @@ def test_fragment_with_vocabulary_passes():
 
 
 def test_boolean_contains_match():
-    clean, _ = _clean_fallback_answer("narration", "yes, english and hindi.", "heritage")
+    clean, _ = _clean_fallback_answer(
+        "narration", "yes, english and hindi.", "heritage"
+    )
     assert clean is True
 
 

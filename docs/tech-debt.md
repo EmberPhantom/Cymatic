@@ -193,4 +193,3 @@ shared 27, live E2E re-green after rebuild. §9 fully closed.
   cache. tsc + vite build green.
 - **Android:** render strings → resources, 48dp touch targets, logo
   description (XML-parsed; APK compile needs SDK machine).
-

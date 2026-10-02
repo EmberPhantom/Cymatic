@@ -1,4 +1,5 @@
 """Redis sliding-window rate limiter - re-exported from shared package."""
+
 from cymatic_shared.rate_limit import (  # noqa: F401
     configure_rate_limit,
     is_rate_limited,

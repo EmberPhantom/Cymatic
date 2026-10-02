@@ -1,4 +1,5 @@
 """Unit tests for audit middleware action/resource mapping (pure functions)."""
+
 from app.core.middleware import AuditLoggingMiddleware
 
 
@@ -8,13 +9,20 @@ def _mw():
 
 def test_determine_action_generation_flow():
     mw = _mw()
-    assert mw._determine_action("POST", "/v1/projects/1/generate-spec") == "spec_generated"
-    assert mw._determine_action("POST", "/v1/projects/1/generate-scene") == "scene_generated"
+    assert (
+        mw._determine_action("POST", "/v1/projects/1/generate-spec") == "spec_generated"
+    )
+    assert (
+        mw._determine_action("POST", "/v1/projects/1/generate-scene")
+        == "scene_generated"
+    )
     assert mw._determine_action("POST", "/v1/projects/2/publish") == "scene_published"
     assert mw._determine_action("POST", "/v1/projects") == "project_created"
     assert mw._determine_action("PATCH", "/v1/projects/1") == "project_updated"
     assert mw._determine_action("DELETE", "/v1/projects/1") == "project_deleted"
-    assert mw._determine_action("POST", "/v1/stream/sessions") == "stream_session_started"
+    assert (
+        mw._determine_action("POST", "/v1/stream/sessions") == "stream_session_started"
+    )
     assert mw._determine_action("GET", "/v1/projects/1") is None
 
 

@@ -1,4 +1,5 @@
 """WebSocket signaling endpoint (split, no logic change)."""
+
 from fastapi import (
     APIRouter,
     WebSocket,
@@ -25,6 +26,8 @@ settings = get_settings()
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+
 @router.websocket("/ws/{session_id}")
 async def websocket_signaling(
     websocket: WebSocket,
@@ -39,13 +42,17 @@ async def websocket_signaling(
         return
 
     # Token handling: prefer Authorization header to avoid URL leak, fallback to query for compat
-    auth_header = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+    auth_header = websocket.headers.get("authorization") or websocket.headers.get(
+        "Authorization"
+    )
     token: str | None = None
     if auth_header and auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
     else:
         # Check Sec-WebSocket-Protocol may contain token
-        proto = websocket.headers.get("sec-websocket-protocol") or websocket.headers.get("Sec-WebSocket-Protocol")
+        proto = websocket.headers.get(
+            "sec-websocket-protocol"
+        ) or websocket.headers.get("Sec-WebSocket-Protocol")
         if proto and proto.lower().startswith("bearer "):
             token = proto[7:].strip()
         else:
@@ -61,7 +68,9 @@ async def websocket_signaling(
     # fail-closed internally; an unexpected raise here also closes.
     try:
         client_host = websocket.client.host if websocket.client else "unknown"
-        limited, _ = await is_rate_limited(f"ws:handshake:{client_host}", settings.RATE_LIMIT_WS_HANDSHAKE)
+        limited, _ = await is_rate_limited(
+            f"ws:handshake:{client_host}", settings.RATE_LIMIT_WS_HANDSHAKE
+        )
         if limited:
             await websocket.close(code=4029, reason="Rate limited")
             return
@@ -97,7 +106,9 @@ async def websocket_signaling(
 
     # Rate limit per user after auth (fail-closed on unexpected errors).
     try:
-        limited_user, _ = await is_rate_limited(f"ws:user:{user_id}", settings.RATE_LIMIT_WS_USER)
+        limited_user, _ = await is_rate_limited(
+            f"ws:user:{user_id}", settings.RATE_LIMIT_WS_USER
+        )
         if limited_user:
             await websocket.close(code=4029, reason="Rate limited")
             return

@@ -3,6 +3,7 @@
 Admin-key semantics (standard): dual header (X-Api-Key or Bearer),
 constant-time compare, 503 when unset (fail-closed), 401 on mismatch.
 """
+
 import hmac
 import logging
 from collections.abc import Awaitable, Callable
@@ -37,7 +38,9 @@ def verify_admin_key_dependency(
             auth = authorization.strip()
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
         if token is None or not hmac.compare_digest(token, key):
-            raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
+            raise HTTPException(
+                status_code=401, detail="Invalid or missing admin API key"
+            )
 
     return _dep
 
@@ -59,4 +62,6 @@ def configure_logging(service: str, log_format: str = "json") -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
         logger_factory=structlog.PrintLoggerFactory(),
     )
-    structlog.get_logger().info("logging_configured", service=service, format=log_format)
+    structlog.get_logger().info(
+        "logging_configured", service=service, format=log_format
+    )

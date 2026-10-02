@@ -5,6 +5,7 @@ Services configure the Redis URL once at import via
 and re-export this module's names. The llm-router keeps its own variant
 (per-provider limits) — see tech-debt.
 """
+
 import asyncio
 from typing import Optional
 import redis.asyncio as redis
@@ -16,8 +17,13 @@ from cymatic_shared.rate_limit_core import parse_limit, sliding_check
 logger = structlog.get_logger()
 
 __all__ = [
-    "configure_rate_limit", "is_rate_limited", "parse_limit",
-    "rate_limit", "rate_limit_dependency", "_get_redis", "_reset_redis",
+    "configure_rate_limit",
+    "is_rate_limited",
+    "parse_limit",
+    "rate_limit",
+    "rate_limit_dependency",
+    "_get_redis",
+    "_reset_redis",
 ]
 
 _redis_url: Optional[str] = None
@@ -61,10 +67,16 @@ def _get_redis() -> Optional[redis.Redis]:
 
 def _is_stale_loop_error(e: Exception) -> bool:
     msg = str(e)
-    return "Event loop is closed" in msg or "different loop" in msg or "attached to a different loop" in msg
+    return (
+        "Event loop is closed" in msg
+        or "different loop" in msg
+        or "attached to a different loop" in msg
+    )
 
 
-async def is_rate_limited(key: str, limit: str, _retried: bool = False) -> tuple[bool, int]:
+async def is_rate_limited(
+    key: str, limit: str, _retried: bool = False
+) -> tuple[bool, int]:
     """Return (is_limited, retry_after_seconds) using sliding window.
 
     Fail-closed: if Redis is unavailable or errors, deny request.
@@ -96,14 +108,21 @@ async def rate_limit_dependency(request: Request, limit: str):
     elif user_id is not None:
         key = f"user:{user_id}:{request.url.path}"
     else:
-        client_host = request.client.host if request.client and request.client.host else "unknown"
+        client_host = (
+            request.client.host if request.client and request.client.host else "unknown"
+        )
         key = f"ip:{client_host}:{request.url.path}"
     limited, retry_after = await is_rate_limited(key, limit)
     if limited:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(retry_after)})
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def rate_limit(limit: str):
     async def _dep(request: Request):
         await rate_limit_dependency(request, limit)
+
     return _dep

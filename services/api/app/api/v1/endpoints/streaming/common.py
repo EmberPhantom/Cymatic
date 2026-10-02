@@ -18,6 +18,7 @@ logger = structlog.get_logger()
 # Reuse global httpx client (avoid per-request AsyncClient creation)
 _http_client: httpx.AsyncClient | None = None
 
+
 def _get_http_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None or _http_client.is_closed:
@@ -57,9 +58,7 @@ async def _build_session_response(
     session: StreamSession, db: AsyncSession
 ) -> StreamSessionResponse:
     resp = StreamSessionResponse.model_validate(session)
-    resp.scene_package_url = await get_latest_scene_package_url(
-        db, session.project_id
-    )
+    resp.scene_package_url = await get_latest_scene_package_url(db, session.project_id)
     return resp
 
 
@@ -94,6 +93,8 @@ class VoiceTranscript(BaseModel):
     transcript: str = Field(min_length=1, max_length=25000)
     language: str = Field(default="en", max_length=10)
     confidence: Optional[float] = Field(default=None, ge=0, le=1)
+
+
 # WebSocket signaling for WebRTC
 
 

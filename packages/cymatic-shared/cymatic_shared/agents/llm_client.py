@@ -1,9 +1,16 @@
 """LLM Router Client - shared across API and Worker services"""
+
 import httpx
 import json
 from typing import Dict, List, Any, Optional
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 
 logger = structlog.get_logger()
 
@@ -18,14 +25,18 @@ def _get_settings():
     if _settings is None:
         try:
             from cymatic_shared.config import get_settings
+
             _settings = get_settings()
         except ImportError:
             try:
                 from app.core.config import get_settings
+
                 _settings = get_settings()
             except ImportError:
+
                 class _FallbackSettings:
                     LLM_ROUTER_URL = "http://localhost:8001"
+
                 _settings = _FallbackSettings()
     return _settings
 
@@ -45,7 +56,9 @@ class LLMRouterClient:
         # call gets 401 whenever the router key is configured.
         # None means "use configured default"; explicit "" forces no header
         # (e.g. probing an open router). `or` would wrongly fall back to env.
-        self.api_key = getattr(settings, "ADMIN_API_KEY", "") or "" if api_key is None else api_key
+        self.api_key = (
+            getattr(settings, "ADMIN_API_KEY", "") or "" if api_key is None else api_key
+        )
         self.client = httpx.AsyncClient(timeout=timeout)
 
     async def close(self):
@@ -285,9 +298,7 @@ async def call_llm_json(
         except json.JSONDecodeError:
             pass
 
-    logger.warning(
-        "llm_json_parse_failed", task_type=task_type, content=content[:500]
-    )
+    logger.warning("llm_json_parse_failed", task_type=task_type, content=content[:500])
     return {}
 
 
@@ -427,7 +438,7 @@ async def call_llm_structured(
     """Call LLM with structured output schema."""
     system_msg = {
         "role": "system",
-        "content": f"Respond with valid JSON matching this schema: {json.dumps(schema)}"
+        "content": f"Respond with valid JSON matching this schema: {json.dumps(schema)}",
     }
     messages = [system_msg] + messages
 

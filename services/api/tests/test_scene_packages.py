@@ -1,4 +1,5 @@
 """Scene-package helper failure semantics: None vs 503-unavailable."""
+
 import pytest
 
 from app.services.scene_packages import (

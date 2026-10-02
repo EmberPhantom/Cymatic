@@ -26,22 +26,22 @@ namespace Cymatic
         [Header("Configuration")]
         [SerializeField] private string backendUrl = "http://localhost:8000";
         [SerializeField] private string renderServerId = "render-server-01";
-        
+
         // State
         private bool _isEnabled = true;
         private string _currentSessionId;
         private CopilotPolicyData _policy;
-        
+
         // Components
         private EventBridge _eventBridge;
         private SceneLoader _sceneLoader;
         private StereoCameraRig _stereoRig;
         private InputManager _inputManager;
-        
+
         // Knowledge base
         private Dictionary<string, object> _knowledgeBase;
         private string _sceneContext;
-        
+
         // Allowed actions
         private readonly HashSet<string> _allowedActions = new HashSet<string>
         {
@@ -55,7 +55,7 @@ namespace Cymatic
             "play_audio_hint",
             "answer_question"
         };
-        
+
         public void Initialize(string sessionId, CopilotPolicyData policy, EventBridge eventBridge, SceneLoader sceneLoader, StereoCameraRig stereoRig, InputManager inputManager)
         {
             _currentSessionId = sessionId;
@@ -77,27 +77,27 @@ namespace Cymatic
                 // Fail-closed: no actions when policy omits allowlist.
                 Debug.LogWarning("[CopilotAgent] Empty allowed_actions; all actions denied");
             }
-            
+
             _knowledgeBase = policy.knowledge_base != null ? JsonConvert.DeserializeObject<Dictionary<string, object>>(policy.knowledge_base) : new Dictionary<string, object>();
-            
+
             // Build scene context for LLM
             BuildSceneContext();
-            
+
             // Subscribe to copilot messages
             if (_inputManager != null)
                 _inputManager.OnCopilotMessage += HandleCopilotMessage;
-            
+
             _isEnabled = policy != null && policy.enabled;
-            
+
             Debug.Log($"[CopilotAgent] Initialized for session {sessionId}");
         }
-        
+
         private void BuildSceneContext()
         {
             if (_sceneLoader == null) return;
             var package = _sceneLoader.CurrentPackage;
             if (package == null) return;
-            
+
             var navNames = package.navigation?.points != null ? string.Join(", ", package.navigation.points.ConvertAll(p => p.name)) : "none";
             _sceneContext = $"Current scene: {package.metadata?.title ?? "unknown"} ({package.domain}). " +
                           $"Navigation points: {navNames}. " +
@@ -105,21 +105,21 @@ namespace Cymatic
                           $"Copilot personality: {_policy?.personality}. " +
                           $"Supported languages: {string.Join(", ", _policy?.languages ?? new List<string>())}.";
         }
-        
+
         private async void HandleCopilotMessage(string message)
         {
             if (!_isEnabled) return;
-            
+
             Debug.Log($"[CopilotAgent] Received message: {message}");
-            
+
             try
             {
                 // Send to LLM Router for processing
                 var response = await ProcessMessage(message);
-                
+
                 // Execute any actions from response
                 await ExecuteActions(response.actions);
-                
+
                 // Send response back
                 if (_eventBridge != null)
                 {
@@ -135,7 +135,7 @@ namespace Cymatic
                 Debug.LogError($"[CopilotAgent] Error processing message: {e.Message}");
             }
         }
-        
+
         private async UniTask<CopilotResponse> ProcessMessage(string message)
         {
             var request = new
@@ -151,7 +151,7 @@ namespace Cymatic
                 max_tokens = 500,
                 response_format = new { type = "json_object" }
             };
-            
+
             using (var webRequest = new UnityEngine.Networking.UnityWebRequest($"{backendUrl}/v1/chat/completions", "POST"))
             {
                 var json = JsonConvert.SerializeObject(request);
@@ -163,9 +163,9 @@ namespace Cymatic
                 var token = _eventBridge != null ? _eventBridge.AuthToken : null;
                 if (!string.IsNullOrEmpty(token))
                     webRequest.SetRequestHeader("Authorization", $"Bearer {token}");
-                
+
                 await webRequest.SendWebRequest();
-                
+
                 if (webRequest.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
                 {
                     var response = JsonConvert.DeserializeObject<LLMResponse>(webRequest.downloadHandler.text);
@@ -182,11 +182,11 @@ namespace Cymatic
                 }
             }
         }
-        
+
         private string BuildSystemPrompt()
         {
             return $@"You are a helpful AI copilot inside a VR simulation.
-            
+
 Scene Context: {_sceneContext}
 
 Your capabilities:
@@ -207,7 +207,7 @@ When responding, always return JSON with:
 
 Only use allowed actions. Be concise and helpful. If you cannot perform an action, explain why.";
         }
-        
+
         private async UniTask ExecuteActions(List<CopilotAction> actions)
         {
             if (actions == null) return;
@@ -219,7 +219,7 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                     Debug.LogWarning($"[CopilotAgent] Action not allowed: {action.type}");
                     continue;
                 }
-                
+
                 switch (action.type)
                 {
                     case "highlight_object":
@@ -252,7 +252,7 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                 }
             }
         }
-        
+
         private async UniTask HighlightObject(Dictionary<string, object> @params)
         {
             if (@params == null) return;
@@ -266,14 +266,14 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                     outline.OutlineMode = Outline.Mode.OutlineAll;
                     outline.OutlineColor = Color.yellow;
                     outline.OutlineWidth = 5f;
-                    
+
                     // Auto-remove after delay
                     await UniTask.Delay(5000);
                     if (outline != null) Destroy(outline);
                 }
             }
         }
-        
+
         private async UniTask ShowLabel(Dictionary<string, object> @params)
         {
             if (@params == null) return;
@@ -294,12 +294,12 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
                     {
                         labelGO = label.gameObject;
                     }
-                    
+
                     label.text = text.ToString();
                     label.fontSize = 24;
                     label.color = Color.white;
                     label.alignment = TMPro.TextAlignmentOptions.Center;
-                    
+
                     // Position above object
                     var rend = obj.GetComponent<Renderer>();
                     float yOffset = rend != null ? rend.bounds.size.y + 1 : 1f;
@@ -313,7 +313,7 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
             }
             await UniTask.CompletedTask;
         }
-        
+
         private async UniTask MoveToPoint(Dictionary<string, object> @params)
         {
             if (@params == null) return;
@@ -329,14 +329,14 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
             }
             await UniTask.CompletedTask;
         }
-        
+
         private void OpenMenu(Dictionary<string, object> @params)
         {
             // Trigger menu UI - P0 FIX: SendEvent returns UniTask, need Forget
             if (_eventBridge != null)
                 _eventBridge.SendEvent(_currentSessionId, "copilot_open_menu", new { }).Forget();
         }
-        
+
         private async UniTask ChangeMaterial(Dictionary<string, object> @params)
         {
             if (@params == null) return;
@@ -358,21 +358,21 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
             }
             await UniTask.CompletedTask;
         }
-        
+
         private void PauseTour()
         {
             // Pause navigation - P0 FIX: use Forget
             if (_eventBridge != null)
                 _eventBridge.SendEvent(_currentSessionId, "copilot_pause_tour", new { }).Forget();
         }
-        
+
         private void ResumeTour()
         {
             // Resume navigation - P0 FIX: use Forget
             if (_eventBridge != null)
                 _eventBridge.SendEvent(_currentSessionId, "copilot_resume_tour", new { }).Forget();
         }
-        
+
         private async UniTask PlayAudioHint(Dictionary<string, object> @params)
         {
             if (@params == null) return;
@@ -389,40 +389,40 @@ Only use allowed actions. Be concise and helpful. If you cannot perform an actio
             }
             await UniTask.CompletedTask;
         }
-        
+
         private void OnDestroy()
         {
             if (_inputManager != null)
                 _inputManager.OnCopilotMessage -= HandleCopilotMessage;
         }
     }
-    
+
     [System.Serializable]
     public class CopilotResponse
     {
         public string text;
         public List<CopilotAction> actions = new List<CopilotAction>();
     }
-    
+
     [System.Serializable]
     public class CopilotAction
     {
         public string type;
         public Dictionary<string, object> @params = new Dictionary<string, object>();
     }
-    
+
     [System.Serializable]
     public class LLMResponse
     {
         public List<Choice> choices = new List<Choice>();
     }
-    
+
     [System.Serializable]
     public class Choice
     {
         public Message message = new Message();
     }
-    
+
     [System.Serializable]
     public class Message
     {

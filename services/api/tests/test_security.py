@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from redis.exceptions import RedisError
 
-from app.core.security import create_access_token, create_refresh_token, decode_token, is_token_revoked
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    is_token_revoked,
+)
 
 
 def test_access_and_refresh_tokens_have_distinct_types():

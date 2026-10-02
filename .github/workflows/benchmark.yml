@@ -111,18 +111,18 @@ jobs:
           script: |
             const fs = require('fs');
             const results = JSON.parse(fs.readFileSync('services/api/benchmark-results.json', 'utf8'));
-            
+
             let comment = '## API Benchmark Results\n\n';
             comment += '| Test | Mean (ms) | Median (ms) | StdDev | Rounds |\n';
             comment += '|------|-----------|-------------|--------|--------|\n';
-            
+
             for (const bench of results.benchmarks) {
               const mean = (bench.stats.mean * 1000).toFixed(2);
               const median = (bench.stats.median * 1000).toFixed(2);
               const stddev = (bench.stats.stddev * 1000).toFixed(2);
               comment += `| ${bench.name} | ${mean} | ${median} | ${stddev} | ${bench.stats.rounds} |\n`;
             }
-            
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,

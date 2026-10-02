@@ -103,7 +103,12 @@ async def init_upload(
 
     # Block active content that could become stored XSS via presigned GET.
     ct = upload_data.content_type.split(";")[0].strip().lower()
-    blocked_prefixes = ("text/html", "application/xhtml", "text/javascript", "application/javascript")
+    blocked_prefixes = (
+        "text/html",
+        "application/xhtml",
+        "text/javascript",
+        "application/javascript",
+    )
     if ct in blocked_prefixes or ct.startswith("text/html"):
         raise HTTPException(status_code=400, detail="Unsupported content type")
     if "/" not in ct:
@@ -200,7 +205,12 @@ async def complete_upload(
     await db.refresh(asset)
 
     # Queue asset processing only if needed (e.g., images/models/textures; skip OTHER)
-    if asset.type in (AssetType.MODEL_3D, AssetType.TEXTURE, AssetType.IMAGE, AssetType.AUDIO):
+    if asset.type in (
+        AssetType.MODEL_3D,
+        AssetType.TEXTURE,
+        AssetType.IMAGE,
+        AssetType.AUDIO,
+    ):
         from app.core.queue import job_queue, Job, JobPriority
 
         job = Job(

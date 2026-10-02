@@ -1,4 +1,5 @@
 """Worker asset/analytics task handlers (split from tasks/generation.py, no logic change)."""
+
 import structlog
 
 from app.core.queue import register_job_handler
@@ -33,8 +34,14 @@ async def process_asset_task(payload: dict) -> dict:
         asset.metadata_json = asset.metadata_json or {}
         await db.commit()
 
-        asset_type = asset.type.value if hasattr(asset.type, "value") else str(asset.type)
-        file_ext = asset.filename.rsplit(".", 1)[-1].lower() if asset.filename and "." in asset.filename else "unknown"
+        asset_type = (
+            asset.type.value if hasattr(asset.type, "value") else str(asset.type)
+        )
+        file_ext = (
+            asset.filename.rsplit(".", 1)[-1].lower()
+            if asset.filename and "." in asset.filename
+            else "unknown"
+        )
 
         try:
             info = get_minio_client().get_object_info(asset.storage_key)
@@ -46,22 +53,38 @@ async def process_asset_task(payload: dict) -> dict:
             asset.metadata_json["format"] = file_ext
 
             if asset_type == "image":
-                asset.metadata_json["note"] = "Image metadata extracted; thumbnail generation requires Pillow (not yet available)"
+                asset.metadata_json["note"] = (
+                    "Image metadata extracted; thumbnail generation requires Pillow (not yet available)"
+                )
 
             elif asset_type == "model_3d":
-                asset.metadata_json["note"] = "3D model metadata extracted; LOD generation requires mesh processing (not yet available)"
+                asset.metadata_json["note"] = (
+                    "3D model metadata extracted; LOD generation requires mesh processing (not yet available)"
+                )
 
             elif asset_type == "audio":
                 asset.metadata_json["note"] = "Audio stored as-is for MVP"
 
             else:
-                asset.metadata_json["note"] = f"No specific processing for type '{asset_type}'"
+                asset.metadata_json["note"] = (
+                    f"No specific processing for type '{asset_type}'"
+                )
 
             asset.status = AssetStatus.READY
             await db.commit()
 
-            logger.info("process_asset_completed", asset_id=asset_id, asset_type=asset_type, size=info.get("size"))
-            return {"asset_id": asset_id, "status": "ready", "type": asset_type, "size": info.get("size")}
+            logger.info(
+                "process_asset_completed",
+                asset_id=asset_id,
+                asset_type=asset_type,
+                size=info.get("size"),
+            )
+            return {
+                "asset_id": asset_id,
+                "status": "ready",
+                "type": asset_type,
+                "size": info.get("size"),
+            }
 
         except (S3Error, OSError) as e:
             asset.status = AssetStatus.FAILED
@@ -88,8 +111,12 @@ async def analytics_aggregation_task(payload: dict) -> dict:
         sessions = sessions_result.scalars().all()
 
         total_sessions = len(sessions)
-        active_sessions = sum(1 for s in sessions if s.status == StreamSessionStatus.ACTIVE)
-        completed_sessions = sum(1 for s in sessions if s.status == StreamSessionStatus.DISCONNECTED)
+        active_sessions = sum(
+            1 for s in sessions if s.status == StreamSessionStatus.ACTIVE
+        )
+        completed_sessions = sum(
+            1 for s in sessions if s.status == StreamSessionStatus.DISCONNECTED
+        )
 
         total_duration_seconds = 0.0
         for s in sessions:
@@ -120,6 +147,11 @@ async def analytics_aggregation_task(payload: dict) -> dict:
             "event_counts_by_type": event_counts,
         }
 
-        logger.info("analytics_aggregation_completed", project_id=project_id, total_sessions=total_sessions, total_events=total_events)
+        logger.info(
+            "analytics_aggregation_completed",
+            project_id=project_id,
+            total_sessions=total_sessions,
+            total_events=total_events,
+        )
 
         return aggregated

@@ -6,6 +6,7 @@ with older import paths and now delegates to the shared package to keep a single
 source of truth (HIGH: stale fork). Any changes should be made in the shared
 package, not here.
 """
+
 # Re-export everything from the canonical shared package
 from cymatic_shared.schemas.simulation_spec import (  # noqa: F401, F403
     AssetManifest,

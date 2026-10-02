@@ -32,7 +32,9 @@ def _get_redis() -> redis.Redis | None:
 
 
 def _get_forwarded_ip(request: Request) -> str | None:
-    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    xff = request.headers.get("x-forwarded-for") or request.headers.get(
+        "X-Forwarded-For"
+    )
     if xff:
         # Take first IP in list (client origin)
         return xff.split(",")[0].strip()
@@ -91,7 +93,9 @@ async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
     return await sliding_check(r, f"rl:sliding:{key}", count, window, add_first=True)
 
 
-async def is_rate_limited_for_provider(provider: str, org_or_user: str, limit: str) -> tuple[bool, int]:
+async def is_rate_limited_for_provider(
+    provider: str, org_or_user: str, limit: str
+) -> tuple[bool, int]:
     """Per-provider sliding window."""
     key = f"provider:{provider}:{org_or_user}"
     return await is_rate_limited(key, limit)
@@ -111,11 +115,15 @@ async def rate_limit_dependency(request: Request, limit: str | None = None) -> N
             headers={"Retry-After": str(retry_after)},
         )
     # Per-provider limits: if request hints at provider via header or query, enforce
-    provider_hint = request.headers.get("x-provider") or request.query_params.get("provider")
+    provider_hint = request.headers.get("x-provider") or request.query_params.get(
+        "provider"
+    )
     if provider_hint:
         # Map provider to its configured rpm limit if known
         try:
-            from app.schemas.providers import ProviderName  # local import to avoid cycle
+            from app.schemas.providers import (
+                ProviderName,
+            )  # local import to avoid cycle
 
             # Try to resolve provider config for limit
             # Fallback to generic limit if not found
@@ -123,12 +131,18 @@ async def rate_limit_dependency(request: Request, limit: str | None = None) -> N
             # Try to find provider config via routing_engine
             from app.routing.engine import routing_engine
 
-            cfg = routing_engine.providers.get(ProviderName(prov)) if prov in [p.value for p in ProviderName] else None
+            cfg = (
+                routing_engine.providers.get(ProviderName(prov))
+                if prov in [p.value for p in ProviderName]
+                else None
+            )
             if cfg is not None:
                 prov_limit = f"{cfg.rate_limit_rpm}/minute"
             else:
                 prov_limit = effective_limit
-            p_limited, p_retry = await is_rate_limited_for_provider(prov, identifier, prov_limit)
+            p_limited, p_retry = await is_rate_limited_for_provider(
+                prov, identifier, prov_limit
+            )
             if p_limited:
                 raise HTTPException(
                     status_code=429,

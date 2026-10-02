@@ -62,10 +62,18 @@ class ProviderQuota(BaseModel):
     current_tpm: int = 0
     current_daily_tokens: int = 0
     current_monthly_cost_usd: float = 0.0
-    rpm_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    tpm_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    daily_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    monthly_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    rpm_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    tpm_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    daily_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    monthly_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 class UsageTracker:
@@ -76,7 +84,11 @@ class UsageTracker:
 
     def __init__(self, redis_url: str | None = None) -> None:
         # DB 2 = usage (isolated from cache/rate)
-        self.redis_url = redis_url or getattr(settings, "REDIS_USAGE_URL", None) or settings.REDIS_URL
+        self.redis_url = (
+            redis_url
+            or getattr(settings, "REDIS_USAGE_URL", None)
+            or settings.REDIS_URL
+        )
         self._client: redis.Redis | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._local_quotas: dict[str, ProviderQuota] = {}
@@ -148,7 +160,11 @@ class UsageTracker:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if self._client is not None and running is not None and self._loop is not running:
+        if (
+            self._client is not None
+            and running is not None
+            and self._loop is not running
+        ):
             self._client = None
             self._loop = None
         if not self._client:
@@ -193,7 +209,9 @@ return current
             return 0
         try:
             # Use Lua for atomic INCR+EXPIRE
-            result = await self._client.eval(self._INCR_EXPIRE_LUA, 1, key, str(increment), str(ttl))
+            result = await self._client.eval(
+                self._INCR_EXPIRE_LUA, 1, key, str(increment), str(ttl)
+            )
             return int(float(result)) if result is not None else 0
         except (RedisError, OSError, asyncio.TimeoutError):
             # Fallback pipeline
@@ -213,7 +231,9 @@ return current
         if self._client is None:
             return 0.0
         try:
-            result = await self._client.eval(self._INCRBYFLOAT_EXPIRE_LUA, 1, key, str(increment), str(ttl))
+            result = await self._client.eval(
+                self._INCRBYFLOAT_EXPIRE_LUA, 1, key, str(increment), str(ttl)
+            )
             return float(result) if result is not None else 0.0
         except (RedisError, OSError, asyncio.TimeoutError):
             try:
@@ -259,14 +279,24 @@ return current
                     tokens_for_quota = 150
                 else:
                     # Rough: chars/4 tokens
-                    tokens_for_quota = max(10, len(usage.model) * 2) if usage.model else 100
+                    tokens_for_quota = (
+                        max(10, len(usage.model) * 2) if usage.model else 100
+                    )
                     # Prefer metadata text_len if present
-                    text_len = usage.metadata.get("text_len") or usage.metadata.get("chars")
+                    text_len = usage.metadata.get("text_len") or usage.metadata.get(
+                        "chars"
+                    )
                     if isinstance(text_len, int):
                         tokens_for_quota = max(10, text_len // 4)
             else:
-                tokens_for_quota = max(tokens_for_quota, 1) if usage.task_type not in ("stt", "tts") else tokens_for_quota
-            pipe.hincrby(day_key, f"{usage.provider}:{usage.task_type}:tokens", tokens_for_quota)  # type: ignore
+                tokens_for_quota = (
+                    max(tokens_for_quota, 1)
+                    if usage.task_type not in ("stt", "tts")
+                    else tokens_for_quota
+                )
+            pipe.hincrby(
+                day_key, f"{usage.provider}:{usage.task_type}:tokens", tokens_for_quota
+            )  # type: ignore
             pipe.hincrby(day_key, f"{usage.provider}:latency_sum", usage.latency_ms)  # type: ignore
             pipe.expire(day_key, 2592000)  # type: ignore
             await pipe.execute()
@@ -299,8 +329,14 @@ return current
             if usage.task_type == "stt":
                 tokens = 150
             else:
-                text_len = usage.metadata.get("text_len") if isinstance(usage.metadata.get("text_len"), int) else 100
-                tokens = max(10, int(text_len) // 4) if isinstance(text_len, int) else 100
+                text_len = (
+                    usage.metadata.get("text_len")
+                    if isinstance(usage.metadata.get("text_len"), int)
+                    else 100
+                )
+                tokens = (
+                    max(10, int(text_len) // 4) if isinstance(text_len, int) else 100
+                )
 
         cost_per_1k = self._estimate_cost(usage.provider, usage.model)
         cost = (tokens / 1000) * cost_per_1k
@@ -344,7 +380,11 @@ return current
         # Increment - use estimated tokens for STT/TTS
         tokens = usage.total_tokens
         if tokens == 0 and usage.task_type in ("stt", "tts"):
-            tokens = 150 if usage.task_type == "stt" else max(10, int(usage.metadata.get("text_len", 100)) // 4)  # type: ignore
+            tokens = (
+                150
+                if usage.task_type == "stt"
+                else max(10, int(usage.metadata.get("text_len", 100)) // 4)
+            )  # type: ignore
         quota.current_rpm += 1
         quota.current_tpm += tokens
         quota.current_daily_tokens += tokens
@@ -411,7 +451,9 @@ return current
 
                 return True
             except Exception as e:
-                logger.warning("quota_check_redis_failed", provider=provider, error=str(e))
+                logger.warning(
+                    "quota_check_redis_failed", provider=provider, error=str(e)
+                )
                 # fall through to local
 
         # Fallback local (also covers no Redis)
@@ -485,7 +527,9 @@ return current
                     "monthly_cost_usd": {
                         "used": round(cur_monthly, 4),
                         "limit": quota_limits.monthly_cost_limit_usd,
-                        "remaining": round(quota_limits.monthly_cost_limit_usd - cur_monthly, 4),
+                        "remaining": round(
+                            quota_limits.monthly_cost_limit_usd - cur_monthly, 4
+                        ),
                     },
                 }
             except Exception:
@@ -521,12 +565,16 @@ return current
             "daily_tokens": {
                 "used": quota.current_daily_tokens,
                 "limit": quota.daily_token_limit,
-                "remaining": max(0, quota.daily_token_limit - quota.current_daily_tokens),
+                "remaining": max(
+                    0, quota.daily_token_limit - quota.current_daily_tokens
+                ),
             },
             "monthly_cost_usd": {
                 "used": round(quota.current_monthly_cost_usd, 4),
                 "limit": quota.monthly_cost_limit_usd,
-                "remaining": round(quota.monthly_cost_limit_usd - quota.current_monthly_cost_usd, 4),
+                "remaining": round(
+                    quota.monthly_cost_limit_usd - quota.current_monthly_cost_usd, 4
+                ),
             },
         }
 
@@ -582,12 +630,20 @@ return current
                     by_provider: dict[str, Any] = stats["by_provider"]
                     by_task: dict[str, Any] = stats["by_task"]
                     if metric == "count":
-                        by_provider[provider] = by_provider.get(provider, 0) + int(val_str)
+                        by_provider[provider] = by_provider.get(provider, 0) + int(
+                            val_str
+                        )
                         by_task[task] = by_task.get(task, 0) + int(val_str)
-                        stats["total_requests"] = int(stats["total_requests"]) + int(val_str)
+                        stats["total_requests"] = int(stats["total_requests"]) + int(
+                            val_str
+                        )
                     elif metric == "tokens":
-                        by_provider[f"{provider}_tokens"] = by_provider.get(f"{provider}_tokens", 0) + int(val_str)
-                        stats["total_tokens"] = int(stats["total_tokens"]) + int(val_str)
+                        by_provider[f"{provider}_tokens"] = by_provider.get(
+                            f"{provider}_tokens", 0
+                        ) + int(val_str)
+                        stats["total_tokens"] = int(stats["total_tokens"]) + int(
+                            val_str
+                        )
                     elif metric == "latency_sum":
                         latency_sum += int(val_str)
 

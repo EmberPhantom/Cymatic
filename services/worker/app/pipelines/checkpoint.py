@@ -6,6 +6,7 @@ Checkpoint storage:
   for multi-replica deployments but filesystem remains for MVP single-worker.
 - Writes are atomic via temp file + rename to avoid torn checkpoints on crash.
 """
+
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ import tempfile
 import structlog
 
 logger = structlog.get_logger()
+
 
 def _resolve_checkpoint_dir() -> str:
     # Prefer explicit env, then persistent /data, then ephemeral /tmp
@@ -37,6 +39,7 @@ def _resolve_checkpoint_dir() -> str:
 
 class PipelineCheckpoint(BaseModel):
     """Checkpoint data for pipeline resume capability."""
+
     project_id: int
     stage: str
     stage_index: int
@@ -56,16 +59,18 @@ class PipelineCheckpointManager:
     def _get_checkpoint_path(self, project_id: int) -> str:
         return os.path.join(self.checkpoint_dir, f"checkpoint_{project_id}.json")
 
-    def save_checkpoint(self, checkpoint: 'PipelineCheckpoint'):
+    def save_checkpoint(self, checkpoint: "PipelineCheckpoint"):
         """Save checkpoint to disk atomically."""
         path = self._get_checkpoint_path(checkpoint.project_id)
         checkpoint.updated_at = datetime.now(timezone.utc)
         # Atomic write: temp file in same dir + fsync + rename (HIGH: non-atomic write)
         dir_name = os.path.dirname(os.path.abspath(path)) or "."
         os.makedirs(dir_name, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=f".tmp_ckpt_{checkpoint.project_id}_")
+        fd, tmp_path = tempfile.mkstemp(
+            dir=dir_name, prefix=f".tmp_ckpt_{checkpoint.project_id}_"
+        )
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(checkpoint.model_dump(), f, default=str)
                 f.flush()
                 os.fsync(f.fileno())
@@ -76,21 +81,28 @@ class PipelineCheckpointManager:
                     os.remove(tmp_path)
             except OSError:
                 pass
-        logger.info("checkpoint_saved", project_id=checkpoint.project_id, stage=checkpoint.stage, dir=self.checkpoint_dir)
-    
-    def load_checkpoint(self, project_id: int) -> Optional['PipelineCheckpoint']:
+        logger.info(
+            "checkpoint_saved",
+            project_id=checkpoint.project_id,
+            stage=checkpoint.stage,
+            dir=self.checkpoint_dir,
+        )
+
+    def load_checkpoint(self, project_id: int) -> Optional["PipelineCheckpoint"]:
         """Load checkpoint from disk."""
         path = self._get_checkpoint_path(project_id)
         if not os.path.exists(path):
             return None
         try:
-            with open(path, 'r') as f:
+            with open(path, "r") as f:
                 data = json.load(f)
             return PipelineCheckpoint(**data)
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning("checkpoint_load_failed", project_id=project_id, error=str(e))
+            logger.warning(
+                "checkpoint_load_failed", project_id=project_id, error=str(e)
+            )
             return None
-    
+
     def clear_checkpoint(self, project_id: int):
         """Clear checkpoint after successful completion."""
         path = self._get_checkpoint_path(project_id)

@@ -66,7 +66,9 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check() -> dict[str, Any]:
-    providers = {name: provider.enabled for name, provider in routing_engine.providers.items()}
+    providers = {
+        name: provider.enabled for name, provider in routing_engine.providers.items()
+    }
     cloud_keys = {
         "groq": bool(settings.GROQ_API_KEY),
         "openrouter": bool(settings.OPENROUTER_API_KEY),
@@ -108,7 +110,10 @@ async def root() -> dict[str, str]:
 
 @app.post(
     "/v1/chat/completions",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+    ],
 )
 async def chat_completions(request: ChatCompletionRequest) -> Any:
     try:
@@ -122,23 +127,25 @@ async def chat_completions(request: ChatCompletionRequest) -> Any:
     except (OSError, Exception) as e:
         logger.error("chat_completion_failed", error=str(e))
         local_enabled = bool(getattr(settings, "ENABLE_LOCAL_LLM", False))
-        hint = (
-            "No LLM provider available. "
-            + (
-                "Ollama sidecar unreachable — start it with "
-                "'docker compose --profile local up -d ollama' and pull "
-                "'phi3:mini'."
-                if local_enabled
-                else "Set ENABLE_LOCAL_LLM=true with ollama profile, or set "
-                "APINEX_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY."
-            )
+        hint = "No LLM provider available. " + (
+            "Ollama sidecar unreachable — start it with "
+            "'docker compose --profile local up -d ollama' and pull "
+            "'phi3:mini'."
+            if local_enabled
+            else "Set ENABLE_LOCAL_LLM=true with ollama profile, or set "
+            "APINEX_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY."
         )
-        raise HTTPException(status_code=502, detail=f"LLM provider request failed: {hint}") from e
+        raise HTTPException(
+            status_code=502, detail=f"LLM provider request failed: {hint}"
+        ) from e
 
 
 @app.post(
     "/v1/embeddings",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+    ],
 )
 async def embeddings(request: EmbeddingRequest) -> Any:
     try:
@@ -150,12 +157,17 @@ async def embeddings(request: EmbeddingRequest) -> Any:
         raise e
     except (OSError, Exception) as e:
         logger.error("embedding_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="LLM provider request failed") from e
+        raise HTTPException(
+            status_code=502, detail="LLM provider request failed"
+        ) from e
 
 
 @app.post(
     "/v1/audio/transcriptions",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+    ],
 )
 async def transcribe(request: STTRequest) -> Any:
     try:
@@ -167,12 +179,17 @@ async def transcribe(request: STTRequest) -> Any:
         raise e
     except (OSError, Exception) as e:
         logger.error("stt_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="STT provider request failed") from e
+        raise HTTPException(
+            status_code=502, detail="STT provider request failed"
+        ) from e
 
 
 @app.post(
     "/v1/audio/speech",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+    ],
 )
 async def speech(request: TTSRequest) -> Any:
     try:
@@ -184,7 +201,9 @@ async def speech(request: TTSRequest) -> Any:
         raise e
     except (OSError, Exception) as e:
         logger.error("tts_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="TTS provider request failed") from e
+        raise HTTPException(
+            status_code=502, detail="TTS provider request failed"
+        ) from e
 
 
 @app.get("/v1/router/providers")
@@ -196,7 +215,9 @@ async def list_providers(_admin: None = Depends(verify_admin_key)) -> dict[str, 
                 "enabled": provider.enabled,
                 "priority": provider.priority,
                 "supported_tasks": [t.value for t in provider.supported_tasks],
-                "supported_sensitivity": [s.value for s in provider.supported_sensitivity],
+                "supported_sensitivity": [
+                    s.value for s in provider.supported_sensitivity
+                ],
                 "models": list(provider.models.keys()),
                 "status": routing_engine.status[name].model_dump(),
             }
@@ -234,7 +255,9 @@ async def get_usage_stats(
 
 
 @app.get("/v1/router/usage/quota/{provider}")
-async def get_quota(provider: str, _admin: None = Depends(verify_admin_key)) -> dict[str, Any]:
+async def get_quota(
+    provider: str, _admin: None = Depends(verify_admin_key)
+) -> dict[str, Any]:
     return await usage_tracker.get_quota_status(provider)
 
 

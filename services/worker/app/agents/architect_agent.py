@@ -1,4 +1,5 @@
 """Simulation Architect Agent - Creates structured Simulation Specification using LLM"""
+
 import json
 from typing import Any
 
@@ -135,7 +136,10 @@ async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
 
     messages = [
         {"role": "system", "content": ARCHITECT_SLIM_ENTITIES_PROMPT},
-        {"role": "user", "content": f"Generate ONLY {{\"entities\": [...]}} for:\n{json.dumps(context)}"},
+        {
+            "role": "user",
+            "content": f'Generate ONLY {{"entities": [...]}} for:\n{json.dumps(context)}',
+        },
     ]
 
     last_err: Exception | None = None
@@ -165,14 +169,22 @@ async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
             for e in raw_entities:
                 if not isinstance(e, dict):
                     continue
-                props = e.get("properties") if isinstance(e.get("properties"), dict) else {}
-                if e.get("type") == "room" and props is not None and "has_window" not in props:
+                props = (
+                    e.get("properties") if isinstance(e.get("properties"), dict) else {}
+                )
+                if (
+                    e.get("type") == "room"
+                    and props is not None
+                    and "has_window" not in props
+                ):
                     props["has_window"] = True
                 entities.append(Entity(**e).model_dump())
             if not entities:
                 raise ValueError("SLM returned no valid entities")
 
-            template = DOMAIN_TEMPLATES.get(input_data.domain, DOMAIN_TEMPLATES["real_estate"])
+            template = DOMAIN_TEMPLATES.get(
+                input_data.domain, DOMAIN_TEMPLATES["real_estate"]
+            )
             all_data = {**input_data.intake_data, **input_data.clarification_data}
             spec = _assemble_spec(
                 domain=input_data.domain,
@@ -206,7 +218,9 @@ async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
                 error=str(e)[:200],
             )
 
-    raise last_err if last_err is not None else ValueError("SLM returned no usable spec")
+    raise (
+        last_err if last_err is not None else ValueError("SLM returned no usable spec")
+    )
 
 
 async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
@@ -222,19 +236,22 @@ async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
             logger.warning("architect_slm_failed_falling_back_to_cloud", error=str(e))
 
     all_data = {**input_data.intake_data, **input_data.clarification_data}
-    
+
     # Prepare context for LLM
     context = {
         "domain": input_data.domain,
         "objective": input_data.objective,
         "requirements": all_data,
     }
-    
+
     messages = [
         {"role": "system", "content": ARCHITECT_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Generate SimulationSpec for:\n{json.dumps(context, indent=2)}"}
+        {
+            "role": "user",
+            "content": f"Generate SimulationSpec for:\n{json.dumps(context, indent=2)}",
+        },
     ]
-    
+
     try:
         result = await call_llm_json(
             messages=messages,
@@ -251,10 +268,14 @@ async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
             f"Generated {input_data.domain} specification via LLM",
             f"Entities: {len(spec.entities)}",
             f"Navigation points: {len(spec.navigation.points)}",
-            f"Performance budget: {spec.performance_budget.target_fps} FPS, {spec.performance_budget.max_triangles} triangles"
+            f"Performance budget: {spec.performance_budget.target_fps} FPS, {spec.performance_budget.max_triangles} triangles",
         ]
 
-        logger.info("architect_llm_completed", domain=input_data.domain, entities=len(spec.entities))
+        logger.info(
+            "architect_llm_completed",
+            domain=input_data.domain,
+            entities=len(spec.entities),
+        )
         return ArchitectResult(spec=spec, generation_notes=notes)
 
     except (ValidationError, ValueError, KeyError, OSError) as e:
@@ -290,7 +311,7 @@ DOMAIN_TEMPLATES = {
         "copilot_personality": "expert_narrator",
         "default_pois": ["entrance", "main_hall", "sanctuary", "courtyard"],
         "navigation_style": "teleport",
-    }
+    },
 }
 
 
@@ -341,8 +362,12 @@ def _assemble_spec(
             "default_language": "en",
             "personality": template.get("copilot_personality", "helpful_guide"),
             "allowed_actions": [
-                "highlight_object", "show_label", "move_to_point",
-                "open_menu", "pause_tour", "resume_tour",
+                "highlight_object",
+                "show_label",
+                "move_to_point",
+                "open_menu",
+                "pause_tour",
+                "resume_tour",
             ],
         },
         performance_budget={
@@ -381,7 +406,9 @@ async def create_spec_fallback(input_data: ArchitectInput) -> ArchitectResult:
         f"Navigation points: {len(spec.navigation.points)}",
     ]
 
-    logger.info("architect_fallback_completed", domain=domain, entities=len(spec.entities))
+    logger.info(
+        "architect_fallback_completed", domain=domain, entities=len(spec.entities)
+    )
     return ArchitectResult(spec=spec, generation_notes=notes)
 
 
@@ -410,29 +437,40 @@ def _build_real_estate_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
         if not room_name:
             continue
         size = default_sizes.get(room_name, [4.5, 5.0, 2.7])
-        entities.append({
-            "id": f"room_{room_name}",
-            "type": "room",
-            "name": room_name.replace("_", " ").title(),
-            "position": {"x": x_offset, "y": 0.0, "z": 0.0},
-            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
-            "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
-            "properties": {"furnished": data.get("furnished", True), "style": data.get("style", "modern"), "size": size, "has_window": True, "has_doors": True},
-            "children": [],
-        })
+        entities.append(
+            {
+                "id": f"room_{room_name}",
+                "type": "room",
+                "name": room_name.replace("_", " ").title(),
+                "position": {"x": x_offset, "y": 0.0, "z": 0.0},
+                "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
+                "properties": {
+                    "furnished": data.get("furnished", True),
+                    "style": data.get("style", "modern"),
+                    "size": size,
+                    "has_window": True,
+                    "has_doors": True,
+                },
+                "children": [],
+            }
+        )
         x_offset += room_spacing
     return entities
 
 
 def _build_heritage_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Build basic heritage entity list from user data."""
-    pois_raw = data.get("key_pois", data.get("pois", data.get("points_of_interest", "")))
+    pois_raw = data.get(
+        "key_pois", data.get("pois", data.get("points_of_interest", ""))
+    )
     poi_names: list[str] = []
     if isinstance(pois_raw, list):
         poi_names = [str(p).strip() for p in pois_raw if str(p).strip()]
     elif isinstance(pois_raw, str) and pois_raw.strip():
         # Support comma or newline separated
         import re
+
         parts = re.split(r"[,\n;]+", pois_raw)
         poi_names = [p.strip() for p in parts if p.strip()]
     if not poi_names:
@@ -461,9 +499,20 @@ def _build_heritage_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
         existing = {n.lower().replace("_", " ").strip() for n in poi_names}
         # Alias coverage matching domain_expert HERITAGE_ELEMENT_ALIASES
         alias_sets = {
-            "garbhagriha": {"garbhagriha", "sanctum", "sanctuary", "inner sanctum", "main shrine"},
+            "garbhagriha": {
+                "garbhagriha",
+                "sanctum",
+                "sanctuary",
+                "inner sanctum",
+                "main shrine",
+            },
             "mandapa": {"mandapa", "main hall", "main_hall", "prayer hall", "hall"},
-            "pradakshina path": {"pradakshina", "pradakshina path", "circumambulation", "courtyard"},
+            "pradakshina path": {
+                "pradakshina",
+                "pradakshina path",
+                "circumambulation",
+                "courtyard",
+            },
             "diwan-i-am": {"diwan-i-am", "diwan i am", "public hall"},
             "diwan-i-khas": {"diwan-i-khas", "diwan i khas", "private hall"},
             "zenana": {"zenana", "women quarters", "private quarters"},
@@ -484,30 +533,40 @@ def _build_heritage_entities(data: dict[str, Any]) -> list[dict[str, Any]]:
         safe_name = poi_name.strip()
         if not safe_name:
             continue
-        entities.append({
-            "id": f"poi_{i}",
-            "type": "poi",
-            "name": safe_name.title(),
-            "position": {"x": i * poi_spacing, "y": 0.0, "z": 0.0},
-            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
-            "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
-            "properties": {"description": safe_name, "has_narration": True, "site_type": data.get("site_type", "courtyard")},
-            "children": [],
-        })
+        entities.append(
+            {
+                "id": f"poi_{i}",
+                "type": "poi",
+                "name": safe_name.title(),
+                "position": {"x": i * poi_spacing, "y": 0.0, "z": 0.0},
+                "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
+                "properties": {
+                    "description": safe_name,
+                    "has_narration": True,
+                    "site_type": data.get("site_type", "courtyard"),
+                },
+                "children": [],
+            }
+        )
     return entities
 
 
-def _build_real_estate_nav_points(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_real_estate_nav_points(
+    entities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     points = []
     for ent in entities:
         if ent.get("type") == "room":
-            points.append({
-                "id": f"nav_{ent['id']}",
-                "name": ent["name"],
-                "position": ent["position"],
-                "description": f"Standing in {ent['name']}",
-                "connections": [],
-            })
+            points.append(
+                {
+                    "id": f"nav_{ent['id']}",
+                    "name": ent["name"],
+                    "position": ent["position"],
+                    "description": f"Standing in {ent['name']}",
+                    "connections": [],
+                }
+            )
     # Wire connections linearly
     for i in range(len(points) - 1):
         points[i]["connections"].append(points[i + 1]["id"])
@@ -519,13 +578,15 @@ def _build_heritage_nav_points(entities: list[dict[str, Any]]) -> list[dict[str,
     points = []
     for ent in entities:
         if ent.get("type") == "poi":
-            points.append({
-                "id": f"nav_{ent['id']}",
-                "name": ent["name"],
-                "position": ent["position"],
-                "description": ent["properties"].get("description", ""),
-                "connections": [],
-            })
+            points.append(
+                {
+                    "id": f"nav_{ent['id']}",
+                    "name": ent["name"],
+                    "position": ent["position"],
+                    "description": ent["properties"].get("description", ""),
+                    "connections": [],
+                }
+            )
     for i in range(len(points) - 1):
         points[i]["connections"].append(points[i + 1]["id"])
         points[i + 1]["connections"].append(points[i]["id"])
@@ -535,22 +596,26 @@ def _build_heritage_nav_points(entities: list[dict[str, Any]]) -> list[dict[str,
 def _build_real_estate_nav_paths(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     paths = []
     for i in range(len(points) - 1):
-        paths.append({
-            "from_point": points[i]["id"],
-            "to_point": points[i + 1]["id"],
-            "type": "walk",
-        })
+        paths.append(
+            {
+                "from_point": points[i]["id"],
+                "to_point": points[i + 1]["id"],
+                "type": "walk",
+            }
+        )
     return paths
 
 
 def _build_heritage_nav_paths(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     paths = []
     for i in range(len(points) - 1):
-        paths.append({
-            "from_point": points[i]["id"],
-            "to_point": points[i + 1]["id"],
-            "type": "teleport",
-        })
+        paths.append(
+            {
+                "from_point": points[i]["id"],
+                "to_point": points[i + 1]["id"],
+                "type": "teleport",
+            }
+        )
     return paths
 
 
@@ -568,6 +633,6 @@ async def create_simulation_spec(
         objective=objective,
         intake_data=intake_data,
         clarification_data=clarification_data,
-        context=context or {}
+        context=context or {},
     )
     return await create_spec_llm(input_data)

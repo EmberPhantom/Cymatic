@@ -8,7 +8,9 @@ _CONFIG_PATH = Path(__file__).resolve()
 # The repository layout has four parents above this file; the container image
 # is rooted at /app and has fewer parents. Compose injects environment values
 # directly, so a missing container-local .env is valid.
-_ENV_FILE = str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+_ENV_FILE = (
+    str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+)
 
 
 class Settings(BaseSettings):
@@ -97,12 +99,18 @@ class Settings(BaseSettings):
             raise ValueError(f"LOG_LEVEL must be one of {allowed}")
         return v.upper()
 
-    @field_validator("REDIS_URL", "REDIS_CACHE_URL", "REDIS_USAGE_URL", "REDIS_RATE_URL")
+    @field_validator(
+        "REDIS_URL", "REDIS_CACHE_URL", "REDIS_USAGE_URL", "REDIS_RATE_URL"
+    )
     @classmethod
     def validate_redis_url(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        if v and not (v.startswith("redis://") or v.startswith("rediss://") or v.startswith("redis+")):
+        if v and not (
+            v.startswith("redis://")
+            or v.startswith("rediss://")
+            or v.startswith("redis+")
+        ):
             raise ValueError("REDIS_URL must start with redis:// or rediss://")
         return v
 
@@ -113,9 +121,13 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must not be empty")
         for origin in v:
             if origin == "*":
-                raise ValueError("CORS_ORIGINS wildcard '*' not allowed with allow_credentials")
+                raise ValueError(
+                    "CORS_ORIGINS wildcard '*' not allowed with allow_credentials"
+                )
             if not (origin.startswith("http://") or origin.startswith("https://")):
-                raise ValueError(f"CORS origin must start with http:// or https://: {origin}")
+                raise ValueError(
+                    f"CORS origin must start with http:// or https://: {origin}"
+                )
         return v
 
     @field_validator("RATE_LIMIT_LLM")
@@ -143,7 +155,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_provider_key(cls, v: str) -> str:
         if v and v.strip() != v:
-            raise ValueError("Provider API key must not have leading/trailing whitespace")
+            raise ValueError(
+                "Provider API key must not have leading/trailing whitespace"
+            )
         if v and len(v) < 8 and v != "":
             raise ValueError("Provider API key too short")
         return v

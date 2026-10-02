@@ -1,4 +1,5 @@
 """POST /v1/render/* - native mobile render sessions (Unity-free path)."""
+
 import json
 import uuid
 
@@ -16,11 +17,21 @@ from app.services.minio_client import get_minio_client
 
 async def _ready_scene_package(db_session, test_project) -> dict:
     body = {
-        "metadata": {"format": "cymatic_v1", "spec_version": 1, "generated_at": "2026-01-01T00:00:00+00:00"},
+        "metadata": {
+            "format": "cymatic_v1",
+            "spec_version": 1,
+            "generated_at": "2026-01-01T00:00:00+00:00",
+        },
         "domain": "real_estate",
         "entities": [],
         "navigation": {"points": [], "paths": [], "default_start_point": "start"},
-        "lighting": {"preset": "neutral", "time_of_day": "noon", "ambient_intensity": 0.5, "sun_direction": [0.5, -1, 0.3], "custom_lights": []},
+        "lighting": {
+            "preset": "neutral",
+            "time_of_day": "noon",
+            "ambient_intensity": 0.5,
+            "sun_direction": [0.5, -1, 0.3],
+            "custom_lights": [],
+        },
         "copilot_policy": {},
         "performance_budget": {},
         "asset_manifest": {},
@@ -38,12 +49,14 @@ async def _ready_scene_package(db_session, test_project) -> dict:
     raw = json.dumps(body).encode("utf-8")
     get_minio_client().upload_data(storage_key, raw, content_type="application/json")
 
-    db_session.add(ScenePackage(
-        project_id=test_project.id,
-        spec_id=spec.id,
-        storage_key=storage_key,
-        status="ready",
-    ))
+    db_session.add(
+        ScenePackage(
+            project_id=test_project.id,
+            spec_id=spec.id,
+            storage_key=storage_key,
+            status="ready",
+        )
+    )
     await db_session.commit()
     return body
 
@@ -81,7 +94,9 @@ async def test_render_create_unauthenticated(client, test_project):
 
 @pytest.mark.asyncio
 async def test_render_create_unknown_project(client, auth_headers):
-    resp = await client.post("/v1/render/sessions", json=_payload(999999), headers=auth_headers)
+    resp = await client.post(
+        "/v1/render/sessions", json=_payload(999999), headers=auth_headers
+    )
     assert resp.status_code == 404
 
 
@@ -95,7 +110,9 @@ async def test_render_create_requires_published(client, auth_headers, test_proje
 
 
 @pytest.mark.asyncio
-async def test_render_create_happy_with_scene_url(client, auth_headers, db_session, test_project):
+async def test_render_create_happy_with_scene_url(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
     await _ready_scene_package(db_session, test_project)
@@ -112,7 +129,9 @@ async def test_render_create_happy_with_scene_url(client, auth_headers, db_sessi
 
 
 @pytest.mark.asyncio
-async def test_render_create_second_session_conflicts(client, auth_headers, db_session, test_project):
+async def test_render_create_second_session_conflicts(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
     # publish check happens after project lookup; first session ok
@@ -121,13 +140,17 @@ async def test_render_create_second_session_conflicts(client, auth_headers, db_s
     )
     assert r1.status_code == 201
     r2 = await client.post(
-        "/v1/render/sessions", json=_payload(test_project.id, device="dev-2"), headers=auth_headers
+        "/v1/render/sessions",
+        json=_payload(test_project.id, device="dev-2"),
+        headers=auth_headers,
     )
     assert r2.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_render_create_old_app_rejected(client, auth_headers, db_session, test_project):
+async def test_render_create_old_app_rejected(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
     resp = await client.post(
@@ -144,7 +167,9 @@ async def test_render_create_revoked_device_forbidden(
 ):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
-    db_session.add(MobileDevice(user_id=test_user.id, device_id="lost-phone", revoked=True))
+    db_session.add(
+        MobileDevice(user_id=test_user.id, device_id="lost-phone", revoked=True)
+    )
     await db_session.commit()
 
     resp = await client.post(
@@ -156,7 +181,9 @@ async def test_render_create_revoked_device_forbidden(
 
 
 @pytest.mark.asyncio
-async def test_stream_active_tolerates_render_session(client, auth_headers, db_session, test_project):
+async def test_stream_active_tolerates_render_session(
+    client, auth_headers, db_session, test_project
+):
     """Render sessions set started_at; stream readers must not 500 on them."""
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
@@ -174,12 +201,16 @@ async def test_stream_active_tolerates_render_session(client, auth_headers, db_s
 
 @pytest.mark.asyncio
 async def test_render_heartbeat_unknown_session(client, auth_headers):
-    resp = await client.post("/v1/render/sessions/999999/heartbeat", headers=auth_headers)
+    resp = await client.post(
+        "/v1/render/sessions/999999/heartbeat", headers=auth_headers
+    )
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_render_heartbeat_activates(client, auth_headers, db_session, test_project):
+async def test_render_heartbeat_activates(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
     r = await client.post(
@@ -193,7 +224,9 @@ async def test_render_heartbeat_activates(client, auth_headers, db_session, test
 
 
 @pytest.mark.asyncio
-async def test_render_end_closes_session(client, auth_headers, db_session, test_project):
+async def test_render_end_closes_session(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
     r = await client.post(
@@ -207,7 +240,9 @@ async def test_render_end_closes_session(client, auth_headers, db_session, test_
 
     # After end, a new session is allowed again (no more active session).
     r2 = await client.post(
-        "/v1/render/sessions", json=_payload(test_project.id, device="dev-2"), headers=auth_headers
+        "/v1/render/sessions",
+        json=_payload(test_project.id, device="dev-2"),
+        headers=auth_headers,
     )
     assert r2.status_code == 201
 
@@ -223,7 +258,9 @@ async def test_render_voice_audio_unknown_session(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_render_voice_audio_empty_rejected(client, auth_headers, db_session, test_project):
+async def test_render_voice_audio_empty_rejected(
+    client, auth_headers, db_session, test_project
+):
     test_project.status = ProjectStatus.PUBLISHED
     await db_session.commit()
     r = await client.post(

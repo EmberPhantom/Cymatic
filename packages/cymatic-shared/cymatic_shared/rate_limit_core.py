@@ -6,12 +6,14 @@ Two admission orders exist historically and are BOTH preserved verbatim:
 Enforcement outcomes are equivalent (exactly `count` admits per window);
 only bookkeeping order differs. Callers keep their own key schemes.
 """
+
 import time
 import uuid
 
 
-async def sliding_check(client, redis_key: str, count: int, window: int,
-                        *, add_first: bool = False) -> tuple[bool, int]:
+async def sliding_check(
+    client, redis_key: str, count: int, window: int, *, add_first: bool = False
+) -> tuple[bool, int]:
     """Return (is_limited, retry_after_seconds). Fail-closed on Redis error."""
     now = time.time()
     try:
@@ -49,7 +51,11 @@ async def _retry_after(client, redis_key: str, now: float, window: int) -> int:
         oldest = await client.zrange(redis_key, 0, 0, withscores=True)
         if oldest:
             first = oldest[0]
-            score = first[1] if isinstance(first, (list, tuple)) and len(first) == 2 else first
+            score = (
+                first[1]
+                if isinstance(first, (list, tuple)) and len(first) == 2
+                else first
+            )
             return max(int(float(score) + window - now) + 1, 1)
     except Exception:
         pass
@@ -70,10 +76,14 @@ def parse_limit(limit: str) -> tuple[int, int]:
     count, period = limit.split("/", 1)
     period = period.strip().lower()
     mapping = {
-        "second": 1, "seconds": 1,
-        "minute": 60, "minutes": 60,
-        "hour": 3600, "hours": 3600,
-        "day": 86400, "days": 86400,
+        "second": 1,
+        "seconds": 1,
+        "minute": 60,
+        "minutes": 60,
+        "hour": 3600,
+        "hours": 3600,
+        "day": 86400,
+        "days": 86400,
     }
     if period not in mapping:
         raise ValueError(f"Unknown period: {period}")

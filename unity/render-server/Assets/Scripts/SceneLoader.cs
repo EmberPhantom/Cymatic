@@ -44,14 +44,14 @@ namespace Cymatic
         [Header("Settings")]
         [SerializeField] private string _minioEndpoint = "http://localhost:9000";
         [SerializeField] private string _bucketName = "cymatic";
-        
+
         // Current scene
         private GameObject _sceneRoot;
         private CymaticScenePackage _currentPackage;
         private Dictionary<string, GameObject> _prefabCache = new Dictionary<string, GameObject>();
-        
+
         public CymaticScenePackage CurrentPackage => _currentPackage;
-        
+
         public async UniTask<CymaticScenePackage> LoadFromUrl(string url, string authToken = null, int maxMb = 50)
         {
             Debug.Log($"[SceneLoader] Downloading scene package from {url}");
@@ -63,7 +63,7 @@ namespace Cymatic
                     request.SetRequestHeader("Authorization", "Bearer " + authToken);
                 request.timeout = 30;
                 await request.SendWebRequest();
-                
+
                 if (request.result != UnityWebRequest.Result.Success)
                 {
                     Debug.LogError($"[SceneLoader] Failed to download: {request.error}");
@@ -96,25 +96,25 @@ namespace Cymatic
                 return package;
             }
         }
-        
+
         public async UniTask<bool> InstantiateScene(CymaticScenePackage package)
         {
             _currentPackage = package;
-            
+
             // Clear previous scene
             await UnloadScene();
-            
+
             // Create scene root
             _sceneRoot = new GameObject($"Scene_{package.metadata.domain}_{package.metadata.spec_version}");
             _sceneRoot.transform.position = Vector3.zero;
-            
+
             // Ensure MaterialManager is initialized
             if (MaterialManager.Instance == null)
             {
                 var matManagerGO = new GameObject("MaterialManager");
                 matManagerGO.AddComponent<MaterialManager>();
             }
-            
+
             // Instantiate entities using object pooling - yield every 10 to avoid hitch (low-end Android)
             int count = 0;
             foreach (var entity in package.entities)
@@ -124,34 +124,34 @@ namespace Cymatic
                 if (count % 10 == 0)
                     await UniTask.Yield(PlayerLoopTiming.Update);
             }
-            
+
             // Setup lighting
             SetupLighting(package.lighting);
-            
+
             // Setup navigation
             SetupNavigation(package.navigation);
-            
+
             // Setup copilot
             SetupCopilot(package.copilot_policy);
-            
+
             // Initialize NavigationManager
             if (NavigationManager.Instance == null)
             {
                 var navManagerGO = new GameObject("NavigationManager");
                 navManagerGO.AddComponent<NavigationManager>();
             }
-            
+
             // Build NavMesh
             if (NavigationManager.Instance != null)
             {
                 await UniTask.NextFrame();
                 NavigationManager.Instance.BuildNavMesh();
             }
-            
+
             Debug.Log($"[SceneLoader] Scene instantiated with {package.entities.Count} entities");
             return true;
         }
-        
+
         private async UniTask InstantiateEntity(SceneEntity entity, Transform parent)
         {
             var go = new GameObject(entity.name);
@@ -160,13 +160,13 @@ namespace Cymatic
             go.transform.localRotation = Quaternion.Euler(entity.rotation);
             go.transform.localScale = entity.scale;
             if (entity.type == "room" || entity.type == "floor" || entity.type == "wall") go.isStatic = true;
-            
+
             // Add components
             foreach (var comp in entity.components)
             {
                 AddComponent(go, comp);
             }
-            
+
             // Load prefab if specified
             if (!string.IsNullOrEmpty(entity.prefab_path))
             {
@@ -179,20 +179,20 @@ namespace Cymatic
                     instance.transform.localScale = Vector3.one;
                 }
             }
-            
+
             // Set properties
             ApplyProperties(go, entity.properties);
-            
+
             // Add entity type component
             AddEntityTypeComponent(go, entity);
-            
+
             // Instantiate children
             foreach (var child in entity.children)
             {
                 await InstantiateEntity(child, go.transform);
             }
         }
-        
+
         // P0 FIX: whitelist allowed components to prevent arbitrary Type.GetType code execution
         private static readonly HashSet<string> AllowedComponents = new HashSet<string>
         {
@@ -269,17 +269,17 @@ namespace Cymatic
                 Debug.LogWarning($"[SceneLoader] Could not resolve component type: {comp.type}");
             }
         }
-        
+
         private void ApplyProperties(GameObject go, Dictionary<string, object> properties)
         {
             // Store properties for runtime access
             var propComponent = go.GetComponent<EntityProperties>();
             if (propComponent == null)
                 propComponent = go.AddComponent<EntityProperties>();
-            
+
             propComponent.properties = properties;
         }
-        
+
         private void AddEntityTypeComponent(GameObject go, SceneEntity entity)
         {
             // Add entity type component for runtime identification
@@ -294,7 +294,7 @@ namespace Cymatic
                         roomComp.style = TryGetDictValue(entity.properties, "style", "modern");
                     }
                     break;
-                    
+
                 case "poi":
                     var poiComp = go.AddComponent<POIComponent>();
                     poiComp.name = entity.name;
@@ -304,12 +304,12 @@ namespace Cymatic
                         poiComp.hasNarration = TryGetDictValue(entity.properties, "has_narration", true);
                     }
                     break;
-                    
+
                 case "navigation_point":
                     var navPoint = go.AddComponent<NavigationPoint>();
                     navPoint.Initialize(entity.id, entity.name, TryGetDictValue(entity.properties, "description", ""), new List<string>());
                     break;
-                    
+
                 case "light":
                     var light = go.AddComponent<Light>();
                     light.shadows = LightShadows.None; // MVP baked
@@ -326,32 +326,32 @@ namespace Cymatic
                     break;
             }
         }
-        
+
         private async UniTask<GameObject> LoadPrefab(string path)
         {
             if (_prefabCache.ContainsKey(path))
                 return _prefabCache[path];
-            
+
             // Try Resources first
             var prefab = Resources.Load<GameObject>(path);
-            
+
             if (prefab == null)
             {
                 // Try Addressables or AssetBundle
                 // For now, create primitive based on name
                 prefab = CreatePrimitiveFromPath(path);
             }
-            
+
             if (prefab != null)
                 _prefabCache[path] = prefab;
-            
+
             return prefab;
         }
-        
+
         private GameObject CreatePrimitiveFromPath(string path)
         {
             var name = path.ToLower();
-            
+
             if (name.Contains("room") || name.Contains("floor"))
                 return CreateRoomPrimitive();
             else if (name.Contains("wall"))
@@ -360,42 +360,42 @@ namespace Cymatic
                 return CreateLightPrimitive();
             else if (name.Contains("poi") || name.Contains("navigation"))
                 return CreatePOIPrimitive();
-            
+
             return GameObject.CreatePrimitive(PrimitiveType.Cube);
         }
-        
+
         private GameObject CreateRoomPrimitive()
         {
             var go = new GameObject("Room");
             var renderer = go.AddComponent<MeshRenderer>();
             var filter = go.AddComponent<MeshFilter>();
-            
+
             // Create room mesh (floor + walls)
             var mesh = new Mesh();
             // Simplified: just a floor plane for now
             filter.mesh = CreateFloorMesh(10, 10);
-            
-            renderer.material = MaterialManager.Instance?.GetWallMaterial() 
+
+            renderer.material = MaterialManager.Instance?.GetWallMaterial()
                 ?? new Material(Shader.Find("Standard")) { color = new Color(0.8f, 0.8f, 0.8f) };
-            
+
             var collider = go.AddComponent<BoxCollider>();
             collider.size = new Vector3(10, 3, 10);
             collider.center = new Vector3(0, 1.5f, 0);
-            
+
             // Add room component
             var roomComp = go.AddComponent<RoomComponent>();
             roomComp.name = "Room";
-            
+
             return go;
         }
-        
+
         private GameObject CreateWallPrimitive()
         {
             var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
             go.transform.localScale = new Vector3(0.2f, 3, 5);
             return go;
         }
-        
+
         private GameObject CreateLightPrimitive()
         {
             var go = new GameObject("Light");
@@ -404,7 +404,7 @@ namespace Cymatic
             light.intensity = 1f;
             return go;
         }
-        
+
         private GameObject CreatePOIPrimitive()
         {
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -412,14 +412,14 @@ namespace Cymatic
             var collider = go.GetComponent<SphereCollider>();
             collider.isTrigger = true;
             collider.radius = 2f;
-            
+
             // Add POI component
             var poi = go.AddComponent<POIComponent>();
             poi.name = "POI";
-            
+
             return go;
         }
-        
+
         private Mesh CreateFloorMesh(float width, float depth)
         {
             var mesh = new Mesh();
@@ -435,15 +435,15 @@ namespace Cymatic
             {
                 new Vector2(0, 0), new Vector2(1, 0), new Vector2(0, 1), new Vector2(1, 1)
             };
-            
+
             mesh.vertices = vertices;
             mesh.triangles = triangles;
             mesh.uv = uvs;
             mesh.RecalculateNormals();
-            
+
             return mesh;
         }
-        
+
         private void SetupLighting(LightingData lighting)
         {
             // P0 FIX: 415 custom_lights null - add null guard for lighting itself
@@ -463,7 +463,7 @@ namespace Cymatic
                 var lightGO = new GameObject("MainLight");
                 mainLight = lightGO.AddComponent<Light>();
             }
-            
+
             mainLight.type = LightType.Directional;
             mainLight.intensity = lighting.ambient_intensity;
             mainLight.color = Color.white;
@@ -472,12 +472,12 @@ namespace Cymatic
             mainLight.lightmapBakeType = LightmapBakeType.Baked;
             mainLight.shadowBias = 0f;
             mainLight.shadowNormalBias = 0f;
-            
+
             if (lighting.sun_direction != null && lighting.sun_direction.Length == 3)
             {
                 mainLight.transform.rotation = Quaternion.Euler(lighting.sun_direction);
             }
-            
+
             // Apply preset
             switch (lighting.preset)
             {
@@ -511,7 +511,7 @@ namespace Cymatic
                     mainLight.color = new Color(1f, 0.95f, 0.85f);
                     break;
             }
-            
+
             // Custom lights - P0 FIX: null guard, baked, no realtime shadows for MVP
             if (lighting.custom_lights != null)
             {
@@ -540,46 +540,46 @@ namespace Cymatic
             RenderSettings.reflectionBounces = 0;
             // isStatic batching/stripEngineCode already enabled via ProjectSettings - runtime static batching automatic for isStatic objects
         }
-        
+
         private void SetupNavigation(NavigationSpec navigation)
         {
             var navRoot = new GameObject("Navigation");
             navRoot.transform.SetParent(_sceneRoot.transform);
-            
+
             foreach (var point in navigation.points)
             {
                 var pointGO = new GameObject($"Nav_{point.name}");
                 pointGO.transform.SetParent(navRoot.transform);
                 pointGO.transform.position = point.position;
-                
+
                 var navPoint = pointGO.AddComponent<NavigationPoint>();
                 navPoint.Initialize(point.id, point.name, point.description, point.connections);
-                
+
                 // Visual representation
                 var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
                 sphere.transform.SetParent(pointGO.transform);
                 sphere.transform.localScale = Vector3.one * 0.3f;
                 sphere.GetComponent<Renderer>().material = MaterialManager.Instance?.GetNavigationMarkerMaterial();
             }
-            
+
             // Create paths
             var pathsRoot = new GameObject("Paths");
             pathsRoot.transform.SetParent(navRoot.transform);
-            
+
             foreach (var path in navigation.paths)
             {
                 var pathGO = new GameObject($"Path_{path.from_point}_to_{path.to_point}");
                 pathGO.transform.SetParent(pathsRoot.transform);
-                
+
                 var lr = pathGO.AddComponent<LineRenderer>();
                 lr.startWidth = 0.1f;
                 lr.endWidth = 0.1f;
                 lr.material = new Material(Shader.Find("Sprites/Default")) { color = Color.blue };
-                
+
                 // Find points
                 var fromPoint = navRoot.transform.Find($"Nav_{path.from_point}");
                 var toPoint = navRoot.transform.Find($"Nav_{path.to_point}");
-                
+
                 if (fromPoint != null && toPoint != null)
                 {
                     lr.positionCount = 2;
@@ -588,7 +588,7 @@ namespace Cymatic
                 }
             }
         }
-        
+
         private void SetupCopilot(CopilotPolicyData copilot)
         {
             var copilotGO = new GameObject("CopilotSystem");
@@ -610,7 +610,7 @@ namespace Cymatic
             }
             catch { return defaultValue; }
         }
-        
+
         public async UniTask UnloadScene()
         {
             if (_sceneRoot != null)
@@ -618,15 +618,15 @@ namespace Cymatic
                 Destroy(_sceneRoot);
                 _sceneRoot = null;
             }
-            
+
             _currentPackage = null;
             _prefabCache.Clear();
             Resources.UnloadUnusedAssets();
-            
+
             await UniTask.Yield();
         }
     }
-    
+
     [System.Serializable]
     public class CymaticScenePackage
     {
@@ -639,7 +639,7 @@ namespace Cymatic
         public PerformanceBudgetData performance_budget;
         public Dictionary<string, object> asset_manifest;
     }
-    
+
     [System.Serializable]
     public class ScenePackageMetadata
     {
@@ -652,7 +652,7 @@ namespace Cymatic
         public string target_platform;
         public string streaming_protocol;
     }
-    
+
     [System.Serializable]
     public class SceneEntity
     {
@@ -667,14 +667,14 @@ namespace Cymatic
         public List<ComponentData> components;
         public List<SceneEntity> children;
     }
-    
+
     [System.Serializable]
     public class ComponentData
     {
         public string type;
         public Dictionary<string, object> properties;
     }
-    
+
     [System.Serializable]
     public class NavigationSpec
     {
@@ -682,7 +682,7 @@ namespace Cymatic
         public List<NavigationPathData> paths;
         public string default_start_point;
     }
-    
+
     [System.Serializable]
     public class NavigationPointData
     {
@@ -693,7 +693,7 @@ namespace Cymatic
         public List<string> connections;
         public Vector3 rotation;
     }
-    
+
     [System.Serializable]
     public class NavigationPathData
     {
@@ -702,7 +702,7 @@ namespace Cymatic
         public string type;
         public List<Vector3> waypoints;
     }
-    
+
     [System.Serializable]
     public class LightingData
     {
@@ -712,7 +712,7 @@ namespace Cymatic
         public float[] sun_direction;
         public List<CustomLightData> custom_lights;
     }
-    
+
     [System.Serializable]
     public class CustomLightData
     {
@@ -723,7 +723,7 @@ namespace Cymatic
         public float? range;
         public float? angle;
     }
-    
+
     [System.Serializable]
     public class CopilotPolicyData
     {
@@ -734,7 +734,7 @@ namespace Cymatic
         public List<string> allowed_actions;
         public string knowledge_base;
     }
-    
+
     [System.Serializable]
     public class PerformanceBudgetData
     {
@@ -745,5 +745,5 @@ namespace Cymatic
         public int max_entities;
         public float[] lod_distances;
     }
-    
+
 }

@@ -1,4 +1,5 @@
 """Specs sub-router (split from specs.py, no logic change)."""
+
 import copy
 import hashlib
 import json
@@ -16,13 +17,17 @@ from app.models import GenerationRun
 from cymatic_shared.ids import new_run_id
 from cymatic_shared.model_enums import RunStatus, RunStage
 from .schemas import (
-    SpecGenerateRequest, SpecClarifyRequest, ClarifyWithStateRequest,
+    SpecGenerateRequest,
+    SpecClarifyRequest,
+    ClarifyWithStateRequest,
 )
+
 # NOTE: agent entry points resolve via the specs package namespace
 # (app.api.v1.endpoints.specs.process_*) so tests can monkeypatch them.
 from app.api.v1.endpoints import specs as _specs_ns
 
 router = APIRouter()
+
 
 @router.post("/{project_id}/intake", response_model=Dict[str, Any])
 async def intake_prompt(
@@ -167,7 +172,9 @@ async def clarify_requirements(
     # collision, discarding prior LLM-derived answers.
     from cymatic_shared.agents.clarification_agent import normalize_answer_keys
 
-    stored_answers = normalize_answer_keys(dict((run.clarification_json if run else {}) or {}))
+    stored_answers = normalize_answer_keys(
+        dict((run.clarification_json if run else {}) or {})
+    )
     intake_entities = normalize_answer_keys(
         (request.current_intake or {}).get("extracted_entities", {}) or {}
     )
@@ -209,7 +216,9 @@ async def clarify_requirements(
     if run:
         run.clarification_json = copy.deepcopy(clarification_result.updated_fields)
         run.stage = (
-            RunStage.SPEC if clarification_result.ready_for_generation else RunStage.CLARIFICATION
+            RunStage.SPEC
+            if clarification_result.ready_for_generation
+            else RunStage.CLARIFICATION
         )
         run.status = (
             RunStatus.READY_FOR_SPEC
@@ -293,7 +302,9 @@ async def clarify_with_state(
                 _detected = _run.intake_json.get("detected_domain")
                 _objective = _run.intake_json.get("objective")
             _prompt = _run.prompt
-    _intake_entities = _norm((request.current_intake or {}).get("extracted_entities", {}) or {})
+    _intake_entities = _norm(
+        (request.current_intake or {}).get("extracted_entities", {}) or {}
+    )
     _intake_entities = {k: v for k, v in _intake_entities.items() if v is not True}
     _current = {**_intake_entities, **_stored}
     _domain = _detected or project.domain
@@ -318,7 +329,9 @@ async def clarify_with_state(
             raise HTTPException(status_code=404, detail="Generation run not found")
         run.clarification_json = copy.deepcopy(clarification_result.updated_fields)
         run.stage = (
-            RunStage.SPEC if clarification_result.ready_for_generation else RunStage.CLARIFICATION
+            RunStage.SPEC
+            if clarification_result.ready_for_generation
+            else RunStage.CLARIFICATION
         )
         run.status = (
             RunStatus.READY_FOR_SPEC

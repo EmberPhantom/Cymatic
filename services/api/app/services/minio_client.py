@@ -4,6 +4,7 @@ Single source: cymatic_shared.services.minio_client (pooled full client).
 This module keeps the settings-bound singleton plus the org/project key
 conventions used across api endpoints.
 """
+
 from datetime import timedelta
 
 from cymatic_shared.services.minio_client import MinIOClient  # noqa: F401
@@ -27,14 +28,18 @@ def get_minio_client() -> MinIOClient:
     return _minio_client_instance
 
 
-def get_asset_storage_key(organization_id: int, project_id: int | None, filename: str) -> str:
+def get_asset_storage_key(
+    organization_id: int, project_id: int | None, filename: str
+) -> str:
     """Generate standardized storage key for assets."""
     if project_id:
         return f"orgs/{organization_id}/projects/{project_id}/assets/{filename}"
     return f"orgs/{organization_id}/assets/{filename}"
 
 
-def get_scene_package_key(organization_id: int, project_id: int, spec_id: int, version: int) -> str:
+def get_scene_package_key(
+    organization_id: int, project_id: int, spec_id: int, version: int
+) -> str:
     """Generate storage key for scene packages."""
     return f"orgs/{organization_id}/projects/{project_id}/scenes/spec_{spec_id}_v{version}.cymatic"
 

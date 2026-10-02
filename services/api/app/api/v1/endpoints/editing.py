@@ -29,7 +29,15 @@ def _ensure_manual_editing():
 
 
 class EditOperation(BaseModel):
-    operation: Literal["move", "rotate", "scale", "change_material", "add_entity", "duplicate", "delete"]
+    operation: Literal[
+        "move",
+        "rotate",
+        "scale",
+        "change_material",
+        "add_entity",
+        "duplicate",
+        "delete",
+    ]
     entity_id: str = Field(min_length=1, max_length=128)
     params: Dict[str, Any] = Field(default_factory=dict, max_length=50)
 
@@ -52,10 +60,13 @@ class EntityPatch(BaseModel):
     properties: Optional[Dict[str, Any]] = Field(default=None, max_length=50)
 
     @classmethod
-    def _check_finite(cls, values: Optional[List[float]], name: str) -> Optional[List[float]]:
+    def _check_finite(
+        cls, values: Optional[List[float]], name: str
+    ) -> Optional[List[float]]:
         if values is None:
             return values
         import math
+
         for v in values:
             if not math.isfinite(v) or abs(v) > 1e6:
                 raise ValueError(f"{name} must be finite within ±1e6")
@@ -108,9 +119,19 @@ async def edit_spec(
         # add_entity is allowed when entity_id == "new" or when not in map - handle before existence check
         if operation.operation == "add_entity":
             allowed_types = {
-                "room", "wall", "floor", "ceiling", "door", "window",
-                "furniture", "decoration", "light", "navigation_point",
-                "poi", "audio_zone", "trigger_zone",
+                "room",
+                "wall",
+                "floor",
+                "ceiling",
+                "door",
+                "window",
+                "furniture",
+                "decoration",
+                "light",
+                "navigation_point",
+                "poi",
+                "audio_zone",
+                "trigger_zone",
             }
             req_type = str(operation.params.get("type", "furniture"))
             if req_type not in allowed_types:
@@ -163,10 +184,22 @@ async def edit_spec(
                 items = nav.get(key)
                 if isinstance(items, list):
                     nav[key] = [
-                        it for it in items
+                        it
+                        for it in items
                         if it != operation.entity_id
-                        and not (isinstance(it, dict) and it.get("id") == operation.entity_id)
-                        and not (isinstance(it, dict) and operation.entity_id in (it.get("from"), it.get("to"), it.get("from_point"), it.get("to_point")))
+                        and not (
+                            isinstance(it, dict) and it.get("id") == operation.entity_id
+                        )
+                        and not (
+                            isinstance(it, dict)
+                            and operation.entity_id
+                            in (
+                                it.get("from"),
+                                it.get("to"),
+                                it.get("from_point"),
+                                it.get("to_point"),
+                            )
+                        )
                     ]
         elif operation.operation == "duplicate":
             new_entity = copy.deepcopy(entity)
@@ -186,6 +219,7 @@ async def edit_spec(
     # Async worker re-validation still runs, but invalid edits are rejected here.
     try:
         from app.services.spec_validator import validate_spec as _validate_sync
+
         _vresult = _validate_sync(payload)
         if not _vresult.valid:
             first = _vresult.errors[0].to_dict() if _vresult.errors else {}
@@ -299,7 +333,10 @@ async def patch_entity(
     if patch.scale is not None:
         entity["scale"] = copy.deepcopy(patch.scale)
     if patch.properties is not None:
-        entity["properties"] = {**entity.get("properties", {}), **copy.deepcopy(patch.properties)}
+        entity["properties"] = {
+            **entity.get("properties", {}),
+            **copy.deepcopy(patch.properties),
+        }
 
     payload["entities"] = entities
     spec.payload_json = payload

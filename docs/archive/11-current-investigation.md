@@ -1,6 +1,6 @@
 # CYMATIC Current Investigation
 
-**Investigation date:** 2026-08-20  
+**Investigation date:** 2026-08-20
 **Compared against:** [`docs/10-follow-up-audit.md`](10-follow-up-audit.md)
 
 ## Current Verdict
@@ -52,7 +52,7 @@ The repository has improved in several areas: Python syntax compilation passes, 
 
 ### C-01: Worker cannot start because generation imports absent model modules
 
-**Severity:** Critical  
+**Severity:** Critical
 **Evidence:** `services/worker/app/tasks/generation.py:5-8`; current worker model inventory contains only `__init__.py`, `asset.py`, and `scene_package.py`.
 
 Direct execution of `python -c "import app.main"` from `services/worker` fails with:
@@ -65,28 +65,28 @@ The worker imports `app.models.project` and `app.models.simulation_spec`, but th
 
 ### C-02: Worker still has inconsistent model ownership
 
-**Severity:** Critical  
+**Severity:** Critical
 **Evidence:** `packages/cymatic-shared/cymatic_shared/models`, `services/worker/app/models`, and `services/worker/app/tasks/generation.py`.
 
 The shared package now contains the authoritative-looking model set, while worker-local wrappers/files and task imports still disagree. The worker must use one model namespace and one `Base.metadata` contract. Until that is true, migrations, relationships, foreign keys, and runtime queries cannot be trusted.
 
 ### C-03: Docker requirements reference a relative shared package that may resolve outside the image
 
-**Severity:** High; build verification pending Docker availability  
+**Severity:** High; build verification pending Docker availability
 **Evidence:** `services/api/requirements.txt:20`, `services/worker/requirements.txt:15`, API/worker Dockerfiles.
 
 The Dockerfiles copy the shared package to `/app/packages/cymatic-shared`, then install requirements from `/app`. The requirements reference `../../packages/cymatic-shared`. That path resolves differently from the Dockerfile copy location and may point outside the image. The image build must be run from a clean Docker daemon and the requirement should use the already-installed package or a correct absolute/build-relative strategy.
 
 ### C-04: Frontend production build is still broken in the current environment
 
-**Severity:** High  
+**Severity:** High
 **Evidence:** `npm run build` output.
 
 Next.js fails to load `@next/swc-win32-x64-msvc` because the installed native module is not a valid Win32 application. TypeScript passes, but production readiness requires a clean dependency install and successful build. This may be local dependency corruption or an architecture mismatch, but it is not resolved until a clean install/build succeeds.
 
 ### C-05: Compose requires a non-committed `.env` and cannot validate from the repository state
 
-**Severity:** High for local execution  
+**Severity:** High for local execution
 **Evidence:** `infra/docker/docker-compose.yml:60`, `:82`, `:103`; current command output.
 
 `docker compose config` fails because `P:\Cymatic\.env` is missing. The project has `.env.example`, but Compose service `env_file` entries require `.env` directly. A first-run setup must create the file automatically or Compose must use a documented, validated fallback. Production secrets must still be explicitly supplied.

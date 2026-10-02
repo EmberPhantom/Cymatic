@@ -1,4 +1,5 @@
 """Stable ID formats for jobs and generation runs. Single source."""
+
 import uuid
 
 

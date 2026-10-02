@@ -1,4 +1,5 @@
 """Intake Agent - re-export from shared package"""
+
 from cymatic_shared.agents.intake_agent import (
     process_intake,
     process_intake_llm,

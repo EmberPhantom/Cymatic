@@ -9,12 +9,12 @@ namespace Cymatic.Prefabs
     public class EntityProperties : MonoBehaviour
     {
         public Dictionary<string, object> properties = new Dictionary<string, object>();
-        
+
         public void SetProperty(string key, object value)
         {
             properties[key] = value;
         }
-        
+
         public T GetProperty<T>(string key, T defaultValue = default(T))
         {
             if (properties.TryGetValue(key, out var value))
@@ -25,17 +25,17 @@ namespace Cymatic.Prefabs
             }
             return defaultValue;
         }
-        
+
         public bool HasProperty(string key)
         {
             return properties.ContainsKey(key);
         }
-        
+
         public void RemoveProperty(string key)
         {
             properties.Remove(key);
         }
-        
+
         public void Clear()
         {
             properties.Clear();

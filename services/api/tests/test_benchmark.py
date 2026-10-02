@@ -1,9 +1,9 @@
 """Minimal benchmark for CI — satisfies --benchmark-only without requiring full stack."""
-import pytest
 
 
 def test_health_benchmark(benchmark):
     """Benchmark dummy computation to satisfy CI; replace with real /health later."""
+
     def _work():
         s = 0
         for i in range(1000):
@@ -16,7 +16,11 @@ def test_health_benchmark(benchmark):
 
 def test_spec_validation_benchmark(benchmark):
     """Benchmark small JSON validation path."""
-    payload = {"domain": "real_estate", "title": "Benchmark", "entities": [{"id": "e1", "type": "room"}]}
+    payload = {
+        "domain": "real_estate",
+        "title": "Benchmark",
+        "entities": [{"id": "e1", "type": "room"}],
+    }
 
     def _validate():
         # light validation similar to spec_validator

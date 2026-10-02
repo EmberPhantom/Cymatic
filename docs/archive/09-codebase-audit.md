@@ -1,7 +1,7 @@
 # CYMATIC Codebase Audit
 
-**Audit date:** 2026-08-19  
-**Repository:** `P:\Cymatic`  
+**Audit date:** 2026-08-19
+**Repository:** `P:\Cymatic`
 **Scope:** frontend, API, worker, LLM router, shared schemas, Docker/CI, Unity render server, Android client, tests, migrations, security, documentation, and end-to-end execution paths.
 
 ## Executive Verdict
@@ -39,16 +39,16 @@ The inability to run frontend and Docker execution checks is itself recorded as 
 
 ### C-01: LLM router has a syntax error
 
-**Severity:** Critical  
-**Evidence:** `services/llm-router/app/providers/litellm_client.py:247`  
+**Severity:** Critical
+**Evidence:** `services/llm-router/app/providers/litellm_client.py:247`
 **Observed:** Python compilation reports `SyntaxError: expected 'except' or 'finally' block`.
 
 The router cannot be imported or started. Any worker agent that calls it, and any CI job that compiles or type-checks it, is blocked. Fix the malformed exception/control-flow block, then add an import smoke test that imports `app.main` and the provider client.
 
 ### C-02: Worker service has broken module boundaries
 
-**Severity:** Critical  
-**Evidence:** `services/worker/app/main.py:9`, `services/worker/app/tasks/generation.py:2-9`, `services/worker/app/agents/validation_agent.py:4`  
+**Severity:** Critical
+**Evidence:** `services/worker/app/main.py:9`, `services/worker/app/tasks/generation.py:2-9`, `services/worker/app/agents/validation_agent.py:4`
 **Observed:** Worker code imports `app.core.queue`, `app.models.*`, and `app.services.minio_client`, but the worker tree does not contain those modules. It also imports `services.api.app.services.spec_validator` directly.
 
 The worker Dockerfile copies only `services/worker/app`, so these imports cannot be satisfied inside the worker image. The worker and worker tests also use inconsistent import roots (`app.*` versus `services.worker.app.*`). This breaks worker startup and generation execution.
@@ -57,24 +57,24 @@ Create an explicit shared package for database models, queue contracts, and sche
 
 ### C-03: CI frontend installation is guaranteed to fail without a lockfile
 
-**Severity:** Critical  
-**Evidence:** `.github/workflows/ci.yml:30-36`, `apps/web/Dockerfile:6-7`  
+**Severity:** Critical
+**Evidence:** `.github/workflows/ci.yml:30-36`, `apps/web/Dockerfile:6-7`
 **Observed:** CI uses `npm ci` and caches `apps/web/package-lock.json`, but no `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock` exists in the repository.
 
 Both CI and the web Docker build are blocked before compilation. Generate and commit the lockfile using the chosen package manager, then keep CI and Docker aligned with that package manager.
 
 ### C-04: Android project is not a valid Kotlin Gradle project as written
 
-**Severity:** Critical  
-**Evidence:** `android/client/build.gradle.kts:2-4`, `android/client/app/build.gradle.kts:1-3`, `android/client/app/build.gradle.kts:98`, `android/client/app/build.gradle.kts:116-120`  
+**Severity:** Critical
+**Evidence:** `android/client/build.gradle.kts:2-4`, `android/client/app/build.gradle.kts:1-3`, `android/client/app/build.gradle.kts:98`, `android/client/app/build.gradle.kts:116-120`
 **Observed:** `.kts` files contain Groovy syntax such as `id '...'`, single-quoted dependency declarations, and Groovy-style `kapt`. No `settings.gradle(.kts)`, Gradle wrapper, or standard project entrypoint is present in the file inventory.
 
 Android compilation is not execution-ready. Convert the files consistently to Kotlin DSL or rename/use Groovy build files consistently, add project settings and a wrapper, and verify a clean debug build.
 
 ### C-05: Production web Docker image expects unconfigured Next.js standalone output
 
-**Severity:** High  
-**Evidence:** `apps/web/Dockerfile:19-22`, `apps/web/next.config.js:2-25`  
+**Severity:** High
+**Evidence:** `apps/web/Dockerfile:19-22`, `apps/web/next.config.js:2-25`
 **Observed:** The runtime stage copies `.next/standalone`, but `next.config.js` does not set `output: 'standalone'`. The image also assumes `public` exists.
 
 The production image is likely to fail during the copy stage or lack the expected `server.js`. Configure standalone output and test the image, or change the Dockerfile to match the selected Next.js deployment mode.

@@ -432,7 +432,7 @@ jobs:
         run: |
           echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           for dir in test-results/*/; do
             if [ -d "$dir" ]; then
               name=$(basename "$dir")

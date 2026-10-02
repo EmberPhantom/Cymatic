@@ -2,6 +2,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+
 class SpecPayload(BaseModel):
     """Base simulation specification payload"""
 
@@ -94,4 +95,3 @@ class ClarifyWithStateRequest(BaseModel):
     answers: Dict[str, str]
     current_intake: Dict[str, Any] = {}
     run_id: Optional[str] = None
-

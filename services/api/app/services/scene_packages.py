@@ -5,6 +5,7 @@ server) and the mobile browser viewer flow (proxied JSON body) so both read
 the same "latest ready ScenePackage for a project" query instead of each
 maintaining their own copy.
 """
+
 import json
 from typing import Any, Optional
 
@@ -71,7 +72,5 @@ async def get_latest_scene_package_json(
     except ScenePackageUnavailable:
         raise
     except Exception as e:
-        logger.error(
-            "scene_package_fetch_failed", project_id=project_id, error=str(e)
-        )
+        logger.error("scene_package_fetch_failed", project_id=project_id, error=str(e))
         raise ScenePackageUnavailable(str(e)) from e

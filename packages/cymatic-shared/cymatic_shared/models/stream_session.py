@@ -1,4 +1,5 @@
 """StreamSession model"""
+
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime
@@ -20,10 +21,18 @@ class StreamSession(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(Enum(StreamSessionStatus, values_callable=lambda x: [e.value for e in x]), default=StreamSessionStatus.PENDING, nullable=False)
+    status = Column(
+        Enum(StreamSessionStatus, values_callable=lambda x: [e.value for e in x]),
+        default=StreamSessionStatus.PENDING,
+        nullable=False,
+    )
     signaling_session_id = Column(String(255), nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
     project = relationship("Project", back_populates="stream_sessions")

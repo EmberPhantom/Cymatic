@@ -1,4 +1,5 @@
 """Job queue cancel semantics against real Redis (container test env)."""
+
 import pytest
 
 from app.core.queue import Job, JobPriority, job_queue

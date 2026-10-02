@@ -1,4 +1,5 @@
 """Shared Simulation Specification Schemas (Python/Pydantic)"""
+
 from typing import Literal, Optional, List, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from datetime import datetime, timezone
@@ -6,15 +7,36 @@ from datetime import datetime, timezone
 
 Domain = Literal["real_estate", "heritage"]
 EntityType = Literal[
-    "room", "wall", "floor", "ceiling", "door", "window",
-    "furniture", "decoration", "light", "navigation_point",
-    "poi", "audio_zone", "trigger_zone"
+    "room",
+    "wall",
+    "floor",
+    "ceiling",
+    "door",
+    "window",
+    "furniture",
+    "decoration",
+    "light",
+    "navigation_point",
+    "poi",
+    "audio_zone",
+    "trigger_zone",
 ]
-LightingPreset = Literal["warm", "cool", "neutral", "golden_hour", "blue_hour", "custom"]
-CopilotPersonality = Literal["helpful_guide", "expert_narrator", "friendly_assistant", "professional_host"]
+LightingPreset = Literal[
+    "warm", "cool", "neutral", "golden_hour", "blue_hour", "custom"
+]
+CopilotPersonality = Literal[
+    "helpful_guide", "expert_narrator", "friendly_assistant", "professional_host"
+]
 CopilotAction = Literal[
-    "highlight_object", "show_label", "move_to_point", "open_menu",
-    "change_material", "pause_tour", "resume_tour", "play_audio_hint", "answer_question"
+    "highlight_object",
+    "show_label",
+    "move_to_point",
+    "open_menu",
+    "change_material",
+    "pause_tour",
+    "resume_tour",
+    "play_audio_hint",
+    "answer_question",
 ]
 NavigationPathType = Literal["walk", "teleport"]
 CustomLightType = Literal["directional", "point", "spot", "area"]
@@ -50,11 +72,14 @@ def _check_finite_vec(v, *, bound: float = 1e6):
     if v is None:
         return v
     import math
+
     vals = v if isinstance(v, list) else [v]
     for item in vals:
         seq = item if isinstance(item, list) else [item]
         for x in seq:
-            if isinstance(x, (int, float)) and (not math.isfinite(float(x)) or abs(float(x)) > bound):
+            if isinstance(x, (int, float)) and (
+                not math.isfinite(float(x)) or abs(float(x)) > bound
+            ):
                 raise ValueError(f"vector values must be finite within ±{bound:g}")
     return v
 
@@ -136,7 +161,9 @@ class LightingSpec(BaseModel):
     preset: LightingPreset
     time_of_day: Literal["morning", "noon", "evening", "night"]
     ambient_intensity: float = 1.0
-    sun_direction: Optional[List[float]] = Field(default=None, min_length=3, max_length=3)
+    sun_direction: Optional[List[float]] = Field(
+        default=None, min_length=3, max_length=3
+    )
     custom_lights: List[CustomLight] = []
 
     @field_validator("sun_direction", mode="before")
@@ -151,8 +178,15 @@ class CopilotPolicy(BaseModel):
     default_language: str = "en"
     personality: CopilotPersonality = "helpful_guide"
     allowed_actions: List[CopilotAction] = [
-        "highlight_object", "show_label", "move_to_point", "open_menu",
-        "change_material", "pause_tour", "resume_tour", "play_audio_hint", "answer_question"
+        "highlight_object",
+        "show_label",
+        "move_to_point",
+        "open_menu",
+        "change_material",
+        "pause_tour",
+        "resume_tour",
+        "play_audio_hint",
+        "answer_question",
     ]
     knowledge_base: Optional[str] = None
 
@@ -171,12 +205,15 @@ class PerformanceBudget(BaseModel):
     max_draw_calls: int = Field(default=50, ge=1, le=500)
     texture_budget_mb: int = Field(default=100, ge=1, le=2048)
     max_entities: int = Field(default=500, ge=1, le=5000)
-    lod_distances: List[float] = Field(default=[10.0, 25.0, 50.0], min_length=3, max_length=3)
+    lod_distances: List[float] = Field(
+        default=[10.0, 25.0, 50.0], min_length=3, max_length=3
+    )
 
     @field_validator("lod_distances")
     @classmethod
     def _lod_ordered(cls, v: List[float]):
         import math
+
         for x in v:
             if not math.isfinite(x) or x <= 0 or x > 1e4:
                 raise ValueError("lod_distances must be finite positive <= 1e4")
@@ -194,50 +231,62 @@ class SimulationSpec(BaseModel):
     copilot_policy: CopilotPolicy
     performance_budget: PerformanceBudget
 
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "domain": "real_estate",
-            "metadata": {
-                "title": "Modern 3BR Apartment",
-                "description": "Furnished walkthrough with warm lighting",
-                "version": "1.0.0"
-            },
-            "entities": [
-                {
-                    "id": "living_room",
-                    "type": "room",
-                    "name": "Living Room",
-                    "position": [0, 0, 0],
-                    "properties": {"size": [5, 4, 2.5]}
-                }
-            ],
-            "navigation": {
-                "points": [
-                    {"id": "start", "name": "Entry", "position": [2.5, 2, 1.6], "connections": ["living"]},
-                    {"id": "living", "name": "Living Room", "position": [2.5, 2, 1.6], "connections": ["start"]}
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "domain": "real_estate",
+                "metadata": {
+                    "title": "Modern 3BR Apartment",
+                    "description": "Furnished walkthrough with warm lighting",
+                    "version": "1.0.0",
+                },
+                "entities": [
+                    {
+                        "id": "living_room",
+                        "type": "room",
+                        "name": "Living Room",
+                        "position": [0, 0, 0],
+                        "properties": {"size": [5, 4, 2.5]},
+                    }
                 ],
-                "paths": [{"from": "start", "to": "living"}],
-                "default_start_point": "start"
-            },
-            "lighting": {
-                "preset": "warm",
-                "time_of_day": "evening",
-                "ambient_intensity": 0.8
-            },
-            "copilot_policy": {
-                "enabled": True,
-                "languages": ["en", "te"],
-                "default_language": "en",
-                "personality": "helpful_guide"
-            },
-            "performance_budget": {
-                "target_fps": 60,
-                "max_triangles": 100000,
-                "max_draw_calls": 50,
-                "texture_budget_mb": 100
+                "navigation": {
+                    "points": [
+                        {
+                            "id": "start",
+                            "name": "Entry",
+                            "position": [2.5, 2, 1.6],
+                            "connections": ["living"],
+                        },
+                        {
+                            "id": "living",
+                            "name": "Living Room",
+                            "position": [2.5, 2, 1.6],
+                            "connections": ["start"],
+                        },
+                    ],
+                    "paths": [{"from": "start", "to": "living"}],
+                    "default_start_point": "start",
+                },
+                "lighting": {
+                    "preset": "warm",
+                    "time_of_day": "evening",
+                    "ambient_intensity": 0.8,
+                },
+                "copilot_policy": {
+                    "enabled": True,
+                    "languages": ["en", "te"],
+                    "default_language": "en",
+                    "personality": "helpful_guide",
+                },
+                "performance_budget": {
+                    "target_fps": 60,
+                    "max_triangles": 100000,
+                    "max_draw_calls": 50,
+                    "texture_budget_mb": 100,
+                },
             }
         }
-    })
+    )
 
 
 # Generation Pipeline Types

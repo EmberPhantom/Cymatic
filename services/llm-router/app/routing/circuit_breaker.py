@@ -37,7 +37,9 @@ class CircuitBreaker(BaseModel):
 
     # Asyncio safety – single-flight half-open trial via semaphore
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
-    _half_open_sem: asyncio.Semaphore = PrivateAttr(default_factory=lambda: asyncio.Semaphore(1))
+    _half_open_sem: asyncio.Semaphore = PrivateAttr(
+        default_factory=lambda: asyncio.Semaphore(1)
+    )
     _half_open_in_progress: bool = PrivateAttr(default=False)
 
     def record_success(self) -> None:
@@ -50,7 +52,10 @@ class CircuitBreaker(BaseModel):
         self.success_count += 1
         self.last_success_time = datetime.now(timezone.utc)
 
-        if self.state == CircuitState.HALF_OPEN and self.success_count >= self.success_threshold:
+        if (
+            self.state == CircuitState.HALF_OPEN
+            and self.success_count >= self.success_threshold
+        ):
             self.state = CircuitState.CLOSED
             self.success_count = 0
             self._half_open_in_progress = False
@@ -68,9 +73,16 @@ class CircuitBreaker(BaseModel):
         self.success_count = 0
         self.last_failure_time = datetime.now(timezone.utc)
 
-        if self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
+        if (
+            self.state == CircuitState.CLOSED
+            and self.failure_count >= self.failure_threshold
+        ):
             self.state = CircuitState.OPEN
-            logger.warning("circuit_breaker_opened", provider=self.provider, failures=self.failure_count)
+            logger.warning(
+                "circuit_breaker_opened",
+                provider=self.provider,
+                failures=self.failure_count,
+            )
 
         elif self.state == CircuitState.HALF_OPEN:
             self.state = CircuitState.OPEN
@@ -90,7 +102,9 @@ class CircuitBreaker(BaseModel):
 
         if self.state == CircuitState.OPEN:
             if self.last_failure_time:
-                elapsed = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
+                elapsed = (
+                    datetime.now(timezone.utc) - self.last_failure_time
+                ).total_seconds()
                 if elapsed >= self.timeout:
                     self.state = CircuitState.HALF_OPEN
                     self.success_count = 0
@@ -123,7 +137,10 @@ class CircuitBreaker(BaseModel):
             self.success_count += 1
             self.last_success_time = datetime.now(timezone.utc)
 
-            if self.state == CircuitState.HALF_OPEN and self.success_count >= self.success_threshold:
+            if (
+                self.state == CircuitState.HALF_OPEN
+                and self.success_count >= self.success_threshold
+            ):
                 self.state = CircuitState.CLOSED
                 self.success_count = 0
                 self._half_open_in_progress = False
@@ -151,9 +168,16 @@ class CircuitBreaker(BaseModel):
             self.success_count = 0
             self.last_failure_time = datetime.now(timezone.utc)
 
-            if self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
+            if (
+                self.state == CircuitState.CLOSED
+                and self.failure_count >= self.failure_threshold
+            ):
                 self.state = CircuitState.OPEN
-                logger.warning("circuit_breaker_opened", provider=self.provider, failures=self.failure_count)
+                logger.warning(
+                    "circuit_breaker_opened",
+                    provider=self.provider,
+                    failures=self.failure_count,
+                )
             elif self.state == CircuitState.HALF_OPEN:
                 self.state = CircuitState.OPEN
                 self.success_count = 0
@@ -172,7 +196,9 @@ class CircuitBreaker(BaseModel):
 
             if self.state == CircuitState.OPEN:
                 if self.last_failure_time:
-                    elapsed = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
+                    elapsed = (
+                        datetime.now(timezone.utc) - self.last_failure_time
+                    ).total_seconds()
                     if elapsed >= self.timeout:
                         # Try to acquire single-flight semaphore for half-open trial
                         if self._half_open_sem.locked() or self._half_open_in_progress:
@@ -223,7 +249,9 @@ def _normalize_provider(provider: ProviderName | str) -> ProviderName | str:
 def get_circuit_breaker(provider: ProviderName | str) -> CircuitBreaker:
     """Get or create circuit breaker for provider (sync)."""
     normalized = _normalize_provider(provider)
-    provider_name = normalized if isinstance(normalized, ProviderName) else ProviderName.GROQ
+    provider_name = (
+        normalized if isinstance(normalized, ProviderName) else ProviderName.GROQ
+    )
     # Sync creation – dict access is atomic under GIL, no threading.Lock needed
     if normalized not in _circuit_breakers:
         _circuit_breakers[normalized] = CircuitBreaker(provider=provider_name)
@@ -233,7 +261,9 @@ def get_circuit_breaker(provider: ProviderName | str) -> CircuitBreaker:
 async def get_circuit_breaker_async(provider: ProviderName | str) -> CircuitBreaker:
     """Async version with lock."""
     normalized = _normalize_provider(provider)
-    provider_name = normalized if isinstance(normalized, ProviderName) else ProviderName.GROQ
+    provider_name = (
+        normalized if isinstance(normalized, ProviderName) else ProviderName.GROQ
+    )
     async with _async_lock:
         if normalized not in _circuit_breakers:
             _circuit_breakers[normalized] = CircuitBreaker(provider=provider_name)
@@ -280,7 +310,9 @@ def get_circuit_breaker_status(provider: ProviderName | str) -> dict[str, Any]:
         "state": cb.state.value,
         "failure_count": cb.failure_count,
         "success_count": cb.success_count,
-        "last_failure": cb.last_failure_time.isoformat() if cb.last_failure_time else None,
+        "last_failure": cb.last_failure_time.isoformat()
+        if cb.last_failure_time
+        else None,
     }
 
 

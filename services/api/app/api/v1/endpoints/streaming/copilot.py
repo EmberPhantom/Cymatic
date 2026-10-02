@@ -1,4 +1,5 @@
 """Copilot + voice endpoints (split, no logic change)."""
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,6 +25,8 @@ settings = get_settings()
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+
 @router.post("/sessions/{session_id}/agent/message")
 async def copilot_message(
     session_id: int,
@@ -76,13 +79,23 @@ async def copilot_message(
             "provider": data.get("provider", "unknown"),
         }
     except httpx.ConnectError:
-        logger.warning("copilot_llm_unavailable", session_id=session_id, user_id=current_user.id, org_id=current_user.organization_id)
+        logger.warning(
+            "copilot_llm_unavailable",
+            session_id=session_id,
+            user_id=current_user.id,
+            org_id=current_user.organization_id,
+        )
         return JSONResponse(
             status_code=503,
             content={"response": "Service temporarily unavailable.", "actions": []},
         )
     except httpx.TimeoutException:
-        logger.warning("copilot_llm_timeout", session_id=session_id, user_id=current_user.id, org_id=current_user.organization_id)
+        logger.warning(
+            "copilot_llm_timeout",
+            session_id=session_id,
+            user_id=current_user.id,
+            org_id=current_user.organization_id,
+        )
         return JSONResponse(
             status_code=504,
             content={"response": "Service temporarily unavailable.", "actions": []},
@@ -100,7 +113,13 @@ async def copilot_message(
             content={"response": "Service temporarily unavailable.", "actions": []},
         )
     except (ValueError, OSError) as e:
-        logger.error("copilot_llm_failed", session_id=session_id, user_id=current_user.id, org_id=current_user.organization_id, error=str(e))
+        logger.error(
+            "copilot_llm_failed",
+            session_id=session_id,
+            user_id=current_user.id,
+            org_id=current_user.organization_id,
+            error=str(e),
+        )
         return JSONResponse(
             status_code=500,
             content={"response": "Service temporarily unavailable.", "actions": []},
@@ -156,7 +175,12 @@ async def voice_transcript(
         await db.commit()
         return {"response": response_text, "tts_audio_url": None}
     except httpx.ConnectError:
-        logger.warning("voice_llm_unavailable", session_id=session_id, user_id=current_user.id, org_id=current_user.organization_id)
+        logger.warning(
+            "voice_llm_unavailable",
+            session_id=session_id,
+            user_id=current_user.id,
+            org_id=current_user.organization_id,
+        )
         return JSONResponse(
             status_code=503,
             content={
@@ -165,7 +189,12 @@ async def voice_transcript(
             },
         )
     except httpx.TimeoutException:
-        logger.warning("voice_llm_timeout", session_id=session_id, user_id=current_user.id, org_id=current_user.organization_id)
+        logger.warning(
+            "voice_llm_timeout",
+            session_id=session_id,
+            user_id=current_user.id,
+            org_id=current_user.organization_id,
+        )
         return JSONResponse(
             status_code=504,
             content={
@@ -189,7 +218,13 @@ async def voice_transcript(
             },
         )
     except (ValueError, OSError) as e:
-        logger.error("voice_llm_failed", session_id=session_id, user_id=current_user.id, org_id=current_user.organization_id, error=str(e))
+        logger.error(
+            "voice_llm_failed",
+            session_id=session_id,
+            user_id=current_user.id,
+            org_id=current_user.organization_id,
+            error=str(e),
+        )
         return JSONResponse(
             status_code=500,
             content={
@@ -200,5 +235,3 @@ async def voice_transcript(
 
 
 # WebSocket signaling for WebRTC
-
-

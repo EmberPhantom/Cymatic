@@ -1,6 +1,6 @@
 # CYMATIC Comprehensive Readiness Audit
 
-**Investigation date:** 2026-08-22  
+**Investigation date:** 2026-08-22
 **Compared with:** [`docs/17-containerization-follow-up.md`](17-containerization-follow-up.md)
 
 ## Executive Verdict

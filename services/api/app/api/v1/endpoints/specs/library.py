@@ -1,4 +1,5 @@
 """Specs sub-router (split from specs.py, no logic change)."""
+
 import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List
@@ -17,6 +18,7 @@ from .schemas import (
 )
 
 router = APIRouter()
+
 
 @router.post("/{project_id}/validate-spec", response_model=JobResponse)
 async def validate_spec(
@@ -105,5 +107,3 @@ async def get_spec(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return spec
-
-

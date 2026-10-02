@@ -3,6 +3,7 @@
 Revision ID: 006
 Revises: 005
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -17,7 +18,9 @@ def upgrade() -> None:
         "scene_packages",
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.execute("UPDATE scene_packages SET updated_at = created_at WHERE updated_at IS NULL")
+    op.execute(
+        "UPDATE scene_packages SET updated_at = created_at WHERE updated_at IS NULL"
+    )
     op.alter_column("scene_packages", "updated_at", nullable=False)
 
 

@@ -1,4 +1,5 @@
 """General-purpose shared utilities."""
+
 from urllib.parse import urlsplit, urlunsplit
 
 try:
@@ -13,7 +14,12 @@ try:
         try:
             sa_url = make_url(url)
             # Normalize drivername to asyncpg
-            if sa_url.drivername in ("postgresql", "postgres", "postgresql+psycopg2", "postgresql+psycopg"):
+            if sa_url.drivername in (
+                "postgresql",
+                "postgres",
+                "postgresql+psycopg2",
+                "postgresql+psycopg",
+            ):
                 sa_url = sa_url.set(drivername="postgresql+asyncpg")
             elif sa_url.drivername == "postgresql+asyncpg":
                 pass
@@ -32,7 +38,9 @@ try:
             scheme = "postgresql+asyncpg"
         elif scheme == "postgresql+psycopg2":
             scheme = "postgresql+asyncpg"
-        return urlunsplit((scheme, parts.netloc, parts.path, parts.query, parts.fragment))
+        return urlunsplit(
+            (scheme, parts.netloc, parts.path, parts.query, parts.fragment)
+        )
 
 except ImportError:
 
@@ -42,4 +50,6 @@ except ImportError:
         scheme = parts.scheme
         if scheme in ("postgresql", "postgres", "postgresql+psycopg2"):
             scheme = "postgresql+asyncpg"
-        return urlunsplit((scheme, parts.netloc, parts.path, parts.query, parts.fragment))
+        return urlunsplit(
+            (scheme, parts.netloc, parts.path, parts.query, parts.fragment)
+        )

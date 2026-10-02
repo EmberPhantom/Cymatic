@@ -212,4 +212,3 @@ reports/
 
 # Compiled Filament materials (regenerable via matc, see ubershader.mat)
 *.filamat
-

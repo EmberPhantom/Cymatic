@@ -1,4 +1,5 @@
 """Prompt sanitization helpers (extracted from providers.litellm_client)."""
+
 import re
 
 _MAX_MESSAGE_CHARS = 20000

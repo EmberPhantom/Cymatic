@@ -1,7 +1,7 @@
 # CYMATIC Follow-Up Codebase Audit
 
-**Audit date:** 2026-08-19  
-**Baseline:** [`docs/09-codebase-audit.md`](09-codebase-audit.md)  
+**Audit date:** 2026-08-19
+**Baseline:** [`docs/09-codebase-audit.md`](09-codebase-audit.md)
 **Scope:** re-validation of all baseline findings plus expanded dependency, package, API, queue, database, CI, security, client, and runtime-contract analysis.
 
 ## Executive Verdict
@@ -51,7 +51,7 @@ The successful compilation check proves that Python source is syntactically vali
 
 ### F-01: Worker Docker image still cannot resolve the root shared schema package
 
-**Severity:** Critical  
+**Severity:** Critical
 **Evidence:** `services/worker/Dockerfile`, worker agents/pipelines importing `schemas.simulation_spec`.
 
 The worker Dockerfile copies `requirements.txt` and `app/` only. The worker source imports `schemas.simulation_spec`, but the root `schemas/` directory is outside the Docker build context `./services/worker` and is not installed as a package. A worker image built from the documented command cannot import the shared schema module.
@@ -60,7 +60,7 @@ The new worker-local models and services address only part of the previous impor
 
 ### F-02: API and worker maintain divergent database model sets
 
-**Severity:** Critical  
+**Severity:** Critical
 **Evidence:** `services/api/app/models`, `services/worker/app/models`, `services/api/app/db/session.py`, `services/worker/app/db/session.py`.
 
 The worker now has local copies of `Project`, `SimulationSpec`, `Asset`, and `ScenePackage`, but does not contain the API's `Organization`, `User`, stream, audit, credit, or runtime-event models. Its models still reference tables such as `organizations` and `users` through foreign keys. This creates schema drift and can make worker metadata creation or queries fail against a database defined by the API models.
@@ -69,7 +69,7 @@ There must be one authoritative model/migration contract. Shared models should b
 
 ### F-03: Test environments are not reproducible
 
-**Severity:** High  
+**Severity:** High
 **Evidence:** current pytest output; `services/api/requirements.txt`, `services/worker/requirements.txt`, `services/llm-router/requirements.txt`, CI workflow.
 
 The active environment lacks `python-jose` for API tests and `minio` for worker tests, while the requirements files declare them. This means dependencies were not installed consistently or the documented setup does not control the test interpreter. In addition, the LLM-router test module imports `services.llm_router...` when run from the service directory, causing an import-root failure.
@@ -78,28 +78,28 @@ CI must install dependencies from clean environments and run tests using a consi
 
 ### F-04: Frontend CI still cannot install deterministically
 
-**Severity:** High  
+**Severity:** High
 **Evidence:** `.github/workflows/ci.yml:29-32`, `apps/web/Dockerfile:9-10`.
 
 CI and Docker both use `npm ci` and reference `apps/web/package-lock.json`, but the repository does not contain a lockfile. The Next.js standalone configuration is now present, so that sub-finding is resolved, but installation remains a hard blocker.
 
 ### F-05: Android build remains invalid
 
-**Severity:** Critical  
+**Severity:** Critical
 **Evidence:** `android/client/build.gradle.kts`, `android/client/app/build.gradle.kts`.
 
 The Kotlin DSL files still contain Groovy constructs such as `id '...'`, single-quoted dependency declarations, and Groovy-style plugin/dependency syntax. The Android project inventory still lacks a verified `settings.gradle(.kts)` and Gradle wrapper. No clean APK build can be claimed.
 
 ### F-06: Core streaming endpoints still report success without doing the work
 
-**Severity:** Critical  
+**Severity:** Critical
 **Evidence:** `services/api/app/api/v1/endpoints/streaming.py:97`, `:138`, `:160`, `:182`, `:213`, `:247`, `:284`.
 
 Offer, answer, candidate, input, copilot, and voice paths retain TODOs or placeholder responses. The API persists/returns session-shaped data but does not implement the required forwarding to Unity, Android, peers, or the LLM router. The advertised VR workflow remains nonfunctional.
 
 ### F-07: Refresh-token contract remains unimplemented
 
-**Severity:** High  
+**Severity:** High
 **Evidence:** `services/api/app/api/v1/endpoints/auth.py:151-157`.
 
 The endpoint still returns HTTP 501. The documented authentication contract advertises refresh tokens, but clients cannot renew sessions or revoke/rotate refresh credentials.

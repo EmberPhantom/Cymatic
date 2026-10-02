@@ -17,9 +17,15 @@ class PlanningSheet(Base):
     __tablename__ = "planning_sheets"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
-    run_id = Column(String(64), ForeignKey("generation_runs.id", ondelete="SET NULL"), nullable=True)
+    project_id = Column(
+        Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id = Column(
+        String(64), ForeignKey("generation_runs.id", ondelete="SET NULL"), nullable=True
+    )
     version = Column(Integer, nullable=False, default=1)
     payload_json = Column(JSON, nullable=False)
     status: Mapped[SheetStatus] = mapped_column(

@@ -1,4 +1,5 @@
 """Specs sub-router (split from specs.py, no logic change)."""
+
 import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Dict, Any
@@ -17,10 +18,13 @@ from app.models import GenerationRun
 from cymatic_shared.ids import new_job_id
 from cymatic_shared.model_enums import RunStatus, RunStage
 from .schemas import (
-    JobResponse, GenerationRunResponse, ScenePackageResponse,
+    JobResponse,
+    GenerationRunResponse,
+    ScenePackageResponse,
 )
 
 router = APIRouter()
+
 
 @router.post("/{project_id}/generate-scene", response_model=JobResponse)
 async def generate_scene(
@@ -254,9 +258,7 @@ async def view_scene_package(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if project.status != ProjectStatus.PUBLISHED:
-        raise HTTPException(
-            status_code=400, detail="Project must be published to view"
-        )
+        raise HTTPException(status_code=400, detail="Project must be published to view")
 
     from app.services.scene_packages import ScenePackageUnavailable
 
@@ -277,5 +279,3 @@ async def view_scene_package(
         },
         "scene_package": scene_package,
     }
-
-

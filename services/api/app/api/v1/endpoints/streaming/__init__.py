@@ -1,4 +1,5 @@
 """Stream session endpoints (split package; routes unchanged)."""
+
 import httpx  # noqa: F401  (patch target: tests mock streaming.httpx)
 
 from .common import (  # noqa: F401

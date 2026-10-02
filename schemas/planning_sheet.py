@@ -4,6 +4,7 @@ The planning agent's frozen output: a reviewed, versioned source of truth
 that the generation agent consumes. Typed dimensions/colors/materials so the
 questionnaire UI and the architect share one contract (no free-form soup).
 """
+
 import re
 from typing import Literal, Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator

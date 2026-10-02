@@ -140,7 +140,9 @@ class LiteLLMClient:
 
     @staticmethod
     def _is_local_provider(provider: ProviderName | str) -> bool:
-        return provider == ProviderName.LOCAL or str(provider) == ProviderName.LOCAL.value
+        return (
+            provider == ProviderName.LOCAL or str(provider) == ProviderName.LOCAL.value
+        )
 
     @staticmethod
     def _is_apinex_provider(provider: ProviderName | str) -> bool:
@@ -156,7 +158,9 @@ class LiteLLMClient:
             return self._local_semaphore
         return self._semaphore
 
-    async def chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+    async def chat_completion(
+        self, request: ChatCompletionRequest
+    ) -> ChatCompletionResponse:
         """Execute chat completion with routing, caching, and fallbacks."""
         start_time = time.time()
         request_id = str(uuid.uuid4())
@@ -173,7 +177,9 @@ class LiteLLMClient:
         provider_name: ProviderName | str
         policy = routing_engine.get_policy(request.task_type, request.sensitivity)
         if not request.model:
-            routing_decision = routing_engine.route(request.task_type, request.sensitivity)
+            routing_decision = routing_engine.route(
+                request.task_type, request.sensitivity
+            )
             model = routing_decision.model
             provider_name = routing_decision.provider
         else:
@@ -192,31 +198,60 @@ class LiteLLMClient:
                 raise ValueError(f"Provider {provider_name} is disabled")
             # Check blocked providers per policy
             if provider_name in policy.blocked_providers:
-                raise ValueError(f"Provider {provider_name} blocked for {request.sensitivity}")
+                raise ValueError(
+                    f"Provider {provider_name} blocked for {request.sensitivity}"
+                )
             # Check allowed providers per policy
-            if policy.allowed_providers and provider_name not in policy.allowed_providers:
-                raise ValueError(f"Provider {provider_name} not allowed for {request.task_type}")
+            if (
+                policy.allowed_providers
+                and provider_name not in policy.allowed_providers
+            ):
+                raise ValueError(
+                    f"Provider {provider_name} not allowed for {request.task_type}"
+                )
 
-        provider_str = provider_name.value if isinstance(provider_name, ProviderName) else str(provider_name)
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         # Pre-flight quota check (Redis)
-        estimated_tokens = self._estimate_chat_tokens(request.messages, request.max_tokens)
+        estimated_tokens = self._estimate_chat_tokens(
+            request.messages, request.max_tokens
+        )
         # Fix tpm never trip for STT/TTS not applicable here, but ensure at least 100
         estimated_tokens = max(estimated_tokens, 100)
         try:
-            allowed = await self.usage_tracker.check_quota(provider_str, estimated_tokens)
+            allowed = await self.usage_tracker.check_quota(
+                provider_str, estimated_tokens
+            )
             if not allowed:
-                raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Quota exceeded for provider {provider_str}",
+                )
         except HTTPException:
             raise
         except Exception as e:
             logger.warning("quota_check_failed", error=str(e))
 
         # Check cache first (isolated via sensitivity/provider/org)
-        task_value = request.task_type.value if hasattr(request.task_type, "value") else str(request.task_type)
-        if request.use_cache and not request.stream and task_value not in _NO_CACHE_TASKS:
+        task_value = (
+            request.task_type.value
+            if hasattr(request.task_type, "value")
+            else str(request.task_type)
+        )
+        if (
+            request.use_cache
+            and not request.stream
+            and task_value not in _NO_CACHE_TASKS
+        ):
             # Do not cache tenant-sensitive/regulated to avoid leak
-            should_cache = request.sensitivity in (SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL)
+            should_cache = request.sensitivity in (
+                SensitivityLevel.PUBLIC,
+                SensitivityLevel.INTERNAL,
+            )
             if should_cache:
                 cache_key_prompt = self._messages_to_prompt(request.messages)
                 cached = await get_cached_response(
@@ -265,7 +300,9 @@ class LiteLLMClient:
             params["api_base"] = getattr(settings, "OLLAMA_URL", "http://ollama:11434")
         elif self._is_apinex_provider(provider_name):
             # Route to APInex OpenAI-compatible multi-model gateway
-            params["api_base"] = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+            params["api_base"] = getattr(
+                settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1"
+            )
             params["api_key"] = getattr(settings, "APINEX_API_KEY", "")
 
         if request.response_format:
@@ -288,7 +325,11 @@ class LiteLLMClient:
         for attempt in range(max_retries + 1):
             try:
                 logger.info(
-                    "llm_request", request_id=request_id, model=model, provider=provider_str, attempt=attempt
+                    "llm_request",
+                    request_id=request_id,
+                    model=model,
+                    provider=provider_str,
+                    attempt=attempt,
                 )
 
                 async with self._semaphore_for(provider_name):
@@ -298,7 +339,9 @@ class LiteLLMClient:
                 usage_obj = getattr(response_any, "usage", None)
                 if usage_obj is not None:
                     prompt_tokens = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
-                    completion_tokens = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+                    completion_tokens = int(
+                        getattr(usage_obj, "completion_tokens", 0) or 0
+                    )
                     total_tokens = int(getattr(usage_obj, "total_tokens", 0) or 0)
                 else:
                     prompt_tokens = 0
@@ -328,13 +371,18 @@ class LiteLLMClient:
                 )
 
                 # Record success for circuit breaker
-                routing_engine.record_provider_result(provider_str, True, float(latency_ms))
+                routing_engine.record_provider_result(
+                    provider_str, True, float(latency_ms)
+                )
 
                 # Cache successful response – tenant isolation via sensitivity/provider/org
                 # Skip context-sensitive planning tasks (see _NO_CACHE_TASKS).
                 if request.use_cache and task_value not in _NO_CACHE_TASKS:
                     # Only cache for non-sensitive to prevent leak
-                    if request.sensitivity in (SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL):
+                    if request.sensitivity in (
+                        SensitivityLevel.PUBLIC,
+                        SensitivityLevel.INTERNAL,
+                    ):
                         cache_key_prompt = self._messages_to_prompt(request.messages)
                         choices_raw: Any = getattr(response_any, "choices", [])
                         choices_list: list[dict[str, Any]] = []
@@ -427,33 +475,49 @@ class LiteLLMClient:
                     project_id=request.project_id,
                 )
 
-                routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+                routing_engine.record_provider_result(
+                    provider_str, False, float(latency_ms)
+                )
 
                 if attempt < max_retries:
-                    routing_decision = routing_engine.route(request.task_type, request.sensitivity)
+                    routing_decision = routing_engine.route(
+                        request.task_type, request.sensitivity
+                    )
                     # Fallback should not reuse same provider; ensure we rotate
                     candidate = routing_decision.fallback or routing_decision.provider
                     if candidate != provider_name:
                         provider_name = candidate
                         provider_str = (
-                            provider_name.value if isinstance(provider_name, ProviderName) else str(provider_name)
+                            provider_name.value
+                            if isinstance(provider_name, ProviderName)
+                            else str(provider_name)
                         )
                         model = routing_decision.model
                         params["model"] = self._to_litellm_model(provider_name, model)
                         if self._is_local_provider(provider_name):
-                            params["api_base"] = getattr(settings, "OLLAMA_URL", "http://ollama:11434")
+                            params["api_base"] = getattr(
+                                settings, "OLLAMA_URL", "http://ollama:11434"
+                            )
                             params.pop("api_key", None)
                         elif self._is_apinex_provider(provider_name):
-                            params["api_base"] = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+                            params["api_base"] = getattr(
+                                settings,
+                                "APINEX_BASE_URL",
+                                "https://api.apinex.bond/v1",
+                            )
                             params["api_key"] = getattr(settings, "APINEX_API_KEY", "")
                         else:
                             params.pop("api_base", None)
                             params.pop("api_key", None)
                         # Re-check quota for fallback provider
                         try:
-                            allowed_fb = await self.usage_tracker.check_quota(provider_str, estimated_tokens)
+                            allowed_fb = await self.usage_tracker.check_quota(
+                                provider_str, estimated_tokens
+                            )
                             if not allowed_fb:
-                                logger.warning("fallback_quota_exceeded", provider=provider_str)
+                                logger.warning(
+                                    "fallback_quota_exceeded", provider=provider_str
+                                )
                                 continue
                         except Exception:
                             pass
@@ -474,7 +538,11 @@ class LiteLLMClient:
         start_time = time.time()
 
         collected_choices: list[dict[str, Any]] = []
-        total_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        total_usage: dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
         try:
             # Ensure stream flag
@@ -495,19 +563,27 @@ class LiteLLMClient:
                             {
                                 "index": getattr(choice_delta, "index", 0),
                                 "delta": delta_dict,
-                                "finish_reason": getattr(choice_delta, "finish_reason", None),
+                                "finish_reason": getattr(
+                                    choice_delta, "finish_reason", None
+                                ),
                             }
                         )
                 usage_obj = getattr(chunk_any, "usage", None)
                 if usage_obj:
-                    total_usage["prompt_tokens"] = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
-                    total_usage["completion_tokens"] = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+                    total_usage["prompt_tokens"] = int(
+                        getattr(usage_obj, "prompt_tokens", 0) or 0
+                    )
+                    total_usage["completion_tokens"] = int(
+                        getattr(usage_obj, "completion_tokens", 0) or 0
+                    )
                     total_usage["total_tokens"] = (
                         total_usage["prompt_tokens"] + total_usage["completion_tokens"]
                     )
         except Exception as e:
             if isinstance(e, HTTPException):
-                raise HTTPException(status_code=502, detail=f"Streaming failed: {e}") from e
+                raise HTTPException(
+                    status_code=502, detail=f"Streaming failed: {e}"
+                ) from e
             logger.warning("stream_completion_chunk_error", error=str(e))
             raise HTTPException(status_code=502, detail=f"Streaming failed: {e}") from e
 
@@ -542,7 +618,9 @@ class LiteLLMClient:
         provider_name: ProviderName | str | None
         policy = routing_engine.get_policy(TaskType.EMBEDDING, request.sensitivity)
         if not request.model:
-            routing_decision = routing_engine.route(TaskType.EMBEDDING, request.sensitivity)
+            routing_decision = routing_engine.route(
+                TaskType.EMBEDDING, request.sensitivity
+            )
             model = routing_decision.model
             provider_name = routing_decision.provider
         else:
@@ -552,18 +630,30 @@ class LiteLLMClient:
                 raise ValueError(f"Model {model} not found in any provider")
             cfg = routing_engine.providers.get(provider_name)
             if cfg is None or request.sensitivity not in cfg.supported_sensitivity:
-                raise ValueError(f"Provider {provider_name} does not support sensitivity {request.sensitivity}")
+                raise ValueError(
+                    f"Provider {provider_name} does not support sensitivity {request.sensitivity}"
+                )
             if provider_name in policy.blocked_providers:
-                raise ValueError(f"Provider {provider_name} blocked for {request.sensitivity}")
+                raise ValueError(
+                    f"Provider {provider_name} blocked for {request.sensitivity}"
+                )
 
         assert provider_name is not None
-        provider_str = provider_name.value if isinstance(provider_name, ProviderName) else str(provider_name)
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         # Pre-flight quota (estimate tokens as sum len//4)
         est_tokens = sum(len(t) // 4 for t in request.input) + 10
-        allowed = await self.usage_tracker.check_quota(provider_str, max(est_tokens, 100))
+        allowed = await self.usage_tracker.check_quota(
+            provider_str, max(est_tokens, 100)
+        )
         if not allowed:
-            raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+            raise HTTPException(
+                status_code=429, detail=f"Quota exceeded for provider {provider_str}"
+            )
 
         try:
             async with self._semaphore:
@@ -634,7 +724,9 @@ class LiteLLMClient:
                 user_id=request.user_id,
                 organization_id=request.organization_id,
             )
-            routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+            routing_engine.record_provider_result(
+                provider_str, False, float(latency_ms)
+            )
             raise
 
     async def stt(self, request: STTRequest) -> STTResponse:
@@ -649,7 +741,9 @@ class LiteLLMClient:
         except Exception as e:
             raise ValueError("Invalid base64 audio_data") from e
         if len(audio_bytes) > _MAX_AUDIO_BYTES:
-            raise ValueError(f"Decoded audio too large: {len(audio_bytes)} > {_MAX_AUDIO_BYTES}")
+            raise ValueError(
+                f"Decoded audio too large: {len(audio_bytes)} > {_MAX_AUDIO_BYTES}"
+            )
         if len(audio_bytes) == 0:
             raise ValueError("Empty audio")
 
@@ -661,7 +755,9 @@ class LiteLLMClient:
         est_tokens = 150
         allowed = await self.usage_tracker.check_quota(provider_str, est_tokens)
         if not allowed:
-            raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+            raise HTTPException(
+                status_code=429, detail=f"Quota exceeded for provider {provider_str}"
+            )
 
         try:
             async with self._semaphore:
@@ -716,7 +812,9 @@ class LiteLLMClient:
                 user_id=request.user_id,
                 organization_id=request.organization_id,
             )
-            routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+            routing_engine.record_provider_result(
+                provider_str, False, float(latency_ms)
+            )
             raise
 
     async def tts(self, request: TTSRequest) -> TTSResponse:
@@ -727,7 +825,9 @@ class LiteLLMClient:
         if not request.text or len(request.text.strip()) == 0:
             raise ValueError("TTS text empty")
         if len(request.text) > _MAX_TTS_CHARS:
-            raise ValueError(f"TTS text too long: {len(request.text)} > {_MAX_TTS_CHARS}")
+            raise ValueError(
+                f"TTS text too long: {len(request.text)} > {_MAX_TTS_CHARS}"
+            )
         request.text = _sanitize_text(request.text, max_len=_MAX_TTS_CHARS)
 
         model = request.model or "bulbul:v1"
@@ -737,7 +837,9 @@ class LiteLLMClient:
         est_tokens = max(10, len(request.text) // 4)
         allowed = await self.usage_tracker.check_quota(provider_str, est_tokens)
         if not allowed:
-            raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+            raise HTTPException(
+                status_code=429, detail=f"Quota exceeded for provider {provider_str}"
+            )
 
         try:
             async with self._semaphore:
@@ -799,10 +901,14 @@ class LiteLLMClient:
                 user_id=request.user_id,
                 organization_id=request.organization_id,
             )
-            routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+            routing_engine.record_provider_result(
+                provider_str, False, float(latency_ms)
+            )
             raise
 
-    def _estimate_chat_tokens(self, messages: list[dict[str, str]], max_tokens: int | None) -> int:
+    def _estimate_chat_tokens(
+        self, messages: list[dict[str, str]], max_tokens: int | None
+    ) -> int:
         chars = sum(len(str(m.get("content", ""))) for m in messages)
         prompt_est = max(10, chars // 4)
         if max_tokens:
@@ -828,7 +934,9 @@ class LiteLLMClient:
         """
         if provider is None:
             return model
-        provider_val = provider.value if isinstance(provider, ProviderName) else str(provider)
+        provider_val = (
+            provider.value if isinstance(provider, ProviderName) else str(provider)
+        )
         if provider_val == ProviderName.LOCAL.value:
             ollama_model = model
             try:
@@ -845,7 +953,7 @@ class LiteLLMClient:
         if provider_val == ProviderName.APINEX.value or provider_val == "apinex":
             clean_model = model
             if clean_model.startswith("apinex/"):
-                clean_model = clean_model[len("apinex/"):]
+                clean_model = clean_model[len("apinex/") :]
             if clean_model.startswith("openai/"):
                 return clean_model
             return f"openai/{clean_model}"

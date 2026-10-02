@@ -1,4 +1,5 @@
 """Scene Composer Agent - Proposes spatial layout, navigation points, lighting presets"""
+
 import copy
 import math
 from typing import Any
@@ -6,7 +7,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from cymatic_shared.schemas.simulation_spec import (
-    Entity, LightingSpec, NavigationPath, NavigationPoint, NavigationSpec
+    Entity,
+    LightingSpec,
+    NavigationPath,
+    NavigationPoint,
+    NavigationSpec,
 )
 import structlog
 
@@ -29,13 +34,13 @@ class ComposerResult(BaseModel):
 
 class SceneComposerAgent:
     """Composes spatial layout from entities."""
-    
+
     # Layout algorithms per domain
     LAYOUT_STRATEGIES = {
         "real_estate": "grid_flow",
         "heritage": "radial_courtyard",
     }
-    
+
     def compose(self, input_data: ComposerInput) -> ComposerResult:  # noqa: ARG002
         """Compose scene layout."""
         # Deepcopy to avoid mutating caller-provided entities (HIGH: in-place mutation bug)
@@ -48,102 +53,104 @@ class SceneComposerAgent:
             entities, nav_points, paths = self._radial_courtyard_layout(safe_input)
         else:
             entities, nav_points, paths = self._grid_flow_layout(safe_input)
-        
+
         # Create navigation spec
         navigation = NavigationSpec(
             points=nav_points,
             paths=paths,
-            default_start_point=nav_points[0].id if nav_points else "start"
+            default_start_point=nav_points[0].id if nav_points else "start",
         )
-        
+
         # Create lighting
         lighting = self._create_lighting(input_data.domain, input_data.user_preferences)
-        
+
         notes = [
             f"Applied {strategy} layout strategy",
             f"Positioned {len(entities)} entities",
             f"Created {len(nav_points)} navigation points",
-            f"Generated {len(paths)} navigation paths"
+            f"Generated {len(paths)} navigation paths",
         ]
-        
+
         logger.info("scene_composed", strategy=strategy, entities=len(entities))
-        
+
         return ComposerResult(
             entities=entities,
             navigation=navigation,
             lighting=lighting,
-            layout_notes=notes
+            layout_notes=notes,
         )
-    
-    def _grid_flow_layout(self, input_data: ComposerInput) -> tuple[list[Entity], list[NavigationPoint], list[NavigationPath]]:
+
+    def _grid_flow_layout(
+        self, input_data: ComposerInput
+    ) -> tuple[list[Entity], list[NavigationPoint], list[NavigationPath]]:
         """Grid-based layout for real estate (rooms in flow)."""
         entities = input_data.entities
         rooms = [e for e in entities if e.type == "room"]
         others = [e for e in entities if e.type != "room"]
-        
+
         # Layout parameters
         room_width = 12
         room_depth = 10
         corridor_width = 3
         max_per_row = 3
-        
+
         positioned_entities = []
         nav_points = []
         paths = []
-        
+
         # Position rooms in grid
         for i, room in enumerate(rooms):
             row = i // max_per_row
             col = i % max_per_row
-            
+
             x = col * (room_width + corridor_width)
             z = row * (room_depth + corridor_width)
-            
+
             # Update entity position
-            room.position = [x + room_width/2, 0, z + room_depth/2]
+            room.position = [x + room_width / 2, 0, z + room_depth / 2]
             positioned_entities.append(room)
-            
+
             # Create navigation point at room center
             nav_point = NavigationPoint(
                 id=f"nav_{room.id}",
                 name=room.name,
-                position=[x + room_width/2, 1.6, z + room_depth/2],
+                position=[x + room_width / 2, 1.6, z + room_depth / 2],
                 description=f"Enter {room.name}",
-                connections=[]
+                connections=[],
             )
             nav_points.append(nav_point)
-        
+
         # Position other entities (lights, decorations) relative to rooms
         for idx, entity in enumerate(others):
             if entity.type == "light":
                 if nav_points:
-                    center = nav_points[len(nav_points)//2]
+                    center = nav_points[len(nav_points) // 2]
                     entity.position = [center.position[0], 5, center.position[2]]
             elif entity.type in ("furniture", "decoration", "light"):
                 if nav_points:
                     base = nav_points[idx % len(nav_points)]
                     # offset slightly inside room
-                    entity.position = [base.position[0] + 1.0, 0.5, base.position[2] + 1.0]
+                    entity.position = [
+                        base.position[0] + 1.0,
+                        0.5,
+                        base.position[2] + 1.0,
+                    ]
                 else:
                     entity.position = [float(idx * 2), 0.5, 0.0]
             elif entity.position == [0, 0, 0]:
                 # distribute remaining types in grid near origin
                 entity.position = [float((idx % 3) * 2), 0, float((idx // 3) * 2)]
             positioned_entities.append(entity)
-        
+
         # Create navigation paths (linear flow through rooms) - deduplicate pairs
         seen_pairs: set[tuple[str, str]] = set()
         for i in range(len(nav_points) - 1):
-            a, b = nav_points[i].id, nav_points[i+1].id
+            a, b = nav_points[i].id, nav_points[i + 1].id
             pair = tuple(sorted((a, b)))
             if pair in seen_pairs:
                 continue
             seen_pairs.add(pair)
-            paths.append(NavigationPath(
-                from_point=a,
-                to=b,
-                type="walk"
-            ))
+            paths.append(NavigationPath(from_point=a, to=b, type="walk"))
 
         # Add connections to nav points with dedup guard
         for path in paths:
@@ -154,46 +161,53 @@ class SceneComposerAgent:
                     np.connections.append(path.from_point)
 
         return positioned_entities, nav_points, paths
-    
-    def _radial_courtyard_layout(self, input_data: ComposerInput) -> tuple[list[Entity], list[NavigationPoint], list[NavigationPath]]:
+
+    def _radial_courtyard_layout(
+        self, input_data: ComposerInput
+    ) -> tuple[list[Entity], list[NavigationPoint], list[NavigationPath]]:
         """Radial layout for heritage (courtyard with surrounding POIs)."""
         entities = input_data.entities
         pois = [e for e in entities if e.type == "poi"]
         others = [e for e in entities if e.type != "poi"]
-        
+
         positioned_entities = []
         nav_points = []
         paths = []
-        
+
         # Central courtyard
         center_x, center_z = 0, 0
         courtyard_radius = 15
-        
+
         # Position POIs in circle around center
         for i, poi in enumerate(pois):
             angle = (2 * math.pi * i) / max(len(pois), 1)
             radius = courtyard_radius + 5
-            
+
             x = center_x + radius * math.cos(angle)
             z = center_z + radius * math.sin(angle)
-            
+
             poi.position = [x, 0, z]
             positioned_entities.append(poi)
-            
+
             # Navigation point at POI
             nav_point = NavigationPoint(
                 id=f"nav_{poi.id}",
                 name=poi.name,
                 position=[x, 1.6, z],
                 description=f"Visit {poi.name}",
-                connections=[]
+                connections=[],
             )
             nav_points.append(nav_point)
-        
+
         # Add center courtyard point (avoid double center if caller already has one)
-        existing_ids = {getattr(e, "id", "") for e in positioned_entities} | {p.id for p in nav_points}
+        existing_ids = {getattr(e, "id", "") for e in positioned_entities} | {
+            p.id for p in nav_points
+        }
         # If spec already contained a central courtyard POI/entity, skip duplicate insertion
-        has_center_entity = any("courtyard_center" in eid or "central_courtyard" in eid for eid in existing_ids)
+        has_center_entity = any(
+            "courtyard_center" in eid or "central_courtyard" in eid
+            for eid in existing_ids
+        )
         has_center_nav = any(p.id == "nav_courtyard_center" for p in nav_points)
         if has_center_entity or has_center_nav:
             # If duplicate would occur, reuse existing center if present, else create with unique id
@@ -203,32 +217,38 @@ class SceneComposerAgent:
                     name="Central Courtyard",
                     position=[center_x, 1.6, center_z],
                     description="Central gathering area",
-                    connections=[]
+                    connections=[],
                 )
                 nav_points.insert(0, center_nav)
             else:
-                center_nav = next(p for p in nav_points if p.id == "nav_courtyard_center")
+                center_nav = next(
+                    p for p in nav_points if p.id == "nav_courtyard_center"
+                )
         else:
             center_nav = NavigationPoint(
                 id="nav_courtyard_center",
                 name="Central Courtyard",
                 position=[center_x, 1.6, center_z],
                 description="Central gathering area",
-                connections=[]
+                connections=[],
             )
             nav_points.insert(0, center_nav)
-        
+
         # Position other entities
         for idx, entity in enumerate(others):
             if entity.type == "light":
                 entity.position = [center_x, 10, center_z]
             elif entity.type in ("furniture", "decoration"):
                 angle = (2 * math.pi * idx) / max(len(others), 1)
-                entity.position = [center_x + 3*math.cos(angle), 0.5, center_z + 3*math.sin(angle)]
+                entity.position = [
+                    center_x + 3 * math.cos(angle),
+                    0.5,
+                    center_z + 3 * math.sin(angle),
+                ]
             elif entity.position == [0, 0, 0]:
                 entity.position = [float((idx % 3) * 2), 0, float((idx // 3) * 2)]
             positioned_entities.append(entity)
-        
+
         # Create radial paths (center to each POI) with dedup
         seen: set[tuple[str, str]] = set()
         for nav_point in nav_points[1:]:  # Skip center
@@ -236,11 +256,9 @@ class SceneComposerAgent:
             if pair in seen:
                 continue
             seen.add(pair)
-            paths.append(NavigationPath(
-                from_point=center_nav.id,
-                to=nav_point.id,
-                type="walk"
-            ))
+            paths.append(
+                NavigationPath(from_point=center_nav.id, to=nav_point.id, type="walk")
+            )
 
         # Connect adjacent POIs in circle - deduplicate
         n = len(nav_points) - 1  # number of outer points
@@ -256,11 +274,7 @@ class SceneComposerAgent:
                 if pair in seen:
                     continue
                 seen.add(pair)
-                paths.append(NavigationPath(
-                    from_point=a,
-                    to=b,
-                    type="walk"
-                ))
+                paths.append(NavigationPath(from_point=a, to=b, type="walk"))
 
         # Add connections with dedup guard
         for path in paths:
@@ -271,11 +285,13 @@ class SceneComposerAgent:
                     np.connections.append(path.from_point)
 
         return positioned_entities, nav_points, paths
-    
-    def _create_lighting(self, domain: str, preferences: dict[str, Any]) -> LightingSpec:
+
+    def _create_lighting(
+        self, domain: str, preferences: dict[str, Any]
+    ) -> LightingSpec:
         """Create lighting specification."""
         lighting_pref = preferences.get("lighting_preference", "warm")
-        
+
         preset_map = {
             "warm": "warm",
             "bright/natural": "neutral",
@@ -283,14 +299,14 @@ class SceneComposerAgent:
             "golden hour": "golden_hour",
             "evening/ambient": "golden_hour",
         }
-        
+
         preset = preset_map.get(lighting_pref.lower(), "warm")
-        
+
         return LightingSpec(
             preset=preset,
             time_of_day=preferences.get("time_of_day", "evening"),
             ambient_intensity=0.8,
-            sun_direction=[0.5, -1, 0.3] if preset == "golden_hour" else [0, -1, 0]
+            sun_direction=[0.5, -1, 0.3] if preset == "golden_hour" else [0, -1, 0],
         )
 
 
@@ -309,6 +325,6 @@ def compose_scene(
         entities=entities,
         domain=domain,
         user_preferences=user_preferences or {},
-        constraints=constraints or {}
+        constraints=constraints or {},
     )
     return composer_agent.compose(input_data)

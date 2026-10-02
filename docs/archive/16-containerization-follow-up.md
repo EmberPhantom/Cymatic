@@ -1,6 +1,6 @@
 # CYMATIC Containerization Follow-up
 
-**Investigation date:** 2026-08-21  
+**Investigation date:** 2026-08-21
 **Compared with:** [`docs/15-containerization-investigation.md`](15-containerization-investigation.md)
 
 ## Verdict

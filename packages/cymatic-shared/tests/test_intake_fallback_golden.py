@@ -4,6 +4,7 @@ Guards the idea-first contract: short, typo'd, landmark-heavy prompts must
 still resolve to the right domain with real entities and grounded questions —
 never empty entities with generic questions.
 """
+
 import pytest
 
 from cymatic_shared.agents.intake_agent import process_intake_fallback
@@ -55,7 +56,10 @@ async def test_gibberish_is_honest_not_fake():
     assert r.confidence <= 0.3
     assert r.analyser_mode == "fallback"
     # Leads with open questions, not fake entities
-    assert any("describe" in q.lower() or "in mind" in q.lower() for q in r.suggested_questions[:2])
+    assert any(
+        "describe" in q.lower() or "in mind" in q.lower()
+        for q in r.suggested_questions[:2]
+    )
     assert len(r.suggested_questions) > 0
 
 
@@ -77,6 +81,15 @@ async def test_heritage_questions_for_heritage_domain():
 @pytest.mark.asyncio
 async def test_missing_fields_are_domain_canonical():
     r = await process_intake_fallback("Taj Mahal")
-    heritage_fields = {"site_type", "historical_period", "key_pois", "narration", "languages", "scale", "focus", "indoor_outdoor"}
+    heritage_fields = {
+        "site_type",
+        "historical_period",
+        "key_pois",
+        "narration",
+        "languages",
+        "scale",
+        "focus",
+        "indoor_outdoor",
+    }
     assert set(r.missing_fields) <= heritage_fields
     assert "bedrooms" not in r.missing_fields
