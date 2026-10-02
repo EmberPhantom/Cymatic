@@ -10,7 +10,9 @@ import androidx.lifecycle.viewmodel.ComposableViewModelProviderFactory
 import com.cymatic.client.R
 import com.cymatic.client.databinding.ActivityMainBinding
 import com.cymatic.client.ui.vr.VRActivity
+import com.cymatic.client.ui.render.RenderActivity
 import com.cymatic.client.ui.diagnostics.DiagnosticsActivity
+import com.cymatic.client.util.PreferencesManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
@@ -32,6 +34,17 @@ class MainActivity : AppCompatActivity() {
     private fun setupClickListeners() {
         binding.btnStartVR.setOnClickListener {
             val intent = Intent(this, VRActivity::class.java)
+            startActivity(intent)
+        }
+
+        binding.btnRender3d.setOnClickListener {
+            val projectId = PreferencesManager(this).selectedProjectId
+            if (projectId == null) {
+                android.widget.Toast.makeText(this, getString(R.string.no_project_selected), android.widget.Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            val intent = Intent(this, RenderActivity::class.java)
+            intent.putExtra(RenderActivity.EXTRA_PROJECT_ID, projectId)
             startActivity(intent)
         }
         

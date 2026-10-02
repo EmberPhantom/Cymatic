@@ -14,9 +14,13 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Multipart
 import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.Path
 import java.util.concurrent.TimeUnit
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 
 object ApiClient {
     
@@ -102,7 +106,28 @@ interface ApiService {
     @GET("v1/projects/{id}/specs/{spec_id}")
     suspend fun getSpec(@Path("id") projectId: Int, @Path("spec_id") specId: Int): retrofit2.Response<SpecResponse>
     
-    // Streaming
+    // Native render (Unity-free path)
+    @POST("v1/render/sessions")
+    suspend fun createRenderSession(@Body request: RenderSessionRequest): retrofit2.Response<RenderSessionResponse>
+
+    @POST("v1/render/sessions/{id}/heartbeat")
+    suspend fun renderHeartbeat(@Path("id") sessionId: Int): retrofit2.Response<RenderHeartbeatResponse>
+
+    @POST("v1/render/sessions/{id}/end")
+    suspend fun endRenderSession(@Path("id") sessionId: Int): retrofit2.Response<RenderHeartbeatResponse>
+
+    @Multipart
+    @POST("v1/render/sessions/{id}/voice/audio")
+    suspend fun renderVoiceAudio(
+        @Path("id") sessionId: Int,
+        @Part audio: MultipartBody.Part,
+        @Part("language") language: RequestBody
+    ): retrofit2.Response<RenderVoiceResponse>
+
+    @GET("v1/projects/{id}/scene-package/view")
+    suspend fun getScenePackageView(@Path("id") projectId: Int): retrofit2.Response<ScenePackageView>
+
+    // Streaming (legacy Unity path, frozen)
     @POST("v1/stream/sessions")
     suspend fun createStreamSession(@Body request: StreamSessionRequest): retrofit2.Response<StreamSessionResponse>
     

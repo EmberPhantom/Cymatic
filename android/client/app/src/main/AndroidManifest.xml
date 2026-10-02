@@ -75,6 +75,14 @@
             android:screenOrientation="landscape"
             android:theme="@style/Theme.CymaticClient" />
 
+        <!-- Native render Activity (Unity-free on-device 3D) -->
+        <activity
+            android:name=".ui.render.RenderActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize"
+            android:theme="@style/Theme.CymaticClient.Fullscreen.NoActionBar" />
+
         <!-- Foreground Service for Streaming -->
         <service
             android:name=".service.StreamingService"

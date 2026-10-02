@@ -24,4 +24,12 @@
     <string name="bitrate">Bitrate</string>
     <string name="packets_lost">Packets Lost</string>
     <string name="app_version">Version 0.1.0</string>
+    <string name="render_3d_native">Render 3D (native)</string>
+    <string name="back">Back</string>
+    <string name="hold_to_talk">Hold to talk</string>
+    <string name="no_project_selected">Select a project first</string>
+    <string name="render_session_failed">Render session failed</string>
+    <string name="listening">Listening…</string>
+    <string name="didnt_catch_that">Didn't catch that</string>
+    <string name="session_lost">Session lost — reconnect or exit</string>
 </resources>
