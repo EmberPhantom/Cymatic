@@ -199,6 +199,17 @@ POST /v1/stream/sessions/{id}/input
 POST /v1/stream/sessions/{id}/end
 ```
 
+### Native render (Unity-free mobile endpoint)
+```text
+POST /v1/render/sessions                        # device registry + PUBLISHED check + scene_url
+POST /v1/render/sessions/{id}/heartbeat         # PENDING->ACTIVE, sweeps stale sessions
+POST /v1/render/sessions/{id}/end               # DISCONNECTED + analytics close
+POST /v1/render/sessions/{id}/voice/audio       # multipart PCM/WAV -> STT -> copilot -> TTS
+```
+Rules: `require_creator` on create, org-scoped project, one active
+session/user (409), `app_version >= MOBILE_MIN_APP_VERSION` (426),
+revoked devices 403. Sessions share the `stream_sessions` table.
+
 ### Copilot / Voice
 ```text
 POST /v1/stream/sessions/{id}/agent/message

@@ -27,6 +27,10 @@ class StreamSession(Base):
         nullable=False,
     )
     signaling_session_id = Column(String(255), nullable=True)
+    # Native render sessions: which registered device is rendering.
+    device_id = Column(String(128), nullable=True)
+    # Last render heartbeat; sessions silent >10 min are swept to DISCONNECTED.
+    last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(

@@ -7,6 +7,7 @@ from app.models.simulation_spec import SimulationSpec, SpecStatus
 from app.models.asset import Asset, AssetType, AssetStatus
 from app.models.scene_package import ScenePackage
 from app.models.stream_session import StreamSession, StreamSessionStatus
+from app.models.mobile_device import MobileDevice
 from app.models.runtime_event import RuntimeEvent
 from app.models.agent_action import AgentAction
 from app.models.voice_session import VoiceSession
@@ -29,6 +30,7 @@ __all__ = [
     "ScenePackage",
     "StreamSession",
     "StreamSessionStatus",
+    "MobileDevice",
     "RuntimeEvent",
     "AgentAction",
     "VoiceSession",
