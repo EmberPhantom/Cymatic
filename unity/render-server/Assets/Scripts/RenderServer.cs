@@ -19,8 +19,8 @@ namespace Cymatic
         [Header("Configuration")]
         [SerializeField] private string backendUrl = "http://localhost:8000";
         [SerializeField] private string renderServerId = "render-server-01";
-        [SerializeField] private int signalingPort = 8080;
-        
+        [SerializeField] private float sessionPollInterval = 3f;
+
         [Header("Streaming Settings")]
         [SerializeField] private int targetFPS = 60;
         [SerializeField] private int renderWidth = 1920;
@@ -115,26 +115,57 @@ namespace Cymatic
                 try { _webRTCStreamer.SetBitrate(br); } catch {}
             };
             _eventBridge.Configure(backendUrl, renderServerId);
-            var signalingHost = "localhost";
-            try { signalingHost = new System.Uri(backendUrl).Host; } catch {}
-            _signalingClient.Configure($"ws://{signalingHost}:{signalingPort}/ws");
         }
-        
+
         private async void Start()
         {
             Application.targetFrameRate = targetFPS;
             QualitySettings.vSyncCount = 0;
-            
-            // Register with backend
+
+            // Adopt the configured user access token (no separate render-server
+            // identity exists on the backend - see EventBridge.RegisterRenderServer).
             await _eventBridge.RegisterRenderServer();
-            
-            // Start signaling connection
+            _signalingClient.Configure(backendUrl, _eventBridge.GetAuthToken());
+
             _signalingClient.OnOfferReceived += HandleOfferReceived;
             _signalingClient.OnAnswerReceived += HandleAnswerReceived;
             _signalingClient.OnCandidateReceived += HandleCandidateReceived;
-            await _signalingClient.Connect();
-            
-            Debug.Log("[RenderServer] Started and ready for sessions");
+            _signalingClient.OnSessionEnded += HandleSessionEnded;
+
+            // There is no push notification when a new stream session is
+            // created - poll for one and connect the session-scoped signaling
+            // socket once it appears (single-user MVP: at most one at a time).
+            SessionDiscoveryLoop().Forget();
+
+            Debug.Log("[RenderServer] Started, polling for sessions to join");
+        }
+
+        private async UniTaskVoid SessionDiscoveryLoop()
+        {
+            while (this != null)
+            {
+                try
+                {
+                    if (!_isStreaming && !_signalingClient.IsConnected)
+                    {
+                        var active = await _eventBridge.GetActiveSession();
+                        if (active != null)
+                        {
+                            Debug.Log($"[RenderServer] Found session {active.id}, connecting signaling");
+                            await _signalingClient.Connect(active.id);
+                        }
+                    }
+                }
+                catch (System.Exception e) { Debug.LogError($"[RenderServer] Session discovery error: {e}"); }
+
+                await UniTask.Delay(TimeSpan.FromSeconds(sessionPollInterval));
+            }
+        }
+
+        private void HandleSessionEnded(string sessionId)
+        {
+            if (sessionId != _currentSessionId) return;
+            StopStreaming().Forget();
         }
         
         private async void HandleOfferReceived(string sessionId, string sdp)
@@ -154,6 +185,9 @@ namespace Cymatic
                 var sessionInfoTask = _eventBridge.GetSessionInfo(sessionId);
                 var answer = await answerTask;
                 _signalingClient.SendAnswer(sessionId, answer);
+                // Video/input/perf pipeline only actually starts here - this was
+                // previously never invoked, so no frames were ever sent after answering.
+                await StartStreaming(sessionId);
                 var sessionInfo = await sessionInfoTask;
                 if (sessionInfo != null && !string.IsNullOrEmpty(sessionInfo.scenePackageUrl))
                 {
@@ -223,6 +257,7 @@ namespace Cymatic
             try { _performanceManager.StopMonitoring(); } catch {}
             try { await _sceneLoader.UnloadScene(); } catch {}
             try { await _eventBridge.SendEvent(endedId, "stream_ended", new { }); } catch {}
+            try { _signalingClient?.Disconnect(); } catch {}
             _currentSessionId = null;
             Debug.Log("[RenderServer] Streaming stopped");
         }

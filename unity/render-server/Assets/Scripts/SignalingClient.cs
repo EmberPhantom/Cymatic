@@ -15,15 +15,20 @@ namespace Cymatic
     public class SignalingClient : MonoBehaviour
     {
         [Header("Configuration")]
-        [SerializeField] private string _signalingUrl = "ws://localhost:8080/ws";
+        // Base backend URL, e.g. "http://localhost:8000". The signaling
+        // endpoint is session-scoped: /v1/stream/ws/{sessionId}. There is no
+        // standalone signaling host/port - it's the same API server Android
+        // connects to (see VRActivity.connectToRenderServer on the Android side).
+        [SerializeField] private string _backendUrl = "http://localhost:8000";
         [SerializeField] private float _reconnectInterval = 5f;
         [SerializeField] private float _pingInterval = 10f;
-        
+
         // WebSocket
         private WebSocket _webSocket;
         private bool _isConnected = false;
         private bool _shouldReconnect = true;
-        
+        private string _sessionId;
+
         // Message handlers
         public event Action<string, string> OnOfferReceived; // sessionId, sdp
         public event Action<string, string> OnAnswerReceived; // sessionId, sdp
@@ -32,49 +37,66 @@ namespace Cymatic
         public event Action<string> OnSessionEnded; // sessionId
         public event Action OnConnected;
         public event Action OnDisconnected;
-        
+
         // Pending requests
         private Dictionary<string, Action<string>> _pendingRequests = new Dictionary<string, Action<string>>();
         private int _requestId = 0;
-        
+
         [SerializeField] private string _authToken = "";
 
         public bool IsConnected => _isConnected;
+        public string SessionId => _sessionId;
 
-        public void Configure(string url, string authToken = null)
+        public void Configure(string backendUrl, string authToken = null)
         {
-            _signalingUrl = url;
+            _backendUrl = backendUrl;
             if (!string.IsNullOrEmpty(authToken)) _authToken = authToken;
-            // Prefer wss in production; warn on cleartext ws.
-            if (_signalingUrl.StartsWith("ws://") && !_signalingUrl.Contains("localhost") && !_signalingUrl.Contains("127.0.0.1") && !_signalingUrl.Contains("10.") && !_signalingUrl.Contains("192.168."))
-                Debug.LogWarning("[Signaling] Using cleartext ws:// outside LAN; prefer wss://");
         }
-        
-        public async UniTask Connect()
+
+        /// <summary>Connect the signaling channel for a specific stream session.
+        /// Matches the backend's per-session WebSocket relay at
+        /// /v1/stream/ws/{sessionId} (the same endpoint the Android client uses
+        /// in VRActivity.connectToRenderServer) - there is no shared/global
+        /// signaling socket.</summary>
+        public async UniTask Connect(string sessionId)
         {
-            if (_isConnected) return;
-            
+            if (_isConnected && _sessionId == sessionId) return;
+            if (_isConnected) Disconnect();
+
+            _sessionId = sessionId;
             _shouldReconnect = true;
             await ConnectWebSocket();
         }
-        
+
         private async UniTask ConnectWebSocket()
         {
             try
             {
+                if (string.IsNullOrEmpty(_authToken))
+                {
+                    Debug.LogError("[Signaling] No auth token configured; cannot connect.");
+                    return;
+                }
+                if (string.IsNullOrEmpty(_sessionId))
+                {
+                    Debug.LogError("[Signaling] No session id set; call Connect(sessionId).");
+                    return;
+                }
+
                 _webSocket = new WebSocket();
                 _webSocket.OnOpen += OnWebSocketOpen;
                 _webSocket.OnMessage += OnWebSocketMessage;
                 _webSocket.OnError += OnWebSocketError;
                 _webSocket.OnClose += OnWebSocketClose;
-                // Attach Bearer auth via query when header injection unavailable
-                // (backend prefers Authorization header; query is deprecated fallback).
-                var url = _signalingUrl;
-                if (!string.IsNullOrEmpty(_authToken) && !url.Contains("token="))
-                    url += (url.Contains("?") ? "&" : "?") + "type=render_server";
-                await _webSocket.Connect(url);
-                if (!string.IsNullOrEmpty(_authToken))
-                    Debug.Log("[Signaling] Connecting with auth token (prefer header where supported)");
+
+                var wsBase = _backendUrl.Replace("https://", "wss://").Replace("http://", "ws://");
+                var url = $"{wsBase}/v1/stream/ws/{_sessionId}?type=render_server";
+                if (url.StartsWith("ws://") && !url.Contains("localhost") && !url.Contains("127.0.0.1") && !url.Contains("10.") && !url.Contains("192.168."))
+                    Debug.LogWarning("[Signaling] Using cleartext ws:// outside LAN; prefer wss://");
+
+                // Backend prefers the Authorization header over the deprecated
+                // ?token= query param (see websocket_signaling in streaming.py).
+                await _webSocket.Connect(url, _authToken);
             }
             catch (Exception e)
             {
@@ -357,9 +379,11 @@ public class WebSocket
     private System.Threading.CancellationTokenSource _cts;
     private bool _isConnected = false;
     
-    public async Cysharp.Threading.Tasks.UniTask Connect(string url)
+    public async Cysharp.Threading.Tasks.UniTask Connect(string url, string authToken = null)
     {
         _ws = new System.Net.WebSockets.ClientWebSocket();
+        if (!string.IsNullOrEmpty(authToken))
+            _ws.Options.SetRequestHeader("Authorization", $"Bearer {authToken}");
         _cts = new System.Threading.CancellationTokenSource();
         
         await _ws.ConnectAsync(new Uri(url), _cts.Token);

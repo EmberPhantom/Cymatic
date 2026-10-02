@@ -24,7 +24,7 @@ namespace Cymatic.Editor
             var serializedObject = new SerializedObject(renderServer);
             serializedObject.FindProperty("backendUrl").stringValue = "http://localhost:8000";
             serializedObject.FindProperty("renderServerId").stringValue = "render-server-01";
-            serializedObject.FindProperty("signalingPort").intValue = 8080;
+            serializedObject.FindProperty("sessionPollInterval").floatValue = 3f;
             serializedObject.FindProperty("targetFPS").intValue = 60;
             serializedObject.FindProperty("renderWidth").intValue = 1920;
             serializedObject.FindProperty("renderHeight").intValue = 1080;

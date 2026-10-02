@@ -17,7 +17,14 @@ namespace Cymatic
         [SerializeField] private string _backendUrl = "http://localhost:8000";
         [SerializeField] private string _renderServerId = "render-server-01";
         [SerializeField] private float _heartbeatInterval = 5f;
-        
+
+        // Single-user MVP: there is no separate render-server identity/auth
+        // system on the backend (no /v1/render/register endpoint exists). The
+        // render server authenticates as the same user account the Android
+        // headset belongs to, using a long-lived access token configured here.
+        [Header("Auth (single-user MVP)")]
+        [SerializeField] private string _userAccessToken = "";
+
         // State
         private bool _isRegistered = false;
         private string _authToken;
@@ -26,48 +33,57 @@ namespace Cymatic
         public string AuthToken => _authToken;
         public string GetAuthToken() => _authToken;
         public string RenderServerId => _renderServerId;
-        
+
         public event Action<string, string, string> OnCommandReceived; // sessionId, command, payload
-        
+
         public void Configure(string backendUrl, string renderServerId)
         {
             _backendUrl = backendUrl;
             _renderServerId = renderServerId;
         }
-        
-        public async UniTask RegisterRenderServer()
+
+        /// <summary>
+        /// There is no backend render-server registration endpoint (MVP is
+        /// single-user, so no separate identity is needed). This just adopts
+        /// the configured user access token and starts the heartbeat.
+        /// </summary>
+        public UniTask RegisterRenderServer()
         {
-            var request = new RegisterRequest
+            if (string.IsNullOrEmpty(_userAccessToken))
             {
-                server_id = _renderServerId,
-                capabilities = new ServerCapabilities
-                {
-                    max_sessions = 1,
-                    supports_hand_tracking = false,
-                    supports_voice = true,
-                    max_resolution = "1920x1080",
-                    supported_codecs = new[] { "H264" },
-                    gpu_info = SystemInfo.graphicsDeviceName
-                }
-            };
-            
-            var response = await PostAsync<RegisterResponse>("/v1/render/register", request);
-            
-            if (response != null)
-            {
-                _authToken = response.auth_token;
-                _isRegistered = true;
-                Debug.Log($"[EventBridge] Registered as {_renderServerId}");
-                
-                // Start heartbeat
-                HeartbeatLoop().Forget();
+                Debug.LogError(
+                    "[EventBridge] No user access token configured; render server " +
+                    "cannot authenticate to the backend. Set it in the Inspector."
+                );
+                _isRegistered = false;
+                return UniTask.CompletedTask;
             }
+
+            _authToken = _userAccessToken;
+            _isRegistered = true;
+            Debug.Log($"[EventBridge] Using configured user access token as {_renderServerId}");
+
+            // Note: no /v1/render/heartbeat endpoint exists on the backend yet
+            // (there is no render-server fleet to health-check in single-user MVP),
+            // so the heartbeat loop is intentionally not started here.
+            return UniTask.CompletedTask;
         }
-        
+
         public async UniTask<SessionInfo> GetSessionInfo(string sessionId)
         {
             var response = await GetAsync<SessionInfo>($"/v1/stream/sessions/{sessionId}");
             return response;
+        }
+
+        /// <summary>
+        /// Polls for the caller's current pending/connecting/active session so the
+        /// render server can discover which session to join (there is no push
+        /// from the API — see docs/25 and RenderServer.SessionDiscoveryLoop).
+        /// Returns null if none exists (404) or the request otherwise fails.
+        /// </summary>
+        public async UniTask<SessionInfo> GetActiveSession()
+        {
+            return await GetAsync<SessionInfo>("/v1/stream/sessions/active");
         }
         
         public async UniTask SendEvent(string sessionId, string eventType, object payload)
@@ -151,7 +167,10 @@ namespace Cymatic
                 }
                 else
                 {
-                    Debug.LogWarning($"[EventBridge] GET {path} failed: {request.error}");
+                    // 404 is an expected, quiet result for polling endpoints like
+                    // GetActiveSession (no session waiting yet) - don't spam warnings.
+                    if (request.responseCode != 404)
+                        Debug.LogWarning($"[EventBridge] GET {path} failed: {request.error}");
                     return default;
                 }
             }
@@ -187,31 +206,6 @@ namespace Cymatic
     }
     
     [System.Serializable]
-    public class RegisterRequest
-    {
-        public string server_id;
-        public ServerCapabilities capabilities;
-    }
-    
-    [System.Serializable]
-    public class ServerCapabilities
-    {
-        public int max_sessions;
-        public bool supports_hand_tracking;
-        public bool supports_voice;
-        public string max_resolution;
-        public string[] supported_codecs;
-        public string gpu_info;
-    }
-    
-    [System.Serializable]
-    public class RegisterResponse
-    {
-        public string auth_token;
-        public string server_id;
-    }
-    
-    [System.Serializable]
     public class SessionInfo
     {
         public string id;
@@ -220,6 +214,8 @@ namespace Cymatic
         public string device_info;
         public string status;
         public string scene_package_url;
+
+        public string scenePackageUrl => scene_package_url;
     }
     
     [System.Serializable]
