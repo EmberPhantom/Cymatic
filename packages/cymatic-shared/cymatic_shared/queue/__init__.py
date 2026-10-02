@@ -11,6 +11,10 @@ import uuid
 
 logger = structlog.get_logger()
 
+# Bound for cancel scans: a stuck queue deeper than this needs ops attention,
+# not an unbounded Python scan per cancel call.
+_CANCEL_SCAN_LIMIT = 1000
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -56,6 +60,7 @@ class JobQueue:
     def __init__(self, redis_url: str):
         self.redis_url = redis_url
         self._client: Optional[redis.Redis] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._queues = {
             "generation": "queue:generation",
             "spec": "queue:spec",
@@ -64,17 +69,28 @@ class JobQueue:
         }
 
     async def connect(self):
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if self._client is not None and running is not None and self._loop is not running:
+            # Stale client bound to a previous (possibly closed) loop, e.g.
+            # across pytest tests or uvicorn reloads. Drop and recreate.
+            self._client = None
+            self._loop = None
         if not self._client:
             self._client = redis.from_url(
                 self.redis_url,
                 encoding="utf-8",
                 decode_responses=True,
             )
+            self._loop = running
 
     async def disconnect(self):
         if self._client:
             await self._client.close()
             self._client = None
+            self._loop = None
 
     @property
     def client(self) -> redis.Redis:
@@ -286,6 +302,66 @@ class JobQueue:
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
         pending = await self.client.zcard(queue_key)
         return {"queue": queue_name, "pending_jobs": pending}
+
+    async def get_job_status(self, job_id: str) -> Optional[Job]:
+        """Fetch job by ID (None when unknown)."""
+        await self.connect()
+        job_data = await self.client.hget(f"job:{job_id}", "data")
+        if not job_data:
+            return None
+        return Job(**json.loads(job_data))
+
+    async def cancel_job(self, job_id: str) -> bool:
+        """Cancel a queued or running job. False when already terminal/unknown."""
+        await self.connect()
+        job_data = await self.client.hget(f"job:{job_id}", "data")
+        if not job_data:
+            return False
+        job = Job(**json.loads(job_data))
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+            return False
+        if job.lock_token:
+            await self.release_job_lock(job_id, job.lock_token)
+        # Resolve the ORIGINAL queue stored at enqueue time (e.g. "spec"),
+        # not job.type (e.g. "generate_spec"), otherwise ZREM misses.
+        stored_queue: Optional[str] = None
+        try:
+            raw = await self.client.hget(f"job:{job_id}", "queue")
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            stored_queue = raw
+        except Exception:
+            stored_queue = None
+        queue_key = self._queues.get(stored_queue or "", f"queue:{stored_queue or job.type}")
+        # Job JSON changes across state transitions, so exact-match ZREM
+        # often misses: scan known queues (bounded) and remove by parsed id.
+        queues_to_try = [queue_key, *self._queues.values()]
+        seen: set = set()
+        for qk in queues_to_try:
+            if qk in seen:
+                continue
+            seen.add(qk)
+            try:
+                members = await self.client.zrange(qk, 0, _CANCEL_SCAN_LIMIT - 1)
+                for m in members:
+                    try:
+                        mid = json.loads(m).get("id")
+                    except Exception:
+                        continue
+                    if mid == job_id:
+                        await self.client.zrem(qk, m)
+            except Exception:
+                continue
+        job.status = JobStatus.CANCELLED
+        job.completed_at = datetime.now(timezone.utc)
+        job.lock_token = None
+        job.lock_expires_at = None
+        await self.client.hset(
+            f"job:{job_id}",
+            mapping={"data": job.model_dump_json(), "status": job.status.value},
+        )
+        logger.info("job_cancelled", job_id=job_id)
+        return True
 
 
 JOB_HANDLERS: dict[str, Callable] = {}

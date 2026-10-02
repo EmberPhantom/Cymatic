@@ -10,11 +10,15 @@ from typing import Dict, Any, List, Tuple
 import importlib.util
 
 SCHEMA_ROOT = Path(__file__).parent.parent / "schemas"
+SHARED_SCHEMAS = Path(__file__).parent.parent / "packages" / "cymatic-shared" / "cymatic_shared" / "schemas"
 # (python file, typescript file, root model/interface name)
 SCHEMA_PAIRS = [
     ("simulation_spec.py", "simulation_spec.ts", "SimulationSpec"),
     ("planning_sheet.py", "planning_sheet.ts", "PlanningSheet"),
 ]
+# Service-local copies are banned: shared/schemas must stay byte-identical
+# to the canonical root schemas (validators import from shared).
+SHARED_COPIES = ["simulation_spec.py", "planning_sheet.py"]
 
 
 def extract_python_schema(py_file: str, model_name: str) -> Dict[str, Any]:
@@ -215,6 +219,14 @@ def main():
     all_errors: List[str] = []
     all_warnings: List[str] = []
     all_info: List[str] = []
+
+    for name in SHARED_COPIES:
+        root = (SCHEMA_ROOT / name).read_bytes()
+        shared = (SHARED_SCHEMAS / name).read_bytes()
+        if root != shared:
+            all_errors.append(f"Shared copy drifted: packages/.../schemas/{name} != schemas/{name}")
+        else:
+            print(f"Shared copy identical: {name}")
 
     for py_file, ts_file, main_name in SCHEMA_PAIRS:
         print(f"\n--- {py_file} <-> {ts_file} ---")

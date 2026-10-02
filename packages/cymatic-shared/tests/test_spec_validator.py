@@ -61,3 +61,51 @@ def test_high_performance_budgets_generate_warnings_not_errors():
     result = validate_spec(spec)
     assert result.valid is True
     assert len(result.warnings) >= 4
+
+
+def test_unknown_path_points_are_errors():
+    spec = valid_spec()
+    spec["navigation"]["paths"] = [{"from": "nav-1", "to": "ghost", "type": "walk"}]
+
+    result = validate_spec(spec)
+    assert result.valid is False
+    assert any("ghost" in error.message for error in result.errors)
+
+
+def test_navigation_cycles_warn():
+    spec = valid_spec()
+    spec["navigation"]["points"].append({"id": "nav-2", "name": "B", "position": [3, 1.6, 0]})
+    spec["navigation"]["paths"] = [
+        {"from": "nav-1", "to": "nav-2", "type": "walk"},
+        {"from": "nav-2", "to": "nav-1", "type": "walk"},
+    ]
+
+    result = validate_spec(spec)
+    assert result.valid is True
+    assert any("cycle" in w.message.lower() for w in result.warnings)
+
+
+def test_excess_rooms_warn():
+    spec = valid_spec()
+    for i in range(100, 121):
+        spec["entities"].append(
+            {"id": f"room-{i}", "type": "room", "name": f"R{i}", "position": [0, 0, 0],
+             "properties": {"size": [5, 4, 3]}}
+        )
+
+    result = validate_spec(spec)
+    assert result.valid is True
+    assert any("rooms may impact performance" in w.message for w in result.warnings)
+
+
+def test_malformed_rotation_rejected_at_schema():
+    # Schema pins rotation to exactly 3; business rule is defense-in-depth.
+    spec = valid_spec()
+    spec["entities"].append(
+        {"id": "room-bad-rot", "type": "room", "name": "Bad", "position": [0, 0, 0],
+         "rotation": [0, 0], "properties": {"size": [5, 4, 3]}}
+    )
+
+    result = validate_spec(spec)
+    assert result.valid is False
+    assert any("rotation" in e.field for e in result.errors)

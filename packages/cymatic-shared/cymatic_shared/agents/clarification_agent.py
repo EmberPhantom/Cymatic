@@ -406,8 +406,3 @@ async def process_clarification_answers(
     return await process_clarification_llm(
         domain, current_answers, new_answers, prompt, objective, intake_entities
     )
-
-
-def get_clarification_questions(domain: str, answered_fields: Dict[str, Any]) -> List[ClarificationQuestion]:
-    """Get questions for domain (fallback only - LLM version generates dynamically)."""
-    return get_fallback_questions(domain, answered_fields)

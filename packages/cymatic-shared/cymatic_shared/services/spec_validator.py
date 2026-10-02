@@ -1,7 +1,13 @@
-"""Spec Validator - validates simulation specifications against schema and business rules."""
+"""Spec Validator - validates simulation specifications against schema and business rules.
+
+Single source of truth for spec validation (api/worker re-export from here).
+Rules are the union of the strictest checks formerly split across the
+service forks: navigation_point entities required, room/POI count warnings,
+unknown path-point errors, cycle warnings, rotation/scale/room-size checks.
+"""
 from typing import List, Dict, Any
 from pydantic import ValidationError
-from cymatic_shared.schemas.simulation_spec import SimulationSpec
+from cymatic_shared.schemas.simulation_spec import SimulationSpec, NavigationPath
 import structlog
 
 logger = structlog.get_logger()
@@ -47,6 +53,9 @@ class SpecValidator:
     """
 
     DOMAIN_REQUIREMENTS = {
+        # NOTE: navigation_point entities are NOT required — the composer
+        # emits nav points in navigation.points (validated separately below).
+        # Requiring them as entities rejects every pipeline-generated spec.
         "real_estate": {
             "required_entity_types": ["room"],
             "min_rooms": 1,
@@ -111,10 +120,14 @@ class SpecValidator:
             room_count = entity_types.get("room", 0)
             if room_count < req.get("min_rooms", 1):
                 result.add_warning("entities", f"Less than {req['min_rooms']} rooms defined")
+            if room_count > req.get("max_rooms", 20):
+                result.add_warning("entities", f"More than {req['max_rooms']} rooms may impact performance")
         elif spec.domain == "heritage":
             poi_count = entity_types.get("poi", 0)
             if poi_count < req.get("min_pois", 1):
                 result.add_error("entities", f"Heritage domain requires at least {req['min_pois']} POI")
+            if poi_count > req.get("max_pois", 50):
+                result.add_warning("entities", f"More than {req['max_pois']} POIs may impact performance")
         nav_points = len(spec.navigation.points)
         if nav_points < req.get("required_navigation_points", 1):
             result.add_error("navigation", f"At least {req['required_navigation_points']} navigation point(s) required")
@@ -147,13 +160,44 @@ class SpecValidator:
             result.add_error("navigation.default_start_point", f"Default start point '{spec.navigation.default_start_point}' not found in points")
         connected = set()
         for path in spec.navigation.paths:
-            if path.from_point in points:
+            if path.from_point not in points:
+                result.add_error("navigation.paths", f"Path references unknown point: {path.from_point}")
+            else:
                 connected.add(path.from_point)
-            if path.to in points:
+            if path.to not in points:
+                result.add_error("navigation.paths", f"Path references unknown point: {path.to}")
+            else:
                 connected.add(path.to)
         for point_id in points:
             if point_id not in connected:
                 result.add_warning("navigation.points", f"Navigation point '{point_id}' is not connected to any path")
+        self._check_cycles(points, spec.navigation.paths, result)
+
+    def _check_cycles(self, points: Dict[str, Any], paths: List[NavigationPath], result: SpecValidationResult):
+        """Warn on navigation-graph cycles (tour loops may confuse guidance)."""
+        adj: Dict[str, List[str]] = {pid: [] for pid in points}
+        for path in paths:
+            adj[path.from_point].append(path.to)
+        visited: set = set()
+        rec_stack: set = set()
+
+        def dfs(node: str) -> bool:
+            visited.add(node)
+            rec_stack.add(node)
+            for neighbor in adj.get(node, []):
+                if neighbor not in visited:
+                    if dfs(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    return True
+            rec_stack.remove(node)
+            return False
+
+        for point_id in points:
+            if point_id not in visited:
+                if dfs(point_id):
+                    result.add_warning("navigation.paths", "Navigation graph contains cycles - may cause navigation issues")
+                    break
 
     def _validate_entities(self, spec: SimulationSpec, result: SpecValidationResult):
         entity_ids = set()
@@ -163,6 +207,14 @@ class SpecValidator:
             entity_ids.add(entity.id)
             if len(entity.position) != 3:
                 result.add_error(f"entities.{entity.id}.position", "Position must have 3 coordinates [x, y, z]")
+            if entity.rotation and len(entity.rotation) != 3:
+                result.add_error(f"entities.{entity.id}.rotation", "Rotation must have 3 values [x, y, z]")
+            if entity.scale and len(entity.scale) != 3:
+                result.add_error(f"entities.{entity.id}.scale", "Scale must have 3 values [x, y, z]")
+            if entity.type == "room":
+                size = entity.properties.get("size")
+                if size and len(size) != 3:
+                    result.add_error(f"entities.{entity.id}.properties.size", "Room size must be [width, depth, height]")
 
 
 spec_validator = SpecValidator()

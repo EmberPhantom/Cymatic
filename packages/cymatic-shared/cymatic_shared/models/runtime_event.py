@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
 from cymatic_shared.db import Base
+from cymatic_shared.model_enums import RuntimeEventType  # noqa: F401 (re-export)
 
 
 class RuntimeEvent(Base):

@@ -1,11 +1,10 @@
-import hmac
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import litellm
 import structlog
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -25,6 +24,7 @@ from app.providers.litellm_client import (
 from app.routing.cache import llm_cache
 from app.routing.engine import routing_engine
 from app.routing.usage import usage_tracker
+from cymatic_shared.auth import configure_logging, verify_admin_key_dependency
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -33,43 +33,10 @@ litellm.set_verbose = settings.DEBUG
 litellm.drop_params = True
 
 
-def verify_admin_key(
-    x_api_key: str | None = Header(None, alias="X-Api-Key"),
-    authorization: str | None = Header(None, alias="Authorization"),
-) -> None:
-    """Admin API key check using constant-time compare_digest."""
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Admin API key is not configured")
-    token: str | None = None
-    if x_api_key:
-        token = x_api_key.strip()
-    elif authorization:
-        if authorization.lower().startswith("bearer "):
-            token = authorization[7:].strip()
-        else:
-            token = authorization.strip()
-    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
+configure_logging("llm-router", getattr(settings, "LOG_FORMAT", "json"))
 
-
-def verify_api_key(
-    x_api_key: str | None = Header(None, alias="X-Api-Key"),
-    authorization: str | None = Header(None, alias="Authorization"),
-) -> None:
-    """Verify API key for LLM endpoints (supports X-Api-Key and Bearer)."""
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="API key not configured")
-    token: str | None = None
-    if x_api_key:
-        token = x_api_key.strip()
-    elif authorization:
-        auth = authorization.strip()
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-        else:
-            token = auth
-    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+verify_admin_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
+verify_api_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
 
 
 @asynccontextmanager
@@ -130,25 +97,7 @@ async def health_check() -> dict[str, Any]:
 
 
 @app.get("/metrics")
-async def metrics(
-    request: Request,
-    x_api_key: str | None = Header(None, alias="X-Api-Key"),
-    authorization: str | None = Header(None, alias="Authorization"),
-) -> PlainTextResponse:
-    # Guard metrics with admin key (fail-closed)
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Metrics not configured")
-    token: str | None = None
-    if x_api_key:
-        token = x_api_key.strip()
-    elif authorization:
-        auth = authorization.strip()
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-        else:
-            token = auth
-    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid admin API key")
+async def metrics(_admin: None = Depends(verify_admin_key)) -> PlainTextResponse:
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

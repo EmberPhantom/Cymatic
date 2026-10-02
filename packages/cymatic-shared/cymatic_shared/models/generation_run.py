@@ -30,3 +30,7 @@ class GenerationRun(Base):
         Index("ix_generation_runs_project_status", "project_id", "status"),
         Index("ix_generation_runs_project_input_hash", "project_id", "input_hash"),
     )
+
+
+# Re-exported from model_enums (ORM-free home, safe for api's duplicate models).
+from cymatic_shared.model_enums import RunStatus, RunStage  # noqa: F401,E402

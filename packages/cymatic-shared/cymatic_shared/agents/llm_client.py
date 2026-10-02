@@ -301,7 +301,6 @@ def _repair_truncated_json(content: str) -> Optional[str]:
     text = content.strip()
     # Find the last index where bracket depth returns to a closable state by
     # scanning while tracking strings.
-    best: Optional[str] = None
     depth = 0
     in_str = False
     esc = False

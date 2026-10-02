@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from cymatic_shared.auth import verify_admin_key_dependency
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from app.core.config import get_settings
@@ -134,7 +135,9 @@ async def health_check():
         from sqlalchemy import text
 
         async with AsyncSessionLocal() as db:
-            await asyncio.wait_for(db.execute(text("SELECT 1")), timeout=2.0)
+            await asyncio.wait_for(
+                db.execute(text("SELECT 1")), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS
+            )
         checks["db"] = "healthy"
     except Exception:
         checks["db"] = "unhealthy"
@@ -146,7 +149,7 @@ async def health_check():
 
         r = _get_redis()
         if r is not None:
-            await asyncio.wait_for(r.ping(), timeout=2.0)
+            await asyncio.wait_for(r.ping(), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS)
             checks["redis"] = "healthy"
         else:
             checks["redis"] = "unknown"
@@ -156,13 +159,11 @@ async def health_check():
     return checks
 
 
+verify_admin_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
+
+
 @app.get("/metrics")
-async def metrics(x_api_key: str = Header(None)):
-    # Fail-closed: require ADMIN_API_KEY in all envs, especially prod
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Metrics not configured")
-    if x_api_key != settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid admin API key")
+async def metrics(_admin: None = Depends(verify_admin_key)):
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

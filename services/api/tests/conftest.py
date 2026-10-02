@@ -157,7 +157,7 @@ async def test_user(db_session):
     user = User(
         email=f"fixture-{uuid.uuid4().hex[:10]}@example.com",
         name="Fixture User",
-        hashed_password=get_password_hash("testpass123"),
+        hashed_password=get_password_hash("testpass12345"),
         role=UserRole.CREATOR,
         organization_id=organization.id,
         is_active=True,
@@ -172,6 +172,26 @@ async def test_user(db_session):
 async def auth_headers(test_user):
     access_token = create_access_token(
         data={"sub": str(test_user.id), "email": test_user.email, "org_id": test_user.organization_id}
+    )
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+@pytest_asyncio.fixture
+async def admin_auth_headers(db_session, test_user):
+    """Admin in the SAME org as test_user (plan approval requires admin)."""
+    admin = User(
+        email=f"admin-{uuid.uuid4().hex[:10]}@example.com",
+        name="Fixture Admin",
+        hashed_password=get_password_hash("testpass12345"),
+        role=UserRole.ADMIN,
+        organization_id=test_user.organization_id,
+        is_active=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+    access_token = create_access_token(
+        data={"sub": str(admin.id), "email": admin.email, "org_id": admin.organization_id}
     )
     return {"Authorization": f"Bearer {access_token}"}
 

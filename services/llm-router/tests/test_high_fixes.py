@@ -480,10 +480,10 @@ def test_api_key_authorization_bearer():
 
 @pytest.mark.asyncio
 async def test_admin_routes_compare_digest_timing():
-    # Ensure timing-safe compare
-    import app.main as main_module
+    # Ensure timing-safe compare (single source: shared auth factory)
+    import cymatic_shared.auth as shared_auth
 
-    assert "compare_digest" in open(main_module.__file__).read()
+    assert "compare_digest" in open(shared_auth.__file__.replace(".pyc", ".py")).read()
 
 
 def test_env_parents_fix():

@@ -4,11 +4,12 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.queue import job_queue, process_job, JOB_HANDLERS, Job
 from app.db.session import init_db, close_db
+from cymatic_shared.auth import configure_logging, verify_admin_key_dependency
 import structlog
 from fastapi.responses import PlainTextResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
@@ -16,17 +17,12 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 logger = structlog.get_logger()
 settings = get_settings()
 
+configure_logging("worker", getattr(settings, "LOG_FORMAT", "json"))
+verify_admin_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
+
 worker_id = str(uuid.uuid4())[:8]
 running = False
 worker_task: asyncio.Task | None = None
-
-
-def verify_admin_key(x_api_key: str = Header(None)):
-    """Simple API key check for admin endpoints."""
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Admin API key not configured")
-    if x_api_key != settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing admin API key")
 
 
 async def worker_loop():
@@ -142,7 +138,7 @@ async def health_check():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(_admin: None = Depends(verify_admin_key)):
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

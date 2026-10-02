@@ -1,15 +1,21 @@
-"""Redis sliding-window rate limiter with org/user scoping."""
+"""Redis sliding-window rate limiter with org/user scoping.
 
-import time
-import uuid
+Sliding-window mechanics live in shared rate_limit_core (add-first order
+preserved here); this module keeps router-specific identifier resolution
+and per-provider limits.
+"""
+
 from collections.abc import Awaitable, Callable
 
 import redis.asyncio as redis
+import structlog
 from fastapi import HTTPException, Request
 
 from app.core.config import get_settings
+from cymatic_shared.rate_limit_core import parse_limit, sliding_check  # noqa: F401
 
 settings = get_settings()
+logger = structlog.get_logger()
 _redis: redis.Redis | None = None
 
 
@@ -23,25 +29,6 @@ def _get_redis() -> redis.Redis | None:
         except Exception:
             _redis = None
     return _redis
-
-
-def parse_limit(limit: str) -> tuple[int, int]:
-    count, period = limit.split("/", 1)
-    period = period.strip().lower()
-    # Support plural forms
-    period_map = {
-        "second": 1,
-        "seconds": 1,
-        "minute": 60,
-        "minutes": 60,
-        "hour": 3600,
-        "hours": 3600,
-        "day": 86400,
-        "days": 86400,
-    }
-    if period not in period_map:
-        raise ValueError(f"Unknown period: {period}")
-    return int(count), period_map[period]
 
 
 def _get_forwarded_ip(request: Request) -> str | None:
@@ -89,9 +76,9 @@ def _resolve_identifier(request: Request) -> str:
 
 
 async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
-    """Sliding window check via Redis sorted set. Fail-closed on Redis error.
+    """Sliding window check via shared core (add-first order preserved).
 
-    Returns (is_limited, retry_after_seconds).
+    Returns (is_limited, retry_after_seconds). Fail-closed on Redis error.
     """
     r = _get_redis()
     if r is None:
@@ -101,43 +88,7 @@ async def is_rate_limited(key: str, limit: str) -> tuple[bool, int]:
         count, window = parse_limit(limit)
     except Exception:
         return True, 60
-    now = time.time()
-    redis_key = f"rl:sliding:{key}"
-    member = f"{now}:{uuid.uuid4()}"
-    try:
-        # Use pipeline for non-atomic but efficient; Lua would be more atomic
-        # We use sorted set sliding window
-        pipe = r.pipeline(transaction=False)
-        # Add current request
-        pipe.zadd(redis_key, {member: now})  # type: ignore[arg-type]
-        # Remove entries outside window
-        pipe.zremrangebyscore(redis_key, 0, now - window)
-        # Count current window
-        pipe.zcard(redis_key)
-        # Expire key
-        pipe.expire(redis_key, window + 2)
-        results = await pipe.execute()
-        # results[2] is zcard
-        current = int(results[2]) if len(results) >= 3 else 0
-        if current > count:
-            # Estimate retry_after as time until oldest entry slides out
-            try:
-                oldest = await r.zrange(redis_key, 0, 0, withscores=True)  # type: ignore[assignment]
-                if oldest:
-                    first = oldest[0]  # type: ignore[assignment]
-                    if isinstance(first, (list, tuple)) and len(first) == 2:
-                        _, oldest_score = first  # type: ignore[misc]
-                    else:
-                        oldest_score = float(first) if isinstance(first, (int, float, str)) else window  # type: ignore[arg-type]
-                    retry_after = int((float(oldest_score) + window) - now) + 1
-                    return True, max(retry_after, 1)
-            except Exception:
-                pass
-            return True, max(int(window - (now % window)), 1)
-    except Exception:
-        # Fail-closed on Redis errors
-        return True, 60
-    return False, 0
+    return await sliding_check(r, f"rl:sliding:{key}", count, window, add_first=True)
 
 
 async def is_rate_limited_for_provider(provider: str, org_or_user: str, limit: str) -> tuple[bool, int]:

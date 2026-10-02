@@ -5,8 +5,8 @@ from httpx import AsyncClient
 @pytest.mark.asyncio
 async def test_auth_refresh_and_revoke(client):
     # Register and login
-    await client.post("/v1/auth/register", json={"email": "refresh@example.com", "password": "testpass123", "name": "Refresh User"})
-    login = await client.post("/v1/auth/login", data={"username": "refresh@example.com", "password": "testpass123"})
+    await client.post("/v1/auth/register", json={"email": "refresh@example.com", "password": "testpass12345", "name": "Refresh User"})
+    login = await client.post("/v1/auth/login", data={"username": "refresh@example.com", "password": "testpass12345"})
     assert login.status_code == 200
     tokens = login.json()
     access = tokens["access_token"]
@@ -30,15 +30,15 @@ async def test_auth_refresh_and_revoke(client):
 @pytest.mark.asyncio
 async def test_rbac_matrix_viewer_cannot_intake(client, auth_headers, test_project):
     # auth_headers is creator, create viewer user and try to intake
-    await client.post("/v1/auth/register", json={"email": "viewer@example.com", "password": "testpass123", "name": "Viewer"})
-    login = await client.post("/v1/auth/login", data={"username": "viewer@example.com", "password": "testpass123"})
+    await client.post("/v1/auth/register", json={"email": "viewer@example.com", "password": "testpass12345", "name": "Viewer"})
+    login = await client.post("/v1/auth/login", data={"username": "viewer@example.com", "password": "testpass12345"})
     viewer_token = login.json()["access_token"]
     viewer_headers = {"Authorization": f"Bearer {viewer_token}"}
     # Try to create project as viewer (should succeed? viewer can create? but intake should be creator only)
     # Try intake on existing project as viewer - should be 403 if viewer role
     # Our viewer is creator by default, so we need to test the project status transition instead
     # Instead test that invalid token type (using refresh token for access) fails
-    login2 = await client.post("/v1/auth/login", data={"username": "viewer@example.com", "password": "testpass123"})
+    login2 = await client.post("/v1/auth/login", data={"username": "viewer@example.com", "password": "testpass12345"})
     refresh = login2.json()["refresh_token"]
     resp = await client.get("/v1/projects", headers={"Authorization": f"Bearer {refresh}"})
     assert resp.status_code == 401
@@ -46,8 +46,8 @@ async def test_rbac_matrix_viewer_cannot_intake(client, auth_headers, test_proje
 @pytest.mark.asyncio
 async def test_cross_tenant_assets_and_generation_runs(client, auth_headers, test_project):
     # Try to access assets of other org project
-    await client.post("/v1/auth/register", json={"email": "other2@example.com", "password": "testpass123", "name": "Other2"})
-    login = await client.post("/v1/auth/login", data={"username": "other2@example.com", "password": "testpass123"})
+    await client.post("/v1/auth/register", json={"email": "other2@example.com", "password": "testpass12345", "name": "Other2"})
+    login = await client.post("/v1/auth/login", data={"username": "other2@example.com", "password": "testpass12345"})
     other_token = login.json()["access_token"]
     other_headers = {"Authorization": f"Bearer {other_token}"}
     # Try to list generation runs of other user's project

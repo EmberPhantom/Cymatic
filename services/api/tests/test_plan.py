@@ -3,7 +3,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_plan_build_approve_flow(client, auth_headers, test_project):
+async def test_plan_build_approve_flow(client, auth_headers, admin_auth_headers, test_project):
     # Intake (deterministic stub) creates the run the sheet is built from.
     intake = await client.post(
         f"/v1/projects/{test_project.id}/intake",
@@ -31,7 +31,7 @@ async def test_plan_build_approve_flow(client, auth_headers, test_project):
 
     approve = await client.post(
         f"/v1/projects/{test_project.id}/plan/{body['id']}/approve",
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert approve.status_code == 200
     assert approve.json()["status"] == "approved"
@@ -45,7 +45,7 @@ async def test_plan_build_approve_flow(client, auth_headers, test_project):
     assert build2.json()["version"] == 2
     approve2 = await client.post(
         f"/v1/projects/{test_project.id}/plan/{build2.json()['id']}/approve",
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert approve2.json()["status"] == "approved"
     first = await client.get(f"/v1/projects/{test_project.id}/plan", headers=auth_headers)
