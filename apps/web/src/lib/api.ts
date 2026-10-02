@@ -11,6 +11,13 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 // "timeout of 30000ms exceeded", so long LLM endpoints override per-request.
 export const LONG_REQUEST_TIMEOUT_MS = 180_000
 
+// Next.js's built-in rewrites() proxy (see next.config.js) kills the upstream
+// connection ("socket hang up" / ECONNRESET) well before a slow intake/clarify
+// LLM call finishes, returning a 500 regardless of LONG_REQUEST_TIMEOUT_MS.
+// Those two calls go straight to the API's public origin instead, bypassing
+// the proxy; CORS already allows this origin with credentials.
+export const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
 export const api = axios.create({
   baseURL: "",
   withCredentials: true,

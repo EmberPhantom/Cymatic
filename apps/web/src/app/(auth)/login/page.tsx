@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { api } from "@/lib/api"
+import { getErrorMessage } from "@/lib/errors"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -52,7 +53,7 @@ export default function LoginPage() {
       router.refresh()
       router.replace(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard")
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Invalid email or password. Please try again.")
+      setError(getErrorMessage(err, "Invalid email or password. Please try again."))
     } finally {
       setLoading(false)
     }

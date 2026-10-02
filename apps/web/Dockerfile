@@ -18,8 +18,12 @@ WORKDIR /app
 
 # Manifest first for layer cache: rebuilds on src changes reuse npm layer.
 COPY package.json package-lock.json* ./
+# --legacy-peer-deps: eslint-config-next@16.x declares a peer on eslint>=9,
+# but this project is still on eslint@8; eslint isn't part of the runtime
+# build (`next build` doesn't invoke lint), so relaxing peer resolution here
+# is safe. Revisit once the repo's eslint major version is bumped.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund --prefer-offline
+    npm ci --no-audit --no-fund --prefer-offline --legacy-peer-deps
 
 COPY . .
 

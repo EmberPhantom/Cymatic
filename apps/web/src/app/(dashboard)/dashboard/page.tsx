@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge"
 import type { BadgeProps } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
+import { getErrorMessage } from "@/lib/errors"
 import { api } from "@/lib/api"
 import { queryKeys } from "@/lib/queryKeys"
 import { useQueryClient } from "@tanstack/react-query"
@@ -171,8 +172,7 @@ export default function DashboardPage() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.projects.all })
       setDeleteTarget(null)
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { detail?: string } } }
-      setDeleteError(e?.response?.data?.detail || "Delete failed. Please try again.")
+      setDeleteError(getErrorMessage(err, "Delete failed. Please try again."))
     } finally {
       setIsDeleting(false)
     }

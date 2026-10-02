@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useCallback } from "react"
 import { useCreateStreamSession, useEndStreamSession } from "@/hooks/use-stream-session"
 import { useProject } from "@/hooks/use-project"
 import { useAuthStore } from "@/stores/auth-store"
+import { getErrorMessage } from "@/lib/errors"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -138,7 +139,15 @@ export default function StreamPage() {
             console.warn("addIceCandidate failed", err)
           }
         } else if (msg.type === "error") {
-          setSessionError(msg.payload?.detail || msg.payload || "Stream error")
+          // payload is {session_id, error} from the render server (see
+          // RenderServer.cs's "busy" rejection) - never render it raw.
+          const payload = msg.payload
+          const text =
+            typeof payload?.detail === "string" ? payload.detail :
+            typeof payload?.error === "string" ? payload.error :
+            typeof payload === "string" ? payload :
+            "Stream error"
+          setSessionError(text)
         }
       } catch (err) {
         console.warn("signaling message error", err)
@@ -184,10 +193,7 @@ export default function StreamPage() {
         setSessionError("The render server is unavailable. Please verify it is running and retry.")
       }
     } catch (err: unknown) {
-      const anyErr = err as { response?: { data?: { detail?: unknown } } ; message?: string }
-      const detail = anyErr?.response?.data?.detail
-      const msg = typeof detail === "string" ? detail : anyErr?.message || "Unable to start stream."
-      setSessionError(Array.isArray(detail) ? detail.map((d: unknown) => typeof d === "string" ? d : (d as {msg?:string})?.msg || "").join("; ") || "Unable to start stream." : msg)
+      setSessionError(getErrorMessage(err, "Unable to start stream."))
     }
   }, [createSession, projectId])
 

@@ -71,6 +71,23 @@ export function SceneViewportPreview({
     }
   }
 
+  // Clickable SVG nodes: pointer + keyboard (Enter/Space) activation.
+  const nodeProps = (
+    name: string,
+    meta: { zone: string; triangles: number; material: string; coords: string }
+  ) => ({
+    onClick: () => handleNodeClick(name, meta),
+    role: "button" as const,
+    tabIndex: 0,
+    "aria-label": `Select ${name}`,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault()
+        handleNodeClick(name, meta)
+      }
+    },
+  })
+
   return (
     <div
       className={cn(
@@ -186,14 +203,12 @@ export function SceneViewportPreview({
                 stroke={selectedNode === "Sanctum Platform" ? "#FFFFFF" : "#B85C38"}
                 strokeWidth={selectedNode === "Sanctum Platform" ? "2.5" : "1.5"}
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Sanctum Platform", {
-                    zone: "Central Sanctum",
-                    triangles: 14200,
-                    material: "Carved Sandstone (PBR)",
-                    coords: "[0.0, 0.4, 0.0]",
-                  })
-                }
+                {...nodeProps("Sanctum Platform", {
+                  zone: "Central Sanctum",
+                  triangles: 14200,
+                  material: "Carved Sandstone (PBR)",
+                  coords: "[0.0, 0.4, 0.0]",
+                })}
               />
 
               <line x1="120" y1="182" x2="120" y2="115" stroke="url(#columnGrad)" strokeWidth="3.5" strokeLinecap="round" />
@@ -213,28 +228,24 @@ export function SceneViewportPreview({
                 stroke="#C69A4B"
                 strokeWidth="1.2"
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Tiered Shikhara", {
-                    zone: "Roof Superstructure",
-                    triangles: 28400,
-                    material: "Granite Masonry",
-                    coords: "[0.0, 4.2, 0.0]",
-                  })
-                }
+                {...nodeProps("Tiered Shikhara", {
+                  zone: "Roof Superstructure",
+                  triangles: 28400,
+                  material: "Granite Masonry",
+                  coords: "[0.0, 4.2, 0.0]",
+                })}
               />
               <line x1="200" y1="76" x2="200" y2="38" stroke="#C69A4B" strokeWidth="2.5" />
               <circle cx="200" cy="38" r="4" fill="#C69A4B" />
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Entry Mandapa", {
-                    zone: "East Gateway",
-                    triangles: 8200,
-                    material: "Basalt Flagstone",
-                    coords: "[-2.5, 0.0, 4.0]",
-                  })
-                }
+                {...nodeProps("Entry Mandapa", {
+                  zone: "East Gateway",
+                  triangles: 8200,
+                  material: "Basalt Flagstone",
+                  coords: "[-2.5, 0.0, 4.0]",
+                })}
               >
                 <circle cx="155" cy="195" r="4.5" fill="#B85C38" className="animate-pulse" />
                 <circle cx="155" cy="195" r="9" fill="none" stroke="#B85C38" strokeWidth="0.8" opacity="0.6" />
@@ -245,14 +256,12 @@ export function SceneViewportPreview({
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Inner Sanctum", {
-                    zone: "Garbhagriha",
-                    triangles: 24000,
-                    material: "Aged Sandstone",
-                    coords: "[0.0, 0.5, 0.0]",
-                  })
-                }
+                {...nodeProps("Inner Sanctum", {
+                  zone: "Garbhagriha",
+                  triangles: 24000,
+                  material: "Aged Sandstone",
+                  coords: "[0.0, 0.5, 0.0]",
+                })}
               >
                 <circle cx="245" cy="195" r="4.5" fill="#667B62" className="animate-pulse" />
                 <circle cx="245" cy="195" r="9" fill="none" stroke="#667B62" strokeWidth="0.8" opacity="0.6" />
@@ -278,14 +287,12 @@ export function SceneViewportPreview({
                 stroke={selectedNode === "Main Pavilion" ? "#FFFFFF" : "#667B62"}
                 strokeWidth={selectedNode === "Main Pavilion" ? "2.5" : "1.5"}
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Main Pavilion", {
-                    zone: "Living & Dining Room",
-                    triangles: 18500,
-                    material: "Polished Concrete & Teak",
-                    coords: "[0.0, 0.0, 1.2]",
-                  })
-                }
+                {...nodeProps("Main Pavilion", {
+                  zone: "Living & Dining Room",
+                  triangles: 18500,
+                  material: "Polished Concrete & Teak",
+                  coords: "[0.0, 0.0, 1.2]",
+                })}
               />
 
               <line x1="80" y1="180" x2="80" y2="120" stroke="#DDD9D0" strokeWidth="3" strokeLinecap="round" />
@@ -298,14 +305,12 @@ export function SceneViewportPreview({
                 stroke="#B85C38"
                 strokeWidth="1.5"
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Cantilever Deck", {
-                    zone: "Upper Terrace",
-                    triangles: 12400,
-                    material: "Tempered Glass & Steel",
-                    coords: "[0.0, 3.2, 0.0]",
-                  })
-                }
+                {...nodeProps("Cantilever Deck", {
+                  zone: "Upper Terrace",
+                  triangles: 12400,
+                  material: "Tempered Glass & Steel",
+                  coords: "[0.0, 3.2, 0.0]",
+                })}
               />
 
               <polygon
@@ -317,14 +322,12 @@ export function SceneViewportPreview({
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Balcony Viewpoint", {
-                    zone: "Master Balcony",
-                    triangles: 9100,
-                    material: "Frameless Glass Railing",
-                    coords: "[1.8, 3.2, -0.5]",
-                  })
-                }
+                {...nodeProps("Balcony Viewpoint", {
+                  zone: "Master Balcony",
+                  material: "Frameless Glass Railing",
+                  triangles: 9100,
+                  coords: "[1.8, 3.2, -0.5]",
+                })}
               >
                 <circle cx="150" cy="140" r="4.5" fill="#C69A4B" className="animate-pulse" />
                 <circle cx="150" cy="140" r="9" fill="none" stroke="#C69A4B" strokeWidth="0.8" opacity="0.6" />
@@ -335,14 +338,12 @@ export function SceneViewportPreview({
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Foyer Entry", {
-                    zone: "Entrance Lounge",
-                    triangles: 7600,
-                    material: "Marble Flooring",
-                    coords: "[-2.0, 0.0, 3.5]",
-                  })
-                }
+                {...nodeProps("Foyer Entry", {
+                  zone: "Entrance Lounge",
+                  triangles: 7600,
+                  material: "Marble Flooring",
+                  coords: "[-2.0, 0.0, 3.5]",
+                })}
               >
                 <circle cx="230" cy="205" r="4.5" fill="#667B62" className="animate-pulse" />
                 <circle cx="230" cy="205" r="9" fill="none" stroke="#667B62" strokeWidth="0.8" opacity="0.6" />
@@ -375,7 +376,8 @@ export function SceneViewportPreview({
             <button
               type="button"
               onClick={() => setSelectedNode(null)}
-              className="text-stonegray hover:text-white text-xs ml-1"
+              aria-label="Dismiss node details"
+              className="text-stonegray hover:text-white text-xs ml-1 min-w-[24px] min-h-[24px]"
             >
               ×
             </button>
@@ -395,6 +397,7 @@ export function SceneViewportPreview({
                   cameraMode === "perspective" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="3D Perspective Camera"
+                aria-pressed={cameraMode === "perspective"}
               >
                 3D
               </button>
@@ -406,6 +409,7 @@ export function SceneViewportPreview({
                   cameraMode === "top" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="TOP Floorplan View"
+                aria-pressed={cameraMode === "top"}
               >
                 TOP
               </button>
@@ -417,6 +421,7 @@ export function SceneViewportPreview({
                   cameraMode === "front" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="FRONT Elevation View"
+                aria-pressed={cameraMode === "front"}
               >
                 FRONT
               </button>
@@ -485,10 +490,11 @@ export function SceneViewportPreview({
                 setViewMode("shaded")
                 setSelectedNode(null)
               }}
-              className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+              className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors min-w-[28px] min-h-[28px]"
               title="Reset Camera View to Default"
+              aria-label="Reset camera view to default"
             >
-              <RotateCcw className="h-3 w-3" />
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />
             </button>
           </div>
         )}

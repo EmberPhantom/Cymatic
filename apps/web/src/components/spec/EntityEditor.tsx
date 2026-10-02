@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { usePatchEntity } from "@/hooks/use-edit-spec"
 import type { EntityPatch } from "@/hooks/use-edit-spec"
+import { getErrorMessage } from "@/lib/errors"
 
 interface EntityEditorProps {
   projectId: number
@@ -183,9 +184,8 @@ export function EntityEditor({ projectId, specId, entity, onClose, onSave }: Ent
       await patchEntity.mutateAsync({ specId, entityId: entity.id, patch })
       onSave()
       onClose()
-    } catch (error: any) {
-      // Avoid blocking alert; still provide feedback but also console
-      const msg = error?.response?.data?.detail || error?.message || "Failed to save entity"
+    } catch (error: unknown) {
+      const msg = getErrorMessage(error, "Failed to save entity")
       // eslint-disable-next-line no-alert
       alert(msg)
     } finally {

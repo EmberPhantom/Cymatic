@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { api } from "@/lib/api"
+import { getErrorMessage } from "@/lib/errors"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -71,7 +72,7 @@ export default function RegisterPage() {
       router.refresh()
       router.replace("/dashboard")
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Registration failed. Please check your details and try again.")
+      setError(getErrorMessage(err, "Registration failed. Please check your details and try again."))
     } finally {
       setLoading(false)
     }
