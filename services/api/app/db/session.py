@@ -3,9 +3,11 @@
 from collections.abc import AsyncGenerator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from cymatic_shared.db import (
-    create_cymatic_engine,
-)  # re-export for Alembic and tests  # noqa: F401
+from cymatic_shared.db import Base, create_cymatic_engine
+
+# Re-exported for Alembic env.py and tests; __all__ keeps import-cleaners
+# (ruff --fix) from removing the seemingly-unused Base.
+__all__ = ["Base", "create_cymatic_engine", "to_async_db_url", "AsyncSessionLocal"]
 from cymatic_shared.utils import to_async_db_url
 from app.core.config import get_settings
 

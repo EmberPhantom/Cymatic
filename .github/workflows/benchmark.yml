@@ -49,15 +49,14 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # S3 mock (moto) — minio/minio is unavailable on Docker Hub and
+      # quay.io rejects anonymous pulls.
       minio:
-        image: minio/minio:latest
-        command: server /data --console-address ":9001"
-        env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
+        image: motoserver/moto:latest
+        command: -H 0.0.0.0 -p 9000
         ports: ["9000:9000"]
         options: >-
-          --health-cmd "wget --spider -q http://localhost:9000/minio/health/live || exit 1"
+          --health-cmd "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/moto-api/')\" || exit 1"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -150,7 +149,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-web-node-
 
-      - run: cd apps/web && npm ci
+      - run: cd apps/web && npm ci --legacy-peer-deps
 
       - name: Build Production Bundle
         run: cd apps/web && npm run build
