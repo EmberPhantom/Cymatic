@@ -105,47 +105,50 @@ Generate real estate walkthrough from prompt.
 
 ---
 
-## Phase 5: Unity Render Server
+## Phase 5: Native Render Backend (olesale Unity replacement)
 
 ### Goal
-Stream generated scene to Android.
+Serve scenes + assets to the on-device renderer (no server GPU).
 
 ### Tasks
-- scene package loader
-- stereo camera rig
-- WebRTC streaming integration
-- input listener
-- runtime event bridge
-- performance manager
+- render session API (device registry, heartbeat, end)
+- scene package serving (`scene-package/view`) + asset downloads
+- voice audio endpoint (multipart PCM → STT → copilot → TTS)
+- session guards (single active session, app-version gate)
 
 ### Acceptance Criteria
-- scene loads from package
-- stereo stream starts
-- head orientation updates view
-- stream remains stable for demo duration
+- session create returns `scene_url`
+- heartbeat flips PENDING→ACTIVE
+- voice round-trip returns transcript + TTS audio
+- stale sessions swept after timeout
+
+(Status: DONE — P1, see `docs/27-mobile-render-pivot.md`. Legacy Unity
+render-server work under this phase number is frozen, not deleted.)
 
 ---
 
-## Phase 6: Android Client
+## Phase 6: Android Native Renderer
 
 ### Goal
-Create playable VR streaming client.
+Create playable on-device VR walkthrough (Filament, stereo SBS).
 
 ### Tasks
-- WebRTC player
-- stereo display
-- IMU orientation tracking
-- controller input
-- gaze dwell UI
-- voice PTT capture
+- Filament engine + SBS camera rig + primitive/GLB scene build
+- IMU orientation tracking (SensorFusion head pose)
+- controller input + gaze dwell selection
+- voice PTT capture + TTS playback
+- thermal resolution scaling
 - diagnostics screen
 
 ### Acceptance Criteria
-- stream displays correctly
+- scene renders from package on-device ≥30 FPS
 - gaze selection works
 - controller selection works
 - voice capture works
-- client handles reconnection gracefully
+- thermal stays <45 °C with scaling
+
+(Status: P2/P3 implemented, device verification pending. Legacy WebRTC
+player path under this phase number is frozen.)
 
 ---
 
@@ -252,7 +255,7 @@ Prepare for demo/pilot.
 
 ---
 
-## Current Status (as of 2026-08-18)
+## Current Status (as of 2026-10-02 — mobile-render pivot, see docs/27)
 
 ### Completed Phases
 - ✅ Phase 0: Repository and Environment Foundation
@@ -260,69 +263,41 @@ Prepare for demo/pilot.
 - ✅ Phase 2: Simulation Spec Engine
 - ✅ Phase 3: LLM Router
 - ✅ Phase 4: Real Estate Generation Pipeline
-- ✅ Phase 5: Unity Render Server (core)
-- ✅ Phase 6: Android Client (core)
-- ✅ Phase 7: Voice Copilot (core)
+- ✅ Phase 5: Native Render Backend — render sessions, heartbeat, voice/audio (P1)
+- ✅ Phase 6: Android Native Renderer — Filament SBS, gaze/controller/voice (P2/P3, device proof pending)
+- ✅ Phase 7: Voice Copilot (core, incl. render voice endpoint)
 - ✅ Phase 8: Manual Editing (core)
 - ✅ Phase 9: Heritage Templates (core)
 - ✅ Phase 10: Experimental Hand Tracking (core)
-- ✅ Phase 11: Stabilization (core)
+- ✅ Phase 11: Stabilization (core: suites 62/35/46, live E2E green)
+
+### Frozen (Unity/WebRTC path — do not schedule)
+- Unity Render Server work (scene generator, H.264, signaling, NavMesh, copilot, pooling)
+- WebRTC player / H.264 pipeline / signaling (server + Android)
+- Unity Scene Loader work (Addressables, instantiation, runtime events)
 
 ### Remaining Work
-- [ ] Unity Render Server - Scene Package Generator (prefabs, materials, NavMesh)
-- [ ] Unity Render Server - WebRTC H.264 streaming
-- [ ] Unity Render Server - WebRTC signaling
-- [ ] Unity Render Server - Input handling (head, controller, voice, hand)
-- [ ] Unity Render Server - NavMesh baking
-- [ ] Unity Render Server - Copilot agent
-- [ ] Unity Render Server - Performance optimization
-- [ ] Android Client - WebRTC player
-- [ ] Android Client - Sensor fusion (IMU + gyro)
-- [ ] Android Client - Gaze dwell
-- [ ] Android Client - Controller input
-- [ ] Android Client - Voice PTT
+- [ ] P3b: gltfio Model loading, POI label sprites, lens-distortion mesh
+- [ ] Device proof: two device classes, ≥30 FPS, <45 °C (then P6 Unity removal)
+- [ ] Asset manifest URI → download-ID resolution (backend, for P2 GLB loading)
 - [ ] Android Client - UVC camera hand tracking (optional)
-- [ ] Android Client - Diagnostics screen
-- [ ] Frontend Builder UI (prompt, spec editor, preview, publish)
-- [ ] Frontend - Project dashboard
-- [ ] Frontend - Spec editor
-- [ ] Frontend - Scene preview
-- [ ] Frontend - Asset browser
-- [ ] Frontend - Publish workflow
-- [ ] Unity Scene Package Generator (prefabs, materials, NavMesh)
-- [ ] Unity Scene Loader (Addressables)
-- [ ] Unity Scene Loader - Runtime instantiation
-- [ ] Unity Scene Loader - NavMesh baking
-- [ ] Unity Scene Loader - Copilot agent
-- [ ] Unity Scene Loader - Input handling (head, controller, voice, hand)
-- [ ] Unity Scene Loader - Runtime events
-- [ ] WebRTC H.264 encoding pipeline
-- [ ] WebRTC signaling
-- [ ] Android WebRTC player
-- [ ] Android sensor fusion
-- [ ] Android gaze dwell
-- [ ] Android controller input
-- [ ] Android voice PTT
-- [ ] Android UVC camera hand tracking (optional)
-- [ ] Android diagnostics screen
-- [ ] Circuit breaker for LLM Router
+- [ ] Circuit breaker for LLM Router (done in code — verify on device-era load)
 - [ ] Job queue race conditions fix
-- [ ] Connection pooling for MinIO
+- [ ] Connection pooling for MinIO (done in code — verify)
 - [ ] Checkpointing in pipelines
-- [ ] Thermal management (Android)
-- [ ] Unity object pooling
-- [ ] Structured logging with correlation IDs
-- [ ] Comprehensive test coverage
-- [ ] Security audit
-- [ ] Performance benchmarks
-- [ ] Documentation polish
+- [ ] Thermal management tuning on device (beyond pref scaling)
+- [ ] Structured logging with correlation IDs (api done — extend worker/router)
+- [ ] Comprehensive test coverage (viewer smoke + android CI job open)
+- [ ] Security audit (worker /metrics open; see tech-debt)
+- [ ] Performance benchmarks (device FPS/thermal)
+- [ ] Documentation polish (this pass)
 
 ### Next Sprint Priorities
-1. Unity Scene Package Generator (prefabs, materials, NavMesh)
-2. Unity Scene Loader (Addressables, runtime instantiation)
-3. WebRTC H.264 encoding pipeline
-4. Android WebRTC player + sensor fusion
-5. Frontend Builder UI (prompt, spec editor, preview, publish)
+1. Device build + `./gradlew :app:testDebugUnitTest :app:assembleDebug`
+2. P3b renderer gaps (gltfio, labels, distortion)
+3. Asset manifest URI resolution endpoint
+4. Two-device proof → P6 Unity/WebRTC removal
+5. Code dedup batch (schemas, MinIO, queue — see tech-debt)
 
 ---
 

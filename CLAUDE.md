@@ -2,7 +2,7 @@
 
 You are working on **CYMATIC**, an AI Simulation Builder platform.
 
-CYMATIC is a no-code AI simulation generation system that creates real estate and heritage walkthrough experiences and streams them to an Android phone-based VR headset.
+CYMATIC is a no-code AI simulation generation system that creates real estate and heritage walkthrough experiences rendered on-device in an Android phone-based VR headset (native Filament renderer; legacy Unity/WebRTC path frozen — see `docs/27-mobile-render-pivot.md`).
 
 Your job is to help design, implement, refactor, test, and document the platform in a way that is modular, secure, and executable by a development team.
 
@@ -19,7 +19,7 @@ Before making implementation decisions, read these files in order:
 5. `docs/02-repo-and-setup.md`
 6. `docs/03-data-model-api.md`
 7. `docs/04-ai-agents-llm-router.md`
-8. `docs/05-unity-android-input.md`
+8. `docs/05-mobile-render.md` (+ `docs/27-mobile-render-pivot.md`)
 9. `docs/06-roadmap-tasks.md`
 10. `docs/07-security-testing.md`
 
@@ -39,14 +39,14 @@ You must always respect the following constraints:
 ### Technical Constraints
 - Backend is Python FastAPI.
 - Frontend is Next.js.
-- Simulation runtime is Unity.
+- Simulation runtime is native on-device rendering (Filament, stereo SBS).
 - Android client is native Kotlin.
 - Database is PostgreSQL.
 - Cache/queue is Redis.
 - Object storage is MinIO.
 - No local LLM is required in MVP.
 - LLM access must go through an LLM Router.
-- The Unity render server runs natively on Windows for MVP.
+- No server GPU: scene JSON + assets come from the API; the phone renders.
 - Development environment is Windows + WSL2 + Docker Desktop.
 - Docker Compose is used for local development.
 - Kubernetes may be introduced later via k3d/k3s.

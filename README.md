@@ -1,30 +1,31 @@
 # CYMATIC Monorepo
 
 No-code AI simulation builder platform for real estate and heritage VR walkthroughs.
+Simulations render **on-device** in the native Android app (Filament stereo VR);
+the legacy Unity/WebRTC path is frozen (see `docs/27-mobile-render-pivot.md`).
 
 ## Architecture
 
 ```
 cymatic/
 ├── apps/
-│   └── web/                 # Next.js frontend (Builder UI)
+│   ├── web/                 # Next.js frontend (Builder UI)
+│   └── viewer/              # Mobile-browser walkthrough preview (Vite + Three.js)
 ├── services/
 │   ├── api/                 # FastAPI backend (Core control plane)
 │   ├── worker/              # Background job worker
 │   └── llm-router/          # LLM Router (AI provider abstraction)
-├── unity/
-│   └── render-server/       # Unity render/streaming server (Windows native)
+├── unity/                   # FROZEN render server (reference only)
 ├── android/
-│   └── client/              # Android VR streaming client (Kotlin)
+│   └── client/              # Native on-device VR renderer (Kotlin + Filament)
 ├── infra/
 │   ├── docker/              # Docker Compose for local development
-│   ├── k8s/                 # Kubernetes manifests (future)
-│   └── scripts/             # Infrastructure scripts
-├── schemas/
-│   ├── simulation_spec.ts   # TypeScript types
-│   └── simulation_spec.py   # Python/Pydantic models
-├── packages/                # Shared packages (future)
-└── docs/                    # Documentation
+│   └── k8s/                 # Kubernetes manifests (pre-production)
+├── schemas/                 # Canonical SimulationSpec + PlanningSheet (py + ts)
+├── packages/
+│   └── cymatic-shared/      # Shared Python package (schemas, queue, storage)
+├── scripts/                 # Repo tooling (OpenAPI, schema sync, benchmarks)
+└── docs/                    # Documentation (index at docs/README.md)
 ```
 
 ## Quick Start
@@ -35,8 +36,7 @@ cymatic/
 - Docker Desktop with WSL2 integration
 - Node.js 20+
 - Python 3.11+
-- Unity Hub (for render server)
-- Android Studio (for client)
+- Android Studio (for client; optional — backend + viewer need no Unity)
 
 ### 1. Clone and Setup
 
@@ -161,9 +161,11 @@ ENABLE_ADAPTIVE_STREAMING=true
 
 | Service | Port | Description |
 |---------|------|-------------|
-| API | 8000 | Core backend (auth, projects, specs, streaming) |
+| API | 8000 | Core backend (auth, projects, specs, render sessions) |
 | Worker | 8002 | Background jobs (generation, processing) |
 | LLM Router | 8001 | AI provider routing, fallbacks, policies |
+| Web | 3000 | Builder frontend |
+| Viewer | 8090 | Walkthrough preview |
 
 ### Key API Endpoints
 
@@ -178,20 +180,23 @@ POST   /v1/projects/{id}/generate-spec
 POST   /v1/projects/{id}/validate-spec
 POST   /v1/projects/{id}/generate-scene
 POST   /v1/projects/{id}/publish
-POST   /v1/stream/sessions
-POST   /v1/stream/sessions/{id}/offer
-POST   /v1/stream/sessions/{id}/input
-POST   /v1/stream/sessions/{id}/voice/transcript
+POST   /v1/render/sessions
+POST   /v1/render/sessions/{id}/heartbeat
+POST   /v1/render/sessions/{id}/end
+POST   /v1/render/sessions/{id}/voice/audio
+GET    /v1/projects/{id}/scene-package/view
 ```
 
 ## Documentation
+
+Start at [docs/README.md](docs/README.md) (full index). Key docs:
 
 - [Product Scope](docs/00-product-scope.md)
 - [Architecture](docs/01-architecture.md)
 - [Repo & Setup](docs/02-repo-and-setup.md)
 - [Data Model & API](docs/03-data-model-api.md)
 - [AI Agents & LLM Router](docs/04-ai-agents-llm-router.md)
-- [Unity, Android & Input](docs/05-unity-android-input.md)
+- [Mobile Render](docs/05-mobile-render.md)
 - [Roadmap & Tasks](docs/06-roadmap-tasks.md)
 - [Security & Testing](docs/07-security-testing.md)
 

@@ -11,6 +11,11 @@ docker compose -f infra/docker/docker-compose.yml up -d --build
 
 The `migrate` service owns Alembic migrations. The API, worker, and web services wait for their required health checks.
 
+Containers are named `cymatic-<service>` (`name: cymatic` in compose);
+one-shot jobs (`migrate`, `test-*`) use generated names. List with
+`make docker-ps`. Images tag `cymatic/<svc>:${APP_VERSION:-latest}` —
+set `APP_VERSION=0.1.0` in `.env` to pin a release.
+
 Open `http://localhost:3000`. Browser authentication uses HttpOnly cookies. Android and other non-browser clients may continue using bearer tokens.
 
 ## Validate the stack

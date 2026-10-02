@@ -63,7 +63,7 @@ cymatic/
 │   ├── 02-repo-and-setup.md    # Setup guide
 │   ├── 03-data-model-api.md    # Data models & API
 │   ├── 04-ai-agents-llm-router.md  # AI system
-│   ├── 05-unity-android-input.md   # Unity/Android/Input
+│   ├── 05-mobile-render.md       # Native render (Unity frozen, see docs/27)
 │   ├── 06-roadmap-tasks.md     # Roadmap
 │   ├── 07-security-testing.md  # Security & testing
 │   └── 08-demo-guide.md        # Demo guide

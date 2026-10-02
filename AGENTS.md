@@ -19,15 +19,16 @@ The MVP generates:
 - real estate walkthrough simulations
 - heritage walkthrough simulations
 
-and streams them to an Android phone-based VR headset.
+rendered on-device in an Android phone-based VR headset (native Filament
+renderer; the legacy Unity/WebRTC path is frozen — see
+`docs/27-mobile-render-pivot.md`).
 
 The platform includes:
-- Next.js builder frontend
+- Next.js builder frontend (+ Vite walkthrough viewer)
 - Python FastAPI backend
 - AI agent orchestration layer
 - LLM router
-- Unity render/streaming server
-- native Android streaming client
+- native Android on-device renderer (Kotlin + Filament)
 - PostgreSQL, Redis, MinIO
 - Docker-based local development environment
 
@@ -107,8 +108,8 @@ Prefer:
 - policy layer
 
 ### Runtime
-- Unity render server on Windows
-- WebRTC streaming
+- Native on-device rendering (Filament, stereo SBS)
+- Online-first (scene JSON + assets from API; no server GPU)
 - true stereo output
 
 ### Android
@@ -137,7 +138,7 @@ When making changes, prefer this mapping:
 - `services/api/**` -> backend API changes
 - `services/worker/**` -> background job changes
 - `services/llm-router/**` -> LLM routing changes
-- `unity/render-server/**` -> Unity runtime changes
+- `unity/render-server/**` -> FROZEN (reference only, do not extend)
 - `android/client/**` -> Android client changes
 - `infra/docker/**` -> Docker/compose changes
 - `infra/k8s/**` -> Kubernetes manifests
