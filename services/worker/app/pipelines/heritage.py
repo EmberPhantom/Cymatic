@@ -389,14 +389,6 @@ class HeritagePipeline:
             result.error = str(e)
 
         return result
-    
-    def get_template(self, site_type: str) -> dict[str, Any]:
-        """Get heritage template for site type."""
-        return self.HERITAGE_TEMPLATES.get(site_type, self.HERITAGE_TEMPLATES["courtyard"])
-
-    def list_templates(self) -> list[str]:
-        """List available heritage templates."""
-        return list(self.HERITAGE_TEMPLATES.keys())
 
 
 # Global pipeline instance

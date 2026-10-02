@@ -7,8 +7,6 @@ MVP Interim Note:
 - Atomic file writes and deep-copy safety are enforced even though storage is via MinIO in production.
 """
 import copy
-import os
-import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -301,26 +299,6 @@ class ScenePackageGenerator:
     def to_json(self, package: ScenePackage) -> str:
         """Serialize scene package to JSON."""
         return package.model_dump_json(indent=2)
-    
-    def save_to_file(self, package: ScenePackage, filepath: str):
-        """Save scene package to file atomically (non-blocking friendly)."""
-        dir_name = os.path.dirname(os.path.abspath(filepath)) or "."
-        os.makedirs(dir_name, exist_ok=True)
-        # Atomic write via temp file + replace (HIGH: save)
-        fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".tmp_scene_")
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(self.to_json(package))
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, filepath)
-        finally:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except OSError:
-                pass
-        logger.info("scene_package_saved", path=filepath)
 
 
 # Global generator instance

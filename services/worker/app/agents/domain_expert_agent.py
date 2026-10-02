@@ -251,7 +251,6 @@ class DomainExpertAgent:
 
         for element in mandatory:
             elem_norm = element.lower().replace("_", " ").strip()
-            elem_tokens = set(elem_norm.split())
             aliases = self.HERITAGE_ELEMENT_ALIASES.get(element, [elem_norm])
             alias_norms = [a.lower().replace("_", " ").strip() for a in aliases]
             found = False

@@ -6,10 +6,10 @@ from pydantic import BaseModel
 from cymatic_shared.schemas.simulation_spec import SimulationSpec
 from app.agents.asset_agent import AssetAgentResult, select_assets
 from app.agents.architect_agent import ArchitectResult, create_simulation_spec
-from app.agents.clarification_agent import ClarificationResult, process_clarification_answers
+from app.agents.clarification_agent import ClarificationResult
 from app.agents.composer_agent import ComposerResult, compose_scene
 from app.agents.domain_expert_agent import DomainCheckResult, check_domain_compliance
-from app.agents.intake_agent import IntakeResult, process_intake
+from app.agents.intake_agent import IntakeResult
 from app.agents.research_agent import ResearchResult, research_generation
 from app.agents.scene_package import ScenePackage
 from app.agents.validation_agent import ValidationAgentResult, validate_simulation_spec
@@ -408,40 +408,6 @@ class RealEstatePipeline:
             result.status = "failed"
             result.error = str(e)
         
-        return result
-    
-    async def run_intake_only(self, prompt: str, context: dict[str, Any] | None = None) -> IntakeResult:
-        """Run only the intake stage."""
-        return await process_intake(prompt, context or {})
-
-    async def run_clarification(
-        self,
-        domain: str,
-        current_answers: dict[str, Any],
-        new_answers: dict[str, str],
-    ) -> ClarificationResult:
-        """Run only the clarification stage."""
-        return await process_clarification_answers(domain, current_answers, new_answers)
-
-    async def run_from_clarification(
-        self,
-        project_id: int,
-        prompt: str,
-        intake_data: IntakeResult,
-        clarification_data: ClarificationResult,
-        context: dict[str, Any] | None = None,
-    ) -> PipelineResult:
-        """Run pipeline from clarification stage onwards."""
-        input_data = PipelineInput(
-            project_id=project_id,
-            prompt=prompt,
-            context=context or {},
-            clarification_answers=clarification_data.updated_fields
-        )
-        # Manually set intake and clarification
-        result = await self.run(input_data)
-        result.intake = intake_data
-        result.clarification = clarification_data
         return result
 
 
