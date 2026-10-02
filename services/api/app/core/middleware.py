@@ -136,7 +136,9 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
             logger.warning("audit_log_unexpected", error=str(e))
 
     def _determine_action(self, method: str, path: str) -> str | None:
-        if method == "POST" and path.startswith("/v1/projects/"):
+        if method == "POST" and (
+            path.startswith("/v1/projects/") or path == "/v1/projects"
+        ):
             if "/generate-spec" in path:
                 return "spec_generated"
             if "/generate-scene" in path:

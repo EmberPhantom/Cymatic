@@ -16,6 +16,8 @@ settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 _revoked_tokens_key = "cymatic:revoked_tokens"
+# Revocations outlive the longest token they can cover (refresh 7d).
+REVOKE_TTL_SECONDS = 7 * 24 * 3600
 
 _redis_client: Optional[aioredis.Redis] = None
 _redis_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -32,7 +34,8 @@ def _get_redis_url() -> str:
     try:
         prefix = base.rsplit("/", 1)[0]
         return f"{prefix}/4"
-    except Exception:
+    except (AttributeError, ValueError, TypeError):
+        logger.error("revoked_redis_url_malformed", base=repr(base))
         return base
 
 
@@ -46,26 +49,22 @@ async def _get_redis() -> aioredis.Redis:
 
 
 def _extract_jti(token: str) -> str | None:
+    import hashlib
+
     try:
         claims = jwt.get_unverified_claims(token)
-        jti = claims.get("jti")
+        jti = claims.get("jti") if isinstance(claims, dict) else None
         if isinstance(jti, str) and jti:
             return jti
-    except JWTError:
-        pass
-    except Exception:
-        pass
+    except (JWTError, AttributeError, TypeError, ValueError) as e:
+        logger.warning("jti_extract_failed", error=str(e))
     # Fallback: hash token to avoid storing full JWT (which may contain PII)
-    # Use first 32 chars of token as fallback key fragment, but prefer jti
-    try:
-        # Deterministic fallback without leaking full token
-        import hashlib
-        return hashlib.sha256(token.encode()).hexdigest()[:32]
-    except Exception:
+    if not isinstance(token, str) or not token:
         return None
+    return hashlib.sha256(token.encode("utf-8", errors="replace")).hexdigest()[:32]
 
 
-async def revoke_token(token: str, ttl_seconds: int = 604800) -> None:
+async def revoke_token(token: str, ttl_seconds: int = REVOKE_TTL_SECONDS) -> None:
     """Mark a token as revoked by jti (not full JWT) with TTL."""
     jti = _extract_jti(token)
     if not jti:
@@ -76,19 +75,23 @@ async def revoke_token(token: str, ttl_seconds: int = 604800) -> None:
 
 
 async def is_token_revoked(token: str) -> bool:
-    """Check if a token's jti has been revoked."""
+    """Check if a token's jti has been revoked.
+
+    Fail-open ONLY on transport errors (Redis down must not DoS all auth);
+    fail-closed on unexpected errors (deny rather than admit on unknown state).
+    """
     jti = _extract_jti(token)
     if not jti:
-        return False
+        return True
     try:
         r = await _get_redis()
         return bool(await r.exists(f"{_revoked_tokens_key}:{jti}"))
-    except RedisError as e:
+    except (RedisError, OSError, asyncio.TimeoutError) as e:
         logger.warning("redis_revocation_check_failed", error=str(e))
         return False
     except Exception as e:
-        logger.warning("revocation_check_failed", error=str(e))
-        return False
+        logger.error("revocation_check_unexpected", error=str(e))
+        return True
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

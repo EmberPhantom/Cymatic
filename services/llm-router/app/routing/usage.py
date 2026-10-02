@@ -9,6 +9,7 @@ from typing import Any
 import redis.asyncio as redis
 import structlog
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
 
 from app.core.config import get_settings
 
@@ -194,7 +195,7 @@ return current
             # Use Lua for atomic INCR+EXPIRE
             result = await self._client.eval(self._INCR_EXPIRE_LUA, 1, key, str(increment), str(ttl))
             return int(float(result)) if result is not None else 0
-        except Exception:
+        except (RedisError, OSError, asyncio.TimeoutError):
             # Fallback pipeline
             try:
                 pipe = self._client.pipeline(transaction=False)
@@ -202,7 +203,7 @@ return current
                 pipe.expire(key, ttl)  # type: ignore
                 res = await pipe.execute()
                 return int(res[0]) if res else 0
-            except Exception as e:
+            except (RedisError, OSError, asyncio.TimeoutError) as e:
                 logger.warning("quota_incr_failed", key=key, error=str(e))
                 return 0
 
@@ -214,14 +215,14 @@ return current
         try:
             result = await self._client.eval(self._INCRBYFLOAT_EXPIRE_LUA, 1, key, str(increment), str(ttl))
             return float(result) if result is not None else 0.0
-        except Exception:
+        except (RedisError, OSError, asyncio.TimeoutError):
             try:
                 pipe = self._client.pipeline(transaction=False)
                 pipe.incrbyfloat(key, increment)  # type: ignore
                 pipe.expire(key, ttl)  # type: ignore
                 res = await pipe.execute()
                 return float(res[0]) if res else 0.0
-            except Exception as e:
+            except (RedisError, OSError, asyncio.TimeoutError) as e:
                 logger.warning("quota_incr_float_failed", key=key, error=str(e))
                 return 0.0
 

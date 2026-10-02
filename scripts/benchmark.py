@@ -8,6 +8,7 @@ import time
 import statistics
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Any
 
 try:
@@ -36,7 +37,7 @@ class BenchmarkRunner:
                 resp = await client.get(url)
                 return resp.status_code == 200
         except Exception as e:
-            logger.warning(f"{service_name} not reachable: {e}")
+            logger.warning("service_not_reachable", service=service_name, error=str(e))
             return False
 
     async def _check_service_health(self, url: str, service_name: str) -> bool:
@@ -47,7 +48,7 @@ class BenchmarkRunner:
                     async with session.get(url, timeout=timeout) as resp:  # type: ignore
                         return resp.status == 200  # type: ignore
             except Exception as e:
-                logger.warning(f"{service_name} not reachable: {e}")
+                logger.warning("service_not_reachable", service=service_name, error=str(e))
                 return False
         else:
             return await self._check_service_health_httpx(url, service_name)
@@ -89,19 +90,19 @@ class BenchmarkRunner:
                     if resp.status_code >= 400:
                         errors += 1
                 except httpx.TimeoutException:
-                    logger.warning(f"Timeout on {endpoint}")
+                    logger.warning("request_timeout", endpoint=endpoint)
                     errors += 1
                     consecutive_errors += 1
                 except httpx.ConnectError:
-                    logger.warning(f"Connection refused for {endpoint}")
+                    logger.warning("connection_refused", endpoint=endpoint)
                     errors += 1
                     consecutive_errors += 1
                 except Exception as e:
-                    logger.error(f"Request failed: {e}")
+                    logger.error("request_failed", endpoint=endpoint, error=str(e))
                     errors += 1
                     consecutive_errors += 1
                 if consecutive_errors >= 3:
-                    logger.warning(f"Too many consecutive errors for {endpoint}, stopping early")
+                    logger.warning("too_many_errors", endpoint=endpoint, stopping_early=True)
                     break
         if not latencies:
             return {"error": "All requests failed", "endpoint": endpoint, "errors": errors}
@@ -142,19 +143,19 @@ class BenchmarkRunner:
                         if resp.status >= 400:  # type: ignore
                             errors += 1
                 except asyncio.TimeoutError:
-                    logger.warning(f"Timeout on {endpoint}")
+                    logger.warning("request_timeout", endpoint=endpoint)
                     errors += 1
                     consecutive_errors += 1
                 except Exception as e:
                     # aiohttp ClientConnectorError fallback when aiohttp not fully typed
                     if "Connector" in type(e).__name__:
-                        logger.warning(f"Connection refused for {endpoint}")
+                        logger.warning("connection_refused", endpoint=endpoint)
                     else:
-                        logger.error(f"Request failed: {e}")
+                        logger.error("request_failed", endpoint=endpoint, error=str(e))
                     errors += 1
                     consecutive_errors += 1
                 if consecutive_errors >= 3:
-                    logger.warning(f"Too many consecutive errors for {endpoint}, stopping early")
+                    logger.warning("too_many_errors", endpoint=endpoint, stopping_early=True)
                     break
         if not latencies:
             return {"error": "All requests failed", "endpoint": endpoint, "errors": errors}
@@ -282,9 +283,11 @@ class BenchmarkRunner:
         all_results["websocket"] = await self.run_websocket_benchmark()
         report = self.generate_report(all_results)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        with open(f"benchmark_results_{timestamp}.json", "w") as f:
+        out_dir = Path(__file__).resolve().parents[1] / "reports"
+        out_dir.mkdir(exist_ok=True)
+        with open(out_dir / f"benchmark_results_{timestamp}.json", "w") as f:
             json.dump(all_results, f, indent=2, default=str)
-        with open(f"benchmark_report_{timestamp}.md", "w") as f:
+        with open(out_dir / f"benchmark_report_{timestamp}.md", "w") as f:
             f.write(report)
         logger.info("Benchmarks completed")
         return all_results

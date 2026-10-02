@@ -1,10 +1,14 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Any
+from typing import Annotated, List, Any
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
 
-_ENV_FILE = str(Path(__file__).resolve().parents[3] / ".env")
+_CONFIG_PATH = Path(__file__).resolve()
+# services/worker/app/core/config.py is 4 levels below repo root;
+# container image is rooted at /app with fewer parents. Compose injects
+# env directly, so a missing container-local .env is valid.
+_ENV_FILE = str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
 
 
 class Settings(BaseSettings):
@@ -49,7 +53,18 @@ class Settings(BaseSettings):
     ADMIN_API_KEY: str = ""
     RATE_LIMIT_API: str = "1000/minute"
     WORKER_JOB_TIMEOUT_SECONDS: int = 300
-    CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    # NoDecode: pydantic-settings otherwise tries to JSON-parse list-typed env
+    # vars before validators run, which rejects a plain comma-separated string.
+    CORS_ORIGINS: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def split_cors_origins(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     @field_validator("ENVIRONMENT")
     @classmethod

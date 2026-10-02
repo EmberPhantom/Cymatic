@@ -70,7 +70,7 @@ class OrganizationResponse(BaseModel):
 
 
 @router.post(
-    "/login", response_model=Token, dependencies=[Depends(rate_limit("100/minute"))]
+    "/login", response_model=Token, dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH))]
 )
 async def login(
     response: Response,
@@ -134,7 +134,7 @@ def _set_auth_cookies(
     "/register",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(rate_limit("100/minute"))],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH))],
 )
 async def register(
     user_data: UserCreate,
@@ -174,7 +174,7 @@ async def get_current_user_info(
     return current_user
 
 
-@router.post("/refresh", response_model=Token, dependencies=[Depends(rate_limit("10/minute"))])
+@router.post("/refresh", response_model=Token, dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH_REFRESH))])
 async def refresh_token(
     response: Response,
     http_request: Request,

@@ -1,8 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
 
 _CONFIG_PATH = Path(__file__).resolve()
 # The repository layout has four parents above this file; the container image
@@ -61,7 +61,18 @@ class Settings(BaseSettings):
     RATE_LIMIT_LLM: str = "50/minute"
 
     # CORS
-    CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    # NoDecode: pydantic-settings otherwise tries to JSON-parse list-typed env
+    # vars before validators run, which rejects a plain comma-separated string.
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def split_cors_origins(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     @field_validator("ENVIRONMENT")
     @classmethod

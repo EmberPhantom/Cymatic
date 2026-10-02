@@ -176,8 +176,10 @@ async def complete_upload(
     if not get_minio_client().object_exists(asset.storage_key):
         raise HTTPException(status_code=400, detail="Object not found in storage")
 
-    # Get object info
+    # Get object info (None-safe shared client: missing after exists-check = race)
     info = get_minio_client().get_object_info(asset.storage_key)
+    if not info:
+        raise HTTPException(status_code=400, detail="Object not found in storage")
     # Update metadata_json with flag_modified to ensure SQLAlchemy detects change
     if asset.metadata_json is None:
         asset.metadata_json = {}
