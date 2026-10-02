@@ -76,11 +76,13 @@ class JobQueue:
             running = None
         if (
             self._client is not None
+            and self._loop is not None
             and running is not None
             and self._loop is not running
         ):
-            # Stale client bound to a previous (possibly closed) loop, e.g.
-            # across pytest tests or uvicorn reloads. Drop and recreate.
+            # Stale self-created client bound to a previous (possibly closed)
+            # loop, e.g. across uvicorn reloads. Drop and recreate. Clients
+            # injected externally (tests) have _loop None and are left alone.
             self._client = None
             self._loop = None
         if not self._client:
