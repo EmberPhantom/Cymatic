@@ -205,3 +205,11 @@ unity/**/obj/
 *.pfx
 *.keystore
 *.jks
+
+# Local test artifacts (JUnit XML from containerized suites)
+reports/
+
+
+# Compiled Filament materials (regenerable via matc, see ubershader.mat)
+*.filamat
+

@@ -1,0 +1,37 @@
+# Phase 11 local-only override: quay.io is unreachable from this network
+# (401 on every quay.io pull), so the MinIO service is swapped for a
+# Docker-Hub S3 mock (moto) under the SAME service name `minio`.
+#
+# All `http://minio:9000` references keep working unchanged.
+# Moto speaks the S3 API; the `minio` Python SDK works against it for the
+# bucket/object/presigned-URL operations used by the API/worker.
+#
+# LOCAL VALIDATION ONLY — production keeps real MinIO (see docker-compose.yml).
+# Usage:
+#   docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.s3mock.yml up -d --build
+#
+# NOTE: moto has no console UI; the 9001 console port mapping is dropped here.
+
+services:
+  minio:
+    image: motoserver/moto:latest
+    command: -H 0.0.0.0 -p 9000
+    environment:
+      # Unused by moto (accepts any creds); kept so `env_file` interpolation stays valid.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+    volumes: [] # drop minio_data (moto is ephemeral; fine for Phase 11 validation)
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/moto-api/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

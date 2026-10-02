@@ -110,3 +110,87 @@
 **Verification on `b3cb79b`:**
 `tsc 0`, `vitest 4/4 v5`, `next build 7/7`, `ruff 0 x3`, `mypy 0 (api 44/worker 31/shared 30/llm-router 14)`, `docker compose config 0`, `gradle syntax green`.
 
+## 9. Standardization pass (2026-10-02, uncommitted)
+
+**Done:** docs index + `archive/`, `08→09` rename, 12 area READMEs,
+pivot rewrites (00/01/05/06/07/08 + README/AGENTS/CLAUDE),
+validator union in shared (api fork → shim; navigation_point-entity rule
+dropped — contradicts composer output),
+queue/MinIO/rate_limit/api-admin-key → shared (worker/admin-key 403→401),
+logging bootstrap shared, worker `/metrics` gated, viewer `npm ci`,
+benchmark outputs → `./reports/`, kv-style benchmark logs, api pytest.ini
+template, k8s api→1 replica + pinned tags + viewer resources.
+
+**Verified:** sync gate OK, ruff clean (2 pre-existing F841 left untouched),
+mypy 0 on touched files, suites 48/46/62 + shared 27, live E2E 18/18 + P1 12/12.
+
+**Still open:** llm-router keeps its own rate_limit variant (provider
+limits); `yml` vs `yaml` split kept; api pytest.ini has no `--cov` gate;
+`ValidationErrorDetail` canonical name (old lowercase alias dropped —
+no importers existed).
+
+## 10. Remaining-opens close-out (2026-10-02, uncommitted)
+
+- **E1 dead code:** ProgressStepper+test, queryKeys shim, 5 pipeline helpers,
+  save_to_file, warm_cache, get_clarification_questions, cleanup_stale_locks;
+  tenacity x6 files, date-fns (+lock), nv-websocket/camera-video/media3/room/
+  kotlinx-serialization (Android). Kept: tailwindcss-animate (used), vite
+  (vitest peer), axios, security-crypto/mediapipe (imported), bcrypt (works).
+- **E2 hardening:** security fail-closed semantics + tests, WS 4029 on limiter
+  failure, quota except-narrowing, ScenePackageUnavailable 503s (+rollback),
+  fixed cross-path started_at 500 found by fault injection. Suites 52/46/62.
+- **E3 bounds:** pagination on 3 list endpoints (+tests), analytics COUNT +
+  1000-scan/500-path caps (19ms on 2500 events), heartbeat cutoff in SQL,
+  cancel scan cap 1000.
+- **Rate limit unified:** shared `rate_limit_core.sliding_check` (both
+  admission orders preserved verbatim) + shared `parse_limit`; api/worker
+  shims, router adapter keeps `rl:sliding:` keys + provider limits.
+  Live burst proof: refresh 10/min → 429s with Retry-After.
+- **Extensions unified on `.yml`:** k8s manifests renamed, 2 doc refs fixed.
+- **API coverage gate:** measured 53%, `--cov-fail-under=50` pinned
+  (same convention as worker/router).
+- **Dead code:** `best` (llm_client) + `elem_tokens` (domain_expert) removed.
+
+**Verified:** ruff clean, mypy 0 on touched files, suites 48/46/62 +
+shared 27, live E2E re-green after rebuild. §9 fully closed.
+
+## 11. Deep-investigation E1–E4 (2026-10-02, uncommitted)
+
+- **E1 dead code:** ProgressStepper+test, queryKeys shim, 5 pipeline helpers,
+  save_to_file, warm_cache, get_clarification_questions, cleanup_stale_locks;
+  tenacity x6 files, date-fns (+lock), nv-websocket/camera-video/media3/room/
+  kotlinx-serialization (Android). Kept with evidence: tailwindcss-animate
+  (used), vite (vitest peer), axios, security-crypto/mediapipe (imported),
+  bcrypt (logins work).
+- **E2 hardening:** security fail-closed semantics + tests, WS 4029 on limiter
+  failure, quota except-narrowing, ScenePackageUnavailable 503s (+rollback),
+  fixed cross-path started_at 500 found by fault injection. Suites 52/46/62.
+- **E3 bounds:** pagination on 3 list endpoints (+tests), analytics COUNT +
+  1000-scan/500-path caps (19ms on 2500 events), heartbeat cutoff in SQL,
+  cancel scan cap 1000.
+- **E4 splits:** specs.py→specs/{schemas,intake,generate,library,scene},
+  streaming.py→streaming/{common,sessions,copilot,ws},
+  tasks/generation.py→generation/{spec,scene,ops}_tasks,
+  engine 432-line table→routing/policies.py (44×4 combos + 26 static rows
+  proven identical), sanitize→providers/sanitize.py. Monkeypatch namespaces
+  preserved (`specs.process_*`, `streaming._get_http_client`,
+  `tasks.generation.AsyncSessionLocal`).
+- **Deferred (assessed, poor ROI/risk):** pipelines base class (73%
+  fragmented similarity), heritage_templates restructure, litellm_client
+  class split, bcrypt/passlib migration (logins work).
+
+## 12. Deep-investigation E6 (2026-10-02, uncommitted)
+
+- **Tests:** middleware action/resource mapping, scene None-vs-503 helpers,
+  queue cancel semantics on real Redis (found + fixed stale-loop client in
+  shared queue; fixed audit gap where project creation never matched an
+  audit action). Suites 60/46/62 + shared 27.
+- **Web a11y:** SVG nodes keyboard-operable (role/button/Enter/Space via one
+  prop helper), dismiss/reset aria-labels, toggle aria-pressed states.
+  tsc + vitest 2/2 + next build green.
+- **Viewer:** labeled inputs, aria-live statuses, 48px buttons, debounced
+  resize, rAF-throttled drag, per-frame allocation removal, bounded label
+  cache. tsc + vite build green.
+- **Android:** render strings → resources, 48dp touch targets, logo
+  description (XML-parsed; APK compile needs SDK machine).
+

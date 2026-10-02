@@ -10,7 +10,14 @@
 # degrades to cold builds locally, which is why local defaults use `inline`.
 
 group "default" {
-  targets = ["api", "worker", "llm-router", "web"]
+  targets = ["api", "worker", "llm-router", "web", "viewer"]
+}
+
+# Release version for image tags. Compose consumes it as APP_VERSION too:
+#   APP_VERSION=0.1.0 docker buildx bake -f docker-bake.hcl
+# produces cymatic/api:0.1.0 alongside :latest; omit it for latest-only builds.
+variable "APP_VERSION" {
+  default = "latest"
 }
 
 variable "NEXT_PUBLIC_API_URL" {
@@ -22,6 +29,9 @@ variable "NEXT_PUBLIC_WS_URL" {
 variable "NEXT_PUBLIC_MINIO_URL" {
   default = "http://localhost:9000"
 }
+variable "VITE_API_URL" {
+  default = "http://localhost:8000"
+}
 
 target "api" {
   context    = "./services/api"
@@ -30,7 +40,7 @@ target "api" {
     shared = "./packages/cymatic-shared"
   }
   target = "runtime"
-  tags   = ["cymatic/api:latest"]
+  tags   = ["cymatic/api:${APP_VERSION}", "cymatic/api:latest"]
   cache-from = ["type=inline"]
   cache-to   = ["type=inline"]
 }
@@ -42,7 +52,7 @@ target "worker" {
     shared = "./packages/cymatic-shared"
   }
   target = "runtime"
-  tags   = ["cymatic/worker:latest"]
+  tags   = ["cymatic/worker:${APP_VERSION}", "cymatic/worker:latest"]
   cache-from = ["type=inline"]
   cache-to   = ["type=inline"]
 }
@@ -54,7 +64,7 @@ target "llm-router" {
     shared = "./packages/cymatic-shared"
   }
   target = "runtime"
-  tags   = ["cymatic/llm-router:latest"]
+  tags   = ["cymatic/llm-router:${APP_VERSION}", "cymatic/llm-router:latest"]
   cache-from = ["type=inline"]
   cache-to   = ["type=inline"]
 }
@@ -62,11 +72,22 @@ target "llm-router" {
 target "web" {
   context    = "./apps/web"
   dockerfile = "Dockerfile"
-  tags       = ["cymatic/web:latest"]
+  tags       = ["cymatic/web:${APP_VERSION}", "cymatic/web:latest"]
   args = {
     NEXT_PUBLIC_API_URL   = "${NEXT_PUBLIC_API_URL}"
     NEXT_PUBLIC_WS_URL    = "${NEXT_PUBLIC_WS_URL}"
     NEXT_PUBLIC_MINIO_URL = "${NEXT_PUBLIC_MINIO_URL}"
+  }
+  cache-from = ["type=inline"]
+  cache-to   = ["type=inline"]
+}
+
+target "viewer" {
+  context    = "./apps/viewer"
+  dockerfile = "Dockerfile"
+  tags       = ["cymatic/viewer:${APP_VERSION}", "cymatic/viewer:latest"]
+  args = {
+    VITE_API_URL = "${VITE_API_URL}"
   }
   cache-from = ["type=inline"]
   cache-to   = ["type=inline"]

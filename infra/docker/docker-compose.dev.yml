@@ -58,3 +58,17 @@ services:
       WATCHPACK_POLLING: "true"
       NEXT_TELEMETRY_DISABLED: "1"
     command: ["npx", "next", "dev"]
+
+  viewer:
+    ports:
+      - "${VIEWER_PORT:-8090}:8090"
+    volumes:
+      - ../../apps/viewer/src:/app/src
+      - ../../apps/viewer/index.html:/app/index.html
+      - ../../apps/viewer/package.json:/app/package.json
+      - ../../apps/viewer/vite.config.ts:/app/vite.config.ts
+      - ../../apps/viewer/tsconfig.json:/app/tsconfig.json
+      - /app/node_modules
+    environment:
+      VITE_API_URL: http://localhost:${API_PORT:-8000}
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8090"]

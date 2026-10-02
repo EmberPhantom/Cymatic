@@ -1,7 +1,7 @@
 # CYMATIC Development Makefile
 # Supports both Windows (PowerShell) and Unix shells
 
-.PHONY: help setup dev build test lint clean docker-build docker-build-ci docker-up docker-down
+.PHONY: help setup dev build test lint clean docker-build docker-build-ci docker-up docker-down docker-logs docker-ps test-docker up-mock
 
 # Default target
 help:
@@ -12,19 +12,20 @@ help:
 	@echo "  make install        - Install all dependencies"
 	@echo ""
 	@echo "Development:"
-	@echo "  make dev            - Start all services in development mode"
-	@echo "  make dev-api        - Start API server only"
-	@echo "  make dev-worker     - Start worker only"
-	@echo "  make dev-llm        - Start LLM router only"
-	@echo "  make dev-web        - Start frontend only"
-	@echo "  make infra-up       - Start infrastructure (Postgres, Redis, MinIO)"
-	@echo "  make infra-down     - Stop infrastructure"
+	@echo "  make dev            - Start full stack in hot-reload dev mode"
+	@echo "  make dev-api        - Start API server only (host venv)"
+	@echo "  make dev-worker     - Start worker only (host venv)"
+	@echo "  make dev-llm        - Start LLM router only (host venv)"
+	@echo "  make dev-web        - Start frontend only (host)"
+	@echo "  make infra-up       - Start full stack (production-like images)"
+	@echo "  make infra-down     - Stop stack (preserves volumes)"
+	@echo "  make up-mock        - Start stack with S3 mock (offline/quay blocked)"
 	@echo ""
 	@echo "Testing & Quality:"
-	@echo "  make test           - Run all tests"
-	@echo "  make test-api       - Run API tests"
-	@echo "  make test-worker    - Run worker tests"
-	@echo "  make test-llm       - Run LLM router tests"
+	@echo "  make test           - Run all containerized test suites"
+	@echo "  make test-api       - Run API suite (test DB + JUnit to ./reports)"
+	@echo "  make test-worker    - Run worker suite"
+	@echo "  make test-llm       - Run LLM router suite"
 	@echo "  make lint           - Run all linters"
 	@echo "  make lint-api       - Lint API code"
 	@echo "  make lint-worker    - Lint worker code"
@@ -35,11 +36,14 @@ help:
 	@echo "Database:"
 	@echo "  make migrate        - Run database migrations"
 	@echo ""
-  @echo "Docker:"
-  @echo "  make docker-build   - Build all Docker images (parallel bake, local inline cache)"
-  @echo "  make docker-build-ci - Build all Docker images with GHA cache (CI only)"
+	@echo "Docker:"
+	@echo "  make docker-build   - Build all Docker images (parallel bake, local inline cache)"
+	@echo "  make docker-build-ci - Build all Docker images with GHA cache (CI only)"
 	@echo "  make docker-up      - Start all services with Docker Compose"
 	@echo "  make docker-down    - Stop all Docker services (preserves volumes)"
+	@echo "  make docker-logs SERVICE=api - Follow logs (optionally one service)"
+	@echo "  make docker-ps      - List cymatic-* containers"
+	@echo "  make docker-shell SERVICE=api - Shell into a service"
 	@echo "  make docker-clean   - Prune unused Docker resources"
 	@echo "  make generate-openapi - Generate OpenAPI specs"
 	@echo ""
@@ -79,13 +83,19 @@ install-llm:
 install-web:
 	cd apps/web && npm install
 
-# Development
-dev: infra-up
-	@echo "Starting all services..."
+# Paths / files
+COMPOSE = docker compose -f infra/docker/docker-compose.yml
+DEV_COMPOSE = docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.dev.yml
+MOCK_COMPOSE = docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.s3mock.yml
+
+# Development (containerized hot-reload via dev override; infra included)
+dev:
+	$(DEV_COMPOSE) up -d --build
 	@echo "API: http://localhost:8000"
 	@echo "Worker: http://localhost:8002"
 	@echo "LLM Router: http://localhost:8001"
 	@echo "Frontend: http://localhost:3000"
+	@echo "Viewer: http://localhost:8090"
 	@echo "MinIO Console: http://localhost:9001"
 
 dev-api:
@@ -101,24 +111,42 @@ dev-web:
 	cd apps/web && npm run dev
 
 infra-up:
-	docker compose -f infra/docker/docker-compose.yml up -d
+	$(COMPOSE) up -d --build
 
 infra-down:
-	docker compose -f infra/docker/docker-compose.yml down
+	$(COMPOSE) down
 
 infra-logs:
-	docker compose -f infra/docker/docker-compose.yml logs -f
+	$(COMPOSE) logs -f
 
-# Testing
-test: test-api test-worker test-llm
+# Local-only S3-mock stack (quay.io unreachable): same services, moto for MinIO.
+# Production and CI keep real MinIO via the base file.
+up-mock:
+	$(MOCK_COMPOSE) up -d --build
+
+# Testing — containerized suites (isolated test DBs, JUnit XML to ./reports)
+test: test-docker
+
+test-docker: test-api test-worker test-llm
+	@echo "JUnit reports in ./reports/"
 
 test-api:
-	cd services/api && $(VENV_BIN)/pytest tests/ -v
+	$(COMPOSE) --profile test run --rm --build test-api
 
 test-worker:
-	cd services/worker && $(VENV_BIN)/pytest tests/ -v
+	$(COMPOSE) --profile test run --rm --build test-worker
 
 test-llm:
+	$(COMPOSE) --profile test run --rm --build test-llm-router
+
+# Host-venv suites (fast iteration, needs local Postgres/Redis running)
+test-host-api:
+	cd services/api && $(VENV_BIN)/pytest tests/ -v
+
+test-host-worker:
+	cd services/worker && $(VENV_BIN)/pytest tests/ -v
+
+test-host-llm:
 	cd services/llm-router && $(VENV_BIN)/pytest tests/ -v
 
 # Linting
@@ -157,10 +185,19 @@ docker-build-ci:
 	docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl --progress plain
 
 docker-up:
-	docker compose -f infra/docker/docker-compose.yml up -d --build
+	$(COMPOSE) up -d --build
 
 docker-down:
-	docker compose -f infra/docker/docker-compose.yml down
+	$(COMPOSE) down
+
+docker-logs:
+	$(COMPOSE) logs -f $(SERVICE)
+
+docker-ps:
+	$(COMPOSE) ps
+
+docker-shell:
+	$(COMPOSE) exec $(SERVICE) sh
 
 docker-clean:
 	@echo "Pruning Docker resources (preserves volumes)..."
@@ -191,9 +228,11 @@ clean-all: clean
 	$(RM) services/worker/.venv 2>nul || true
 	$(RM) services/llm-router/.venv 2>nul || true
 	$(RM) apps/web/node_modules 2>nul || true
-	docker compose -f infra/docker/docker-compose.yml down --remove-orphans 2>nul || true
+	$(RM) apps/viewer/node_modules 2>nul || true
+	$(RM) reports 2>nul || true
+	$(COMPOSE) down --remove-orphans 2>nul || true
 	docker system prune -f 2>nul || true
 
 # Full volume removal — explicit, destructive
 docker-down-v:
-	docker compose -f infra/docker/docker-compose.yml down -v --remove-orphans
+	$(COMPOSE) down -v --remove-orphans

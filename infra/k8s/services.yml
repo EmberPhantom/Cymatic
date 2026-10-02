@@ -1,3 +1,6 @@
+# PRE-PROD: api must stay a single replica — signaling connections live in an
+# in-memory dict (see SignalingManager) and the MVP allows one stream.
+# Do NOT scale past 1 until signaling moves to Redis PubSub.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,7 +8,7 @@ metadata:
   namespace: cymatic
   labels: { app: api }
 spec:
-  replicas: 2
+  replicas: 1
   selector: { matchLabels: { app: api } }
   template:
     metadata: { labels: { app: api } }
@@ -13,7 +16,9 @@ spec:
       securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
       containers:
         - name: api
-          image: cymatic/api:latest
+          # Pinned release tag (never :latest in k8s): bump per release,
+          # e.g. cymatic/api:0.2.0. Matches APP_VERSION in bake/compose.
+          image: cymatic/api:0.1.0
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8000 }]
           envFrom:
@@ -55,7 +60,7 @@ spec:
       securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
       containers:
         - name: worker
-          image: cymatic/worker:latest
+          image: cymatic/worker:0.1.0
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8002 }]
           envFrom:
@@ -97,7 +102,7 @@ spec:
       securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
       containers:
         - name: llm-router
-          image: cymatic/llm-router:latest
+          image: cymatic/llm-router:0.1.0
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8001 }]
           envFrom:
@@ -139,7 +144,7 @@ spec:
       securityContext: { runAsNonRoot: true, runAsUser: 1001, fsGroup: 1001 }
       containers:
         - name: web
-          image: cymatic/web:latest
+          image: cymatic/web:0.1.0
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 3000 }]
           resources:
@@ -162,6 +167,46 @@ metadata:
 spec:
   selector: { app: web }
   ports: [{ port: 3000, targetPort: 3000 }]
+---
+# Static walkthrough viewer (no SSR, safe to scale; stateless).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: viewer
+  namespace: cymatic
+  labels: { app: viewer }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: viewer } }
+  template:
+    metadata: { labels: { app: viewer } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1001, fsGroup: 1001 }
+      containers:
+        - name: viewer
+          image: cymatic/viewer:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8090 }]
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "250m", memory: "128Mi" }
+          livenessProbe:
+            httpGet: { path: /, port: 8090 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 8090 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: viewer
+  namespace: cymatic
+spec:
+  selector: { app: viewer }
+  ports: [{ port: 8090, targetPort: 8090 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

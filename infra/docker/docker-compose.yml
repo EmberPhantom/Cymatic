@@ -1,12 +1,26 @@
+# CYMATIC local stack.
+# Project/container naming: `name: cymatic` pins the Compose project so
+# containers are `cymatic-<service>-1` regardless of the checkout directory
+# (previously `docker-<service>-1` from this file's parent dir name).
+# Image tags: built services use cymatic/<svc>:${APP_VERSION:-latest} so a
+# release can pin APP_VERSION=0.1.0 in .env; third-party images stay pinned
+# by digest-friendly tags below.
+name: cymatic
+
 x-logging: &default-logging
   driver: json-file
   options:
     max-size: "10m"
     max-file: "3"
+    tag: "{{.Name}}"
 
 services:
   postgres:
+    container_name: cymatic-postgres
     image: postgres:16-alpine
+    init: true
+    stop_grace_period: 10s
+    cpus: 1.0
     command: postgres -c max_connections=100 -c shared_buffers=128MB -c effective_cache_size=512MB
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-cymatic}
@@ -27,7 +41,11 @@ services:
       start_period: 15s
 
   redis:
+    container_name: cymatic-redis
     image: redis:7-alpine
+    init: true
+    stop_grace_period: 10s
+    cpus: 0.5
     command: >
       redis-server
       --appendonly yes
@@ -52,7 +70,14 @@ services:
       start_period: 10s
 
   minio:
+    # NOTE: quay.io is unreachable from some networks (401 on pull); use the
+    # local-only override for validation:
+    #   docker compose -f docker-compose.yml -f docker-compose.s3mock.yml up
+    container_name: cymatic-minio
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    init: true
+    stop_grace_period: 10s
+    cpus: 0.5
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -73,7 +98,11 @@ services:
       start_period: 15s
 
   coturn:
+    container_name: cymatic-coturn
     image: coturn/coturn:4.6.2-alpine
+    init: true
+    stop_grace_period: 10s
+    cpus: 0.25
     ports:
       - "${COTURN_PORT:-3478}:3478"
       - "${COTURN_PORT:-3478}:3478/udp"
@@ -100,7 +129,11 @@ services:
       start_period: 15s
 
   api:
-    image: cymatic/api:latest
+    container_name: cymatic-api
+    image: cymatic/api:${APP_VERSION:-latest}
+    init: true
+    stop_grace_period: 30s
+    cpus: 2.0
     build:
       context: ../../services/api
       dockerfile: Dockerfile
@@ -142,7 +175,11 @@ services:
       start_period: 20s
 
   worker:
-    image: cymatic/worker:latest
+    container_name: cymatic-worker
+    image: cymatic/worker:${APP_VERSION:-latest}
+    init: true
+    stop_grace_period: 30s
+    cpus: 2.0
     build:
       context: ../../services/worker
       dockerfile: Dockerfile
@@ -183,7 +220,11 @@ services:
       start_period: 20s
 
   llm-router:
-    image: cymatic/llm-router:latest
+    container_name: cymatic-llm-router
+    image: cymatic/llm-router:${APP_VERSION:-latest}
+    init: true
+    stop_grace_period: 30s
+    cpus: 1.0
     build:
       context: ../../services/llm-router
       dockerfile: Dockerfile
@@ -221,7 +262,11 @@ services:
     # Started only with `--profile local`; LAN sets ENABLE_LOCAL_LLM=true.
     # First run: docker compose --profile local up -d ollama && docker exec <ctr> ollama pull phi3:mini
     # Pinned (was :latest): reproducible pulls, stable layer cache.
+    container_name: cymatic-ollama
     image: ollama/ollama:0.12.0
+    init: true
+    stop_grace_period: 30s
+    cpus: 4.0
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
@@ -244,7 +289,11 @@ services:
       start_period: 60s
 
   web:
-    image: cymatic/web:latest
+    container_name: cymatic-web
+    image: cymatic/web:${APP_VERSION:-latest}
+    init: true
+    stop_grace_period: 10s
+    cpus: 0.5
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
@@ -274,10 +323,40 @@ services:
       retries: 3
       start_period: 20s
 
+  # Lightweight mobile-browser walkthrough viewer (Vite + Three.js static
+  # SPA). Separate from `web` on purpose - it only renders a published
+  # project's scene package, so it doesn't need Next.js/SSR/the builder UI.
+  viewer:
+    container_name: cymatic-viewer
+    image: cymatic/viewer:${APP_VERSION:-latest}
+    init: true
+    stop_grace_period: 10s
+    cpus: 0.25
+    build:
+      context: ../../apps/viewer
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "${VIEWER_PORT:-8090}:8090"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 128m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8090"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   migrate:
     # Same content as the api runtime image; explicit tag lets `up --build`
     # and `bake` share layers instead of rebuilding from scratch.
-    image: cymatic/api:latest
+    # No container_name: one-shot job, concurrent runs must not collide.
+    image: cymatic/api:${APP_VERSION:-latest}
     build:
       context: ../../services/api
       dockerfile: Dockerfile
@@ -294,6 +373,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
     restart: "no"
 
+  # NOTE: test services intentionally have no container_name — `run --rm`
+  # creates suffixed one-off containers so suites can run concurrently.
   test-api:
     image: cymatic/api:test
     build:
@@ -302,6 +383,9 @@ services:
       target: test
       additional_contexts:
         shared: ../../packages/cymatic-shared
+    command: ["pytest", "tests/", "-v", "--tb=short", "--junitxml=/reports/junit-api.xml"]
+    volumes:
+      - ../../reports:/reports
     depends_on:
       test-migrate:
         condition: service_completed_successfully
@@ -335,6 +419,9 @@ services:
       target: test
       additional_contexts:
         shared: ../../packages/cymatic-shared
+    command: ["pytest", "tests/", "-v", "--tb=short", "--junitxml=/reports/junit-worker.xml"]
+    volumes:
+      - ../../reports:/reports
     depends_on:
       test-migrate-worker:
         condition: service_completed_successfully
@@ -365,6 +452,9 @@ services:
       target: test
       additional_contexts:
         shared: ../../packages/cymatic-shared
+    command: ["pytest", "tests/", "-v", "--tb=short", "--junitxml=/reports/junit-llm-router.xml"]
+    volumes:
+      - ../../reports:/reports
     depends_on:
       redis:
         condition: service_healthy
@@ -417,7 +507,7 @@ services:
     restart: "no"
 
   test-migrate:
-    image: cymatic/api:latest
+    image: cymatic/api:${APP_VERSION:-latest}
     build:
       context: ../../services/api
       dockerfile: Dockerfile
@@ -453,7 +543,7 @@ services:
     restart: "no"
 
   test-migrate-worker:
-    image: cymatic/worker:latest
+    image: cymatic/worker:${APP_VERSION:-latest}
     build:
       context: ../../services/worker
       dockerfile: Dockerfile
