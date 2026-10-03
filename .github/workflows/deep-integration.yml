@@ -59,7 +59,12 @@ jobs:
 
       - name: Start Compose test stack
         working-directory: infra/docker
-        run: docker compose -f docker-compose.yml -f docker-compose.s3mock.yml --profile test up -d --build
+        run: |
+          # reports/ is bind-mounted into test containers running as uid 999;
+          # pre-create world-writable so JUnit XML writes don't get EACCES
+          # (docker would otherwise create it root-owned on first mount).
+          mkdir -p ../../reports && chmod 777 ../../reports
+          docker compose -f docker-compose.yml -f docker-compose.s3mock.yml --profile test up -d --build
 
       - name: Wait for test containers
         working-directory: infra/docker

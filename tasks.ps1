@@ -31,14 +31,15 @@ switch ($Target) {
   "infra-logs" { Invoke-Compose ($Compose + @("logs", "-f")) }
   "up-mock" { Invoke-Compose ($MockCompose + @("up", "-d", "--build")) }
   "test" {
+    New-Item -ItemType Directory -Path ./reports -Force | Out-Null
     Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-api"))
     Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-worker"))
     Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-llm-router"))
     Write-Output "JUnit reports in ./reports/"
   }
-  "test-api" { Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-api")) }
-  "test-worker" { Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-worker")) }
-  "test-llm" { Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-llm-router")) }
+  "test-api" { New-Item -ItemType Directory -Path ./reports -Force | Out-Null; Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-api")) }
+  "test-worker" { New-Item -ItemType Directory -Path ./reports -Force | Out-Null; Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-worker")) }
+  "test-llm" { New-Item -ItemType Directory -Path ./reports -Force | Out-Null; Invoke-Compose ($TestCompose + @("run", "--rm", "--build", "test-llm-router")) }
   "docker-build" { & docker buildx bake -f docker-bake.hcl; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
   "docker-up" { Invoke-Compose ($Compose + @("up", "-d", "--build")) }
   "docker-down" { Invoke-Compose ($Compose + @("down")) }

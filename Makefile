@@ -130,6 +130,11 @@ test: test-docker
 test-docker: test-api test-worker test-llm
 	@echo "JUnit reports in ./reports/"
 
+test-api test-worker test-llm: reports-dir
+
+reports-dir:
+	@mkdir -p reports 2>/dev/null || mkdir reports 2>nul || true
+
 test-api:
 	$(COMPOSE) --profile test run --rm --build test-api
 
