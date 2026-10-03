@@ -29,21 +29,23 @@ jobs:
     name: API Performance Benchmark
     runs-on: ubuntu-latest
     services:
+      # Host port 5443: GH runners already run PostgreSQL on 5432.
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: cymatic
           POSTGRES_PASSWORD: cymatic
           POSTGRES_DB: cymatic_test
-        ports: ["5432:5432"]
+        ports: ["5443:5432"]
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Host port 6480: avoid any runner-default service on 6379.
       redis:
         image: redis:7-alpine
-        ports: ["6379:6379"]
+        ports: ["6480:6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -78,19 +80,21 @@ jobs:
             ${{ runner.os }}-api-venv-
 
       - name: Install dependencies
+        # NOTE: run from services/api so the relative -e path inside
+        # requirements.txt resolves (same as `make install-api`).
+        working-directory: services/api
         run: |
-          python -m venv services/api/.venv
-          source services/api/.venv/bin/activate
-          pip install -r services/api/requirements.txt
-          pip install -e packages/cymatic-shared
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-benchmark pytest-cov
 
       - name: Run API Benchmarks
         env:
           PYTHONPATH: ${{ github.workspace }}
           JWT_SECRET_KEY: test-secret-key-for-benchmark-that-is-at-least-32-chars
-          DATABASE_URL: postgresql://cymatic:cymatic@localhost:5432/cymatic_test
-          REDIS_URL: redis://localhost:6379/0
+          DATABASE_URL: postgresql://cymatic:cymatic@localhost:5443/cymatic_test
+          REDIS_URL: redis://localhost:6480/0
           S3_ENDPOINT: http://localhost:9000
         run: |
           source services/api/.venv/bin/activate
