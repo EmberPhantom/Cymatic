@@ -44,6 +44,7 @@ def _get_http_client() -> httpx.AsyncClient:
             settings.HTTP_MAX_KEEPALIVE_CONNECTIONS,
             settings.HTTP_MAX_CONNECTIONS,
         )
+    assert _http_client is not None
     return _http_client
 
 
