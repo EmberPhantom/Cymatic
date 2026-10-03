@@ -144,7 +144,7 @@ jobs:
           POSTGRES_DB: cymatic_test
         ports: ["5443:5432"]
         options: >-
-          --health-cmd pg_isready -U cymatic -d cymatic_test
+          --health-cmd "pg_isready -U cymatic -d cymatic_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -156,7 +156,7 @@ jobs:
           POSTGRES_DB: cymatic_worker_test
         ports: ["5433:5432"]
         options: >-
-          --health-cmd pg_isready -U cymatic -d cymatic_worker_test
+          --health-cmd "pg_isready -U cymatic -d cymatic_worker_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -290,7 +290,7 @@ jobs:
           POSTGRES_DB: cymatic_test
         ports: ["5443:5432"]
         options: >-
-          --health-cmd pg_isready -U cymatic -d cymatic_test
+          --health-cmd "pg_isready -U cymatic -d cymatic_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
