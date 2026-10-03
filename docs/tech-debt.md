@@ -193,3 +193,49 @@ shared 27, live E2E re-green after rebuild. §9 fully closed.
   cache. tsc + vite build green.
 - **Android:** render strings → resources, 48dp touch targets, logo
   description (XML-parsed; APK compile needs SDK machine).
+
+## 13. Remaining-opens close-out, part 2 (2026-10-03, committed)
+
+- **Conftest repeat-run quirk (fixed):** `setup_db` teardown ran
+  `Base.metadata.drop_all`, which leaves `alembic_version` behind
+  (not in metadata) — the next run's `upgrade head` was then a no-op
+  on a table-less DB and every DB test errored with `UndefinedTable`.
+  Teardown now also drops `alembic_version`. Proven by back-to-back
+  `test_render.py` runs (14/14 twice). Same hardening applied to
+  worker conftest (latent there — no worker test currently requests
+  `db_session`). Host runs additionally need test-infra env:
+  `DATABASE_URL` on `:5433`, `REDIS_*_URL` with
+  `:cymatic_redis_pass@`, `S3_ENDPOINT http://localhost:9000`;
+  `test_benchmark.py` errors on host only (`pytest-benchmark` not
+  installed in host Python; present in container images).
+- **§9 opens (closed, verified rather than changed):**
+  - llm-router rate_limit "variant" is intentional layering — sliding
+    mechanics already delegate to shared `rate_limit_core`
+    (`parse_limit`/`sliding_check`); the module keeps only
+    router-specific identifier resolution + per-provider limits.
+  - `yml`/`yaml` split is tool convention: only `.hadolint.yaml` +
+    `.pre-commit-config.yaml` use `.yaml` (both filenames fixed by
+    their tools); all 18 project manifests are `.yml`.
+  - api `pytest.ini` coverage gate already pinned
+    (`--cov-fail-under=50`).
+  - `ValidationErrorDetail` canonical everywhere (shared defines,
+    api/worker shim-import it; no lowercase alias remains).
+- **bcrypt (closed):** already pinned `bcrypt==4.3.0` with
+  `passlib[bcrypt]==1.7.4` in api+worker; register/login/refresh
+  tests pass (15/15 `test_api.py`, 5/5 `test_security.py`) — no
+  migration needed.
+- **§11 splits (deferred with evidence, not implemented):**
+  - pipelines base class: `real_estate.py`/`heritage.py` measure 0.757
+    line similarity but fragmented (distinct stage logic/templates);
+    module shape is one class + one function each — an ABC would couple
+    two domain flows to save a few dozen lines.
+  - `heritage_templates.py`: `HeritageTemplateLibrary` is lines 18–172
+    (2 methods); the remaining ~340 lines are template/catalog data —
+    nothing to deduplicate by restructuring.
+  - `litellm_client.py` (990 lines): 8 small Pydantic models + 1 client
+    class + 4 thin wrappers; already cohesive, split would be pure
+    import churn.
+
+**Verified:** ruff clean on edited conftests, api suite 58 passed
+(+2 host-only benchmark-fixture errors), worker suite 46/46,
+repeat-run proof for the conftest fix.

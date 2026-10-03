@@ -111,6 +111,10 @@ async def setup_db():
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+        # alembic_version is not part of Base.metadata, so drop it too;
+        # otherwise the next run's `upgrade head` is a no-op on a table-less
+        # DB and every test errors with UndefinedTable.
+        await conn.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
 
 
 @pytest_asyncio.fixture
