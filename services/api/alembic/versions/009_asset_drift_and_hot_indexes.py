@@ -24,7 +24,6 @@ Indexes (models carry the same Index() in __table_args__):
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "009"

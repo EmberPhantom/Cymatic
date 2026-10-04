@@ -214,7 +214,9 @@ async def render_heartbeat(
     db: AsyncSession = Depends(get_db),
 ):
     """Renderer keep-alive. First heartbeat flips PENDING->ACTIVE (proof of live render).
-    Sweeps the caller's stale sessions (>timeout, silent) to DISCONNECTED."""
+    Sweeps the caller's stale sessions (>timeout, silent) to DISCONNECTED, plus a
+    bounded global sweep of other users' dead sessions (old, never heartbeated)
+    so abandoned PENDING rows cannot accumulate when their owner never returns."""
     session = await _get_owned_session(db, session_id, current_user)
     now = datetime.now(timezone.utc)
     if session.status == StreamSessionStatus.PENDING:
@@ -249,15 +251,57 @@ async def render_heartbeat(
         .all()
     )
     swept = 0
+    swept_ids: set[int] = {session_id}
     for s in stale:
         s.status = StreamSessionStatus.DISCONNECTED
         s.ended_at = now
+        swept_ids.add(s.id)
         swept += 1
+    # Global cap: dead sessions from ANY user. Fresh never-heartbeated rows
+    # (created within the timeout) are kept — only rows older than the cutoff
+    # with no heartbeat, or silent past the timeout, are swept. Bounded per
+    # run; per-run ids already swept above are skipped (same AsyncSession
+    # identity map would otherwise double-count unflushed rows).
+    global_stale = (
+        (
+            await db.execute(
+                select(StreamSession)
+                .where(
+                    StreamSession.id != session_id,
+                    StreamSession.status.in_(
+                        [
+                            StreamSessionStatus.PENDING,
+                            StreamSessionStatus.CONNECTING,
+                            StreamSessionStatus.ACTIVE,
+                        ]
+                    ),
+                    (
+                        (StreamSession.last_heartbeat_at.is_(None))
+                        & (StreamSession.created_at < cutoff_dt)
+                    )
+                    | (StreamSession.last_heartbeat_at < cutoff_dt),
+                )
+                .limit(settings.RENDER_GLOBAL_SWEEP_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    swept_global = 0
+    for s in global_stale:
+        if s.id in swept_ids:
+            continue
+        s.status = StreamSessionStatus.DISCONNECTED
+        s.ended_at = now
+        swept_ids.add(s.id)
+        swept += 1
+        swept_global += 1
     await db.commit()
     return {
         "session_id": session.id,
         "status": session.status.value,
         "swept_stale": swept,
+        "swept_global": swept_global,
     }
 
 

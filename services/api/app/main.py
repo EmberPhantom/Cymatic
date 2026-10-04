@@ -47,6 +47,21 @@ async def lifespan(app: FastAPI):
     ):
         raise RuntimeError("DATABASE_URL must be configured for production")
     await init_db()
+    # Best-effort startup sweep of orphan UPLOADING assets (clients that
+    # fetched a presigned PUT URL but never completed). Never fail startup.
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.services.asset_maintenance import sweep_stale_uploading_assets
+
+        async with AsyncSessionLocal() as session:
+            swept = await sweep_stale_uploading_assets(
+                session,
+                older_than_hours=settings.ASSET_UPLOAD_STALE_HOURS,
+                limit=settings.ASSET_UPLOAD_SWEEP_LIMIT,
+            )
+        structlog.get_logger().info("startup_asset_sweep", swept=swept)
+    except Exception as e:
+        structlog.get_logger().warning("startup_asset_sweep_failed", error=str(e))
     yield
     await close_db()
 

@@ -287,8 +287,8 @@ export default function StreamPage() {
         </div>
 
         <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-sm">
-          <div className="text-[10px] text-stonegray uppercase">LAN Latency</div>
-          <div className="text-sm font-bold text-foreground mt-1">42 ms</div>
+          <div className="text-[10px] text-stonegray uppercase">LAN Latency (Target)</div>
+          <div className="text-sm font-bold text-foreground mt-1">Not measured</div>
           <div className="text-[10px] text-stonegray">&lt; 50 ms Target</div>
         </div>
 

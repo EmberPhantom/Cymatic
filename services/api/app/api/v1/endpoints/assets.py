@@ -257,11 +257,32 @@ async def list_assets(
     return result.scalars().all()
 
 
+@router.post("/maintenance/sweep-uploads")
+async def sweep_uploads(
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    older_than_hours: int = Query(settings.ASSET_UPLOAD_STALE_HOURS, ge=1, le=720),
+    limit: int = Query(settings.ASSET_UPLOAD_SWEEP_LIMIT, ge=1, le=1000),
+):
+    """Delete orphan UPLOADING rows older than N hours + best-effort MinIO cleanup.
+
+    Admin-only, bounded per run. Endpoint-triggered path for the orphan-upload
+    sweeper (the other path is the startup sweep in app.main lifespan)."""
+    from app.services.asset_maintenance import sweep_stale_uploading_assets
+
+    swept = await sweep_stale_uploading_assets(
+        db, older_than_hours=older_than_hours, limit=limit
+    )
+    return {"swept": swept}
+
+
 @router.get("/projects/{project_id}", response_model=List[AssetResponse])
 async def list_project_assets(
     project_id: int,
     current_user: User = Depends(require_viewer),
     db: AsyncSession = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
 ):
     project = await db.scalar(
         select(Project).where(
@@ -278,6 +299,8 @@ async def list_project_assets(
             Asset.organization_id == current_user.organization_id,
         )
         .order_by(Asset.created_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
     return result.scalars().all()
 

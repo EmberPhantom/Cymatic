@@ -239,3 +239,51 @@ shared 27, live E2E re-green after rebuild. §9 fully closed.
 **Verified:** ruff clean on edited conftests, api suite 58 passed
 (+2 host-only benchmark-fixture errors), worker suite 46/46,
 repeat-run proof for the conftest fix.
+
+## 14. Deep-audit P0–P2 close-out (2026-10-04/05, committed)
+
+Six-area audit (~85 findings) executed in four phases; branch adds
+migration `009` (asset drift + hot-path indexes, EXPLAIN-verified).
+
+**Phase A (security):** api tenant scoping on spec/edit paths + 404
+regression tests, fail-closed revocation, register 409 race,
+org-locked credit adjust, honest `RequestIdMiddleware`, header-only WS
+auth; router audio policy checks, fail-closed quota, org-scoped cache,
+`LLM_API_KEY`/admin split, minimal public `/health`; CI SHA-pinned
+actions (+fixed nonexistent `trivy-action@0.24.0` tag), blocking
+gitleaks, working pip-audit, safe `.env.example`, test Redis DB blocks
+on live-validated `--databases 32`. Owner decision still open:
+`game-ci/unity-installer` does not exist upstream (warning inline).
+
+**Phase B (correctness):** worker spec_id flush, failure checkpoints,
+async MinIO, durable requeue + sweep, truncation bar, template 422,
+`has_window` unification, time-of-day normalization, RunStage mapping,
+namespaced advisory locks; web NaN guard, refreshed-token retries,
+dead-job reset, string session IDs, renderer teardown, in-memory viewer
+auth; Android transforms/destroy/refresh/WAV/stereo/coords/lighting
+(+JVM unit tests; `./gradlew test` + assemble need SDK machine); k8s
+migrate tag + initContainers, benchmark accounting, strict schema-sync,
+viewer `.dockerignore`, openapi hyphen fix.
+
+**Phase C (reliability):** persist-after-forward, rate-limit coverage,
+auth 403 consistency, self-deactivation guard; single uvicorn worker,
+wired `LLM_TIMEOUT`, checkpoint TTL/size/per-run, LLM budget backoff;
+router quota crash-safety, provider fail-closed, sanitizer NFKC,
+schema bounds, per-path limits; web Zod boundary, edge-auth expiry,
+illustrative preview labels; k8s web env/ingress, worker defaults,
+`REDISCLI_AUTH` healthcheck.
+
+**Phase D (hygiene):** orphan-upload sweep (startup + admin endpoint),
+asset list pagination, global stale-session sweep; `009` lint fix;
+stream latency card now "Not measured".
+
+**Intentionally unchanged (evidence in §13/plan notes):** pipelines
+ABC, heritage_templates data move, litellm_client split; minSdk 34
+(product reach decision); Ollama/Redis plaintext (LAN assumption);
+`NavigationPath(from_point=)` mypy notes are runtime-safe
+(`populate_by_name`); Unity stays frozen — the two findings
+(`SceneLoader.cs:551` names nodes `Nav_{name}` but `:580-581`
+resolves by id, so mismatched id/name silently drops paths;
+`:577` per-path `new Material` never destroyed) are recorded here
+with the one-line remedy (name nodes `Nav_{point.id}`; share the path
+material via `MaterialManager`) for a Unity-machine owner to apply.

@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # Native mobile render endpoint (Unity-free path)
     MOBILE_MIN_APP_VERSION: str = "0.1.0"
     RENDER_HEARTBEAT_TIMEOUT_SECONDS: int = 600
+    # Bounded global sweep of dead non-terminal sessions per heartbeat run.
+    RENDER_GLOBAL_SWEEP_LIMIT: int = 100
+
+    # Orphan asset-upload hygiene (UPLOADING rows never completed by the client)
+    ASSET_UPLOAD_STALE_HOURS: int = 24
+    ASSET_UPLOAD_SWEEP_LIMIT: int = 100
 
     # Feature Flags
     ENABLE_HAND_TRACKING: bool = False
