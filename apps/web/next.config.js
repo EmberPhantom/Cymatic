@@ -39,6 +39,10 @@ const nextConfig = {
     })(),
   },
   async headers() {
+    // SINGLE SOURCE OF TRUTH for Permissions-Policy (middleware.ts must NOT
+    // set it — duplicates would conflict). The voice client needs mic+camera
+    // on self-origin; geolocation stays denied.
+    const permissionsPolicy = "camera=(self), microphone=(self), geolocation=()";
     return [
       {
         source: "/(.*)",
@@ -46,7 +50,7 @@ const nextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Permissions-Policy", value: permissionsPolicy },
         ],
       },
     ];

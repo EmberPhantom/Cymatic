@@ -3,7 +3,7 @@
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { useEffect, useRef, useState, useCallback } from "react"
-import { useCreateStreamSession, useEndStreamSession } from "@/hooks/use-stream-session"
+import { useCreateStreamSession, useEndStreamSession, endSessionBeaconUrl } from "@/hooks/use-stream-session"
 import { useProject } from "@/hooks/use-project"
 import { useAuthStore } from "@/stores/auth-store"
 import { getErrorMessage } from "@/lib/errors"
@@ -168,7 +168,7 @@ export default function StreamPage() {
       if (sid) {
         try {
           const blob = new Blob([], { type: "application/json" })
-          navigator.sendBeacon(`/v1/stream/sessions/${encodeURIComponent(sid)}/end`, blob)
+          navigator.sendBeacon(endSessionBeaconUrl(sid), blob)
         } catch {}
       }
     }
@@ -201,16 +201,11 @@ export default function StreamPage() {
     const sid = sessionIdRef.current
     if (sid) {
       try {
-        const numId = Number(sid)
-        if (!Number.isNaN(numId) && String(numId) === sid) {
-          await endSession.mutateAsync({ sessionId: numId })
-        } else {
-          await endSession.mutateAsync({ sessionId: sid as unknown as number })
-        }
+        await endSession.mutateAsync({ sessionId: sid })
       } catch {
         try {
           const blob = new Blob([], { type: "application/json" })
-          navigator.sendBeacon(`/v1/stream/sessions/${encodeURIComponent(sid)}/end`, blob)
+          navigator.sendBeacon(endSessionBeaconUrl(sid), blob)
         } catch {}
       }
     }

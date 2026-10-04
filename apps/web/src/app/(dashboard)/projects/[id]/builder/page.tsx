@@ -21,6 +21,7 @@ import { PipelineStepper, type PipelineStage } from "@/components/pipeline/Pipel
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { getErrorMessage } from "@/lib/errors"
+import { parseProjectId } from "@/lib/project-id"
 import type { IntakeResult, ClarificationQuestion, ClarifyResult } from "@/types"
 import {
   Sparkles,
@@ -38,96 +39,34 @@ import {
   Glasses
 } from "lucide-react"
 
-type Step = "prompt" | "clarify" | "review" | "generate" | "publish"
-type GenerationStage = "spec" | "validation" | "scene" | "publish"
+import {
+  builderReducer,
+  initialBuilderState as initialState,
+  BUILDER_STEPS as STEPS,
+  sanitizeHydratedState,
+  intakeFromGenerationRun,
+  resolveHydratedJob,
+  stepAfterDeadJob,
+  MAX_PROMPT_LENGTH,
+  type BuilderState,
+} from "@/lib/builder-state"
 
-const STEPS: { key: Step; label: string }[] = [
-  { key: "prompt", label: "Enter Prompt" },
-  { key: "clarify", label: "Clarification" },
-  { key: "review", label: "Review Spec" },
-  { key: "generate", label: "Generate" },
-  { key: "publish", label: "Publish" },
-]
+type Step = BuilderState["step"]
+type GenerationStage = BuilderState["generationStage"]
 
-const MAX_PROMPT_LENGTH = 5000
 const JOB_TIMEOUT_MS = 5 * 60 * 1000
 
 // ---------------------------------------------------------------------------
-// Reducer: consolidates the 9 previous useState calls into a single atomic
-// workflow state to prevent out-of-sync step vs generationStage vs currentJobId.
+// Reducer + hydration helpers live in @/lib/builder-state (unit-tested).
 // ---------------------------------------------------------------------------
-type BuilderState = {
-  step: Step
-  prompt: string
-  intakeResult: IntakeResult | null
-  clarifyResult: ClarifyResult | null
-  answers: Record<string, string>
-  currentJobId: string | null
-  generationStage: GenerationStage
-  workflowError: string | null
-}
-
-type BuilderAction =
-  | { type: "SET_PROMPT"; payload: string }
-  | { type: "SET_STEP"; payload: Step }
-  | { type: "SET_INTAKE_RESULT"; payload: IntakeResult | null }
-  | { type: "SET_CLARIFY_RESULT"; payload: ClarifyResult | null }
-  | { type: "SET_ANSWERS"; payload: Record<string, string> }
-  | { type: "SET_ANSWER"; payload: { field: string; value: string } }
-  | { type: "SET_JOB"; payload: string | null }
-  | { type: "SET_STAGE"; payload: GenerationStage }
-  | { type: "SET_ERROR"; payload: string | null }
-  | { type: "SET_WORKFLOW"; payload: Partial<Pick<BuilderState, "step" | "generationStage" | "currentJobId" | "workflowError">> }
-  | { type: "HYDRATE"; payload: Partial<BuilderState> }
-  | { type: "RESET_JOB" }
-
-const initialState: BuilderState = {
-  step: "prompt",
-  prompt: "",
-  intakeResult: null,
-  clarifyResult: null,
-  answers: {},
-  currentJobId: null,
-  generationStage: "spec",
-  workflowError: null,
-}
-
-function builderReducer(state: BuilderState, action: BuilderAction): BuilderState {
-  switch (action.type) {
-    case "SET_PROMPT":
-      return { ...state, prompt: action.payload.slice(0, MAX_PROMPT_LENGTH) }
-    case "SET_STEP":
-      return { ...state, step: action.payload }
-    case "SET_INTAKE_RESULT":
-      return { ...state, intakeResult: action.payload }
-    case "SET_CLARIFY_RESULT":
-      return { ...state, clarifyResult: action.payload }
-    case "SET_ANSWERS":
-      return { ...state, answers: action.payload }
-    case "SET_ANSWER":
-      return { ...state, answers: { ...state.answers, [action.payload.field]: action.payload.value } }
-    case "SET_JOB":
-      return { ...state, currentJobId: action.payload }
-    case "SET_STAGE":
-      return { ...state, generationStage: action.payload }
-    case "SET_ERROR":
-      return { ...state, workflowError: action.payload }
-    case "SET_WORKFLOW":
-      return { ...state, ...action.payload }
-    case "HYDRATE":
-      return { ...state, ...action.payload }
-    case "RESET_JOB":
-      return { ...state, currentJobId: null }
-    default:
-      return state
-  }
-}
-
 
 export default function BuilderPage() {
   const params = useParams()
   const router = useRouter()
-  const projectId = Number(params.id)
+  // Guard the route param: an invalid id renders a local error state below
+  // and never fires intake/clarify/generate hooks (same NaN pattern as
+  // use-project.ts). Mutation hooks throw on null projectId as a second net.
+  const projectId = parseProjectId(params.id)
 
   const [state, dispatch] = useReducer(builderReducer, initialState)
   const { step, prompt, intakeResult, clarifyResult, answers, currentJobId, generationStage, workflowError } = state
@@ -174,48 +113,101 @@ export default function BuilderPage() {
     if (hasHydratedRef.current) return
     hasHydratedRef.current = true
     if (typeof window === "undefined") return
+    if (projectId === null) return
+    let cancelled = false
     try {
       const raw = window.sessionStorage.getItem(storageKey)
       const urlParams = new URLSearchParams(window.location.search)
       const urlRunId = urlParams.get("run_id")
-      let parsed: Partial<BuilderState> | null = null
+      let parsed: unknown = null
       if (raw) {
         try {
-          parsed = JSON.parse(raw) as Partial<BuilderState>
+          parsed = JSON.parse(raw) as unknown
         } catch {
           parsed = null
         }
       }
-      // URL takes precedence for run_id if mismatch, but we still hydrate other fields from storage
-      if (parsed) {
-        const hydrate: Partial<BuilderState> = {}
-        if (typeof parsed.prompt === "string") hydrate.prompt = parsed.prompt.slice(0, MAX_PROMPT_LENGTH)
-        if (parsed.intakeResult && typeof parsed.intakeResult === "object") hydrate.intakeResult = parsed.intakeResult as IntakeResult
-        if (parsed.clarifyResult && typeof parsed.clarifyResult === "object") hydrate.clarifyResult = parsed.clarifyResult as ClarifyResult
-        if (parsed.answers && typeof parsed.answers === "object") hydrate.answers = parsed.answers as Record<string, string>
-        if (typeof parsed.currentJobId === "string" || parsed.currentJobId === null) hydrate.currentJobId = parsed.currentJobId as string | null
-        if (parsed.step && (STEPS as readonly { key: string }[]).some((s) => s.key === parsed.step)) hydrate.step = parsed.step as Step
-        if (parsed.generationStage && ["spec", "validation", "scene", "publish"].includes(parsed.generationStage as string))
-          hydrate.generationStage = parsed.generationStage as GenerationStage
-        // if URL run_id present and differs, prefer URL run_id by keeping intakeResult.run_id as urlRunId if needed
-        if (urlRunId && hydrate.intakeResult && (hydrate.intakeResult as IntakeResult).run_id !== urlRunId) {
-          // keep storage intakeResult but ensure URL consistency; do not override storage blindly
-          // if storage has no run_id, synthesize
-          if (!(hydrate.intakeResult as IntakeResult).run_id) {
-            ;(hydrate.intakeResult as IntakeResult).run_id = urlRunId
-          }
-        } else if (urlRunId && !hydrate.intakeResult) {
-          hydrate.intakeResult = { run_id: urlRunId } as unknown as IntakeResult
-        }
-        if (Object.keys(hydrate).length > 0) {
-          dispatch({ type: "HYDRATE", payload: hydrate })
-        }
-      } else if (urlRunId) {
-        // no storage but URL has run_id -> minimal hydrate to allow resume
-        dispatch({ type: "HYDRATE", payload: { intakeResult: { run_id: urlRunId } as unknown as IntakeResult } })
+      // Validated hydration: run_id-only payloads are NEVER promoted to a
+      // full IntakeResult (no `as unknown as IntakeResult` casts) — they are
+      // refetched from GET generation-runs/{runId} below.
+      const { hydrate, pendingRunIdFetch } = sanitizeHydratedState(parsed, urlRunId)
+      if (Object.keys(hydrate).length > 0) {
+        dispatch({ type: "HYDRATE", payload: hydrate })
+      }
+
+      // Dead job rehydration: verify a restored currentJobId is still live
+      // (single status poll) before the 5-minute window resumes. A dead/GC'd
+      // job resets to review instead of the "Generation Interrupted" limbo.
+      const hydratedJobId = hydrate.currentJobId
+      if (typeof hydratedJobId === "string" && hydratedJobId) {
+        api
+          .get(`/v1/jobs/${encodeURIComponent(hydratedJobId)}/status`)
+          .then((res) => {
+            if (cancelled) return
+            const status = (res.data as { status?: unknown } | undefined)?.status
+            if (resolveHydratedJob(status, false, false) === "dead") {
+              dispatch({ type: "RESET_JOB" })
+              jobStartedAtRef.current = null
+              dispatch({
+                type: "SET_STEP",
+                payload: stepAfterDeadJob(!!hydrate.intakeResult || !!pendingRunIdFetch),
+              })
+              dispatch({
+                type: "SET_ERROR",
+                payload: "The previous job is no longer running (it finished or expired). Your plan is kept — review and compile again.",
+              })
+            }
+          })
+          .catch((err: unknown) => {
+            if (cancelled) return
+            const httpStatus = (err as { response?: { status?: number } })?.response?.status
+            if (resolveHydratedJob(undefined, true, httpStatus === 404) === "dead") {
+              dispatch({ type: "RESET_JOB" })
+              jobStartedAtRef.current = null
+              dispatch({
+                type: "SET_STEP",
+                payload: stepAfterDeadJob(!!hydrate.intakeResult || !!pendingRunIdFetch),
+              })
+              dispatch({
+                type: "SET_ERROR",
+                payload: "The previous job is no longer available (it expired). Your plan is kept — review and compile again.",
+              })
+            }
+            // fail-open on network blips: keep polling, timeout bounds the wait
+          })
+      }
+
+      // run_id-only hydration: refetch the full intake result from the run.
+      if (pendingRunIdFetch) {
+        api
+          .get(`/v1/projects/${projectId}/generation-runs/${encodeURIComponent(pendingRunIdFetch)}`)
+          .then((res) => {
+            if (cancelled) return
+            const rebuilt = intakeFromGenerationRun(res.data)
+            if (rebuilt) {
+              dispatch({ type: "SET_INTAKE_RESULT", payload: rebuilt })
+            } else {
+              dispatch({ type: "SET_INTAKE_RESULT", payload: null })
+              dispatch({
+                type: "SET_ERROR",
+                payload: "The previous session's details could not be restored. Please describe your idea again.",
+              })
+            }
+          })
+          .catch(() => {
+            if (cancelled) return
+            dispatch({ type: "SET_INTAKE_RESULT", payload: null })
+            dispatch({
+              type: "SET_ERROR",
+              payload: "The previous session's details could not be restored. Please describe your idea again.",
+            })
+          })
       }
     } catch {
       // ignore hydration errors
+    }
+    return () => {
+      cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
@@ -224,6 +216,7 @@ export default function BuilderPage() {
   useEffect(() => {
     if (!hasHydratedRef.current) return
     if (typeof window === "undefined") return
+    if (projectId === null) return
     try {
       const toPersist: Record<string, unknown> = {
         prompt,
@@ -404,6 +397,7 @@ export default function BuilderPage() {
   // Handlers
   // ---------------------------------------------------------------------------
   const handleIntake = useCallback(async () => {
+    if (projectId === null) return
     const trimmed = prompt.trim()
     if (!trimmed) return
     // enforce maxLength even if bypassed
@@ -428,9 +422,10 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to analyze the prompt.") })
     }
-  }, [prompt, intake, project?.domain])
+  }, [prompt, intake, project?.domain, projectId])
 
   const handleClarify = useCallback(async () => {
+    if (projectId === null) return
     try {
       dispatch({ type: "SET_ERROR", payload: null })
       // Send the freshest known entities as base: prior clarify updated_fields
@@ -451,9 +446,10 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to save clarification answers.") })
     }
-  }, [answers, clarify, intakeResult, clarifyResult])
+  }, [answers, clarify, intakeResult, clarifyResult, projectId])
 
   const handleGenerateSpec = useCallback(async () => {
+    if (projectId === null) return
     try {
       dispatch({ type: "SET_ERROR", payload: null })
       // Approval gate: freeze the reviewed plan sheet before generating.
@@ -486,9 +482,10 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to start specification generation.") })
     }
-  }, [prompt, intakeResult, clarifyResult, answers, generateSpec, planSheet])
+  }, [prompt, intakeResult, clarifyResult, answers, generateSpec, planSheet, projectId])
 
   const handlePublish = useCallback(async () => {
+    if (projectId === null) return
     try {
       dispatch({ type: "SET_ERROR", payload: null })
       const result = await publish.mutateAsync()
@@ -497,7 +494,7 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to publish the simulation.") })
     }
-  }, [publish])
+  }, [publish, projectId])
 
   const handleCancel = useCallback(async () => {
     if (!currentJobId) return
@@ -814,7 +811,26 @@ export default function BuilderPage() {
                               <div className="flex flex-wrap gap-1.5">
                                 {options.map((o: string) => {
                                   const active = selectedMulti.includes(o)
-                                  return (
+  // Invalid project id: render a local error state. No intake/clarify/
+  // generate hook can fire — useProject is disabled on null, mutation hooks
+  // throw on null, and every handler above early-returns.
+  if (projectId === null) {
+    return (
+      <div className="space-y-5">
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-semibold">Invalid project id</p>
+          <p className="mt-1 text-xs">
+            The URL does not contain a valid project id, so the builder cannot load. Check the link and try again.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => router.push("/dashboard")} className="mt-3 text-xs">
+            Back to Dashboard
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
                                     <button
                                       key={o}
                                       type="button"

@@ -10,14 +10,32 @@ interface Leg {
   dwellAfter: number; // seconds to pause once this leg's endpoint is reached
 }
 
-/** Builds an ordered flight path from NavigationSpec: default_start_point,
- * then follows `paths` in the order given, falling back to a straight line
+/** Frame output written by Walkthrough.update — callers pass reusable
+ * instances to avoid per-frame allocation at 60 fps. */
+export interface WalkthroughFrame {
+  position: THREE.Vector3;
+  lookAt: THREE.Vector3;
+}
+
+/** Builds an ordered flight path from NavigationSpec: paths are rotated so
+ * the walkthrough starts at `default_start_point` when it matches a path
+ * origin, then follows `paths` in order, falling back to a straight line
  * between the two endpoints' positions when a path has no `waypoints`. */
 export function buildFlightPath(nav: NavigationSpec): Leg[] {
   const pointsById = new Map(nav.points.map((p) => [p.id, p]));
   const legs: Leg[] = [];
 
-  for (const path of nav.paths) {
+  // Honor default_start_point instead of ignoring it: rotate the path list
+  // so the leg departing from the start point comes first.
+  const paths = [...nav.paths];
+  if (nav.default_start_point) {
+    const startIdx = paths.findIndex((p) => p.from === nav.default_start_point);
+    if (startIdx > 0) {
+      paths.push(...paths.splice(0, startIdx));
+    }
+  }
+
+  for (const path of paths) {
     const from = pointsById.get(path.from);
     const to = pointsById.get(path.to);
     if (!from || !to) continue;
@@ -41,10 +59,13 @@ export class Walkthrough {
   private segIndex = 0;
   private segT = 0; // 0..1 progress along current segment
   private dwellRemaining = 0;
+  private startOverride: THREE.Vector3 | null = null;
   playing = true;
 
   constructor(nav: NavigationSpec) {
     this.legs = buildFlightPath(nav);
+    const start = nav.points.find((p) => p.id === nav.default_start_point);
+    if (start) this.startOverride = toThreeVec3(start.position);
   }
 
   get hasPath(): boolean {
@@ -52,15 +73,20 @@ export class Walkthrough {
   }
 
   startPosition(): THREE.Vector3 {
+    if (this.startOverride) return this.startOverride.clone();
     if (!this.hasPath) return new THREE.Vector3();
     return this.legs[0].points[0].clone();
   }
 
-  /** Advances the walkthrough by `dt` seconds, returns the current camera
-   * position and a look-at target (next point on the path). */
-  update(dt: number): { position: THREE.Vector3; lookAt: THREE.Vector3 } {
+  /** Advances the walkthrough by `dt` seconds, writing the current camera
+   * position and look-at target into `out` (allocated when omitted).
+   * Preallocated-temp math: no per-frame Vector3 allocation on the hot path. */
+  update(dt: number, out?: WalkthroughFrame): WalkthroughFrame {
+    const target = out ?? { position: new THREE.Vector3(), lookAt: new THREE.Vector3() };
     if (!this.hasPath) {
-      return { position: new THREE.Vector3(), lookAt: new THREE.Vector3(0, 0, -1) };
+      target.position.set(0, 0, 0);
+      target.lookAt.set(0, 0, -1);
+      return target;
     }
 
     if (this.playing) {
@@ -74,9 +100,9 @@ export class Walkthrough {
     const leg = this.legs[this.legIndex];
     const a = leg.points[this.segIndex];
     const b = leg.points[Math.min(this.segIndex + 1, leg.points.length - 1)];
-    const position = a.clone().lerp(b, this.segT);
-    const lookAt = b;
-    return { position, lookAt };
+    target.position.copy(a).lerp(b, this.segT);
+    target.lookAt.copy(b);
+    return target;
   }
 
   private advance(dt: number) {

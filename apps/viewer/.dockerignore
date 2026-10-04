@@ -1,0 +1,31 @@
+# dependencies (reinstall in container)
+node_modules
+
+# build artifacts
+dist
+.turbo
+
+# test artifacts (not needed for `vite build`)
+coverage
+
+# logs
+*.log
+npm-debug.log*
+
+# environment files
+.env
+.env.*
+
+# documentation
+*.md
+
+# IDE
+.vscode
+.idea
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# version control
+.git

@@ -1,34 +1,37 @@
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) || "http://localhost:8000";
-const STORAGE_KEY = "cymatic_viewer_tokens";
 
-interface Tokens {
-  access_token: string;
-  refresh_token: string;
-}
+// In-memory only: tokens are NEVER persisted to localStorage (XSS-readable).
+// Mirrors apps/web's auth-store — the HttpOnly cookie set by /v1/auth/login
+// is the source of truth; the memory token is a fallback for deployments
+// where the cookie has not propagated yet. A page reload therefore requires
+// re-login only when the cookie is also absent (refresh() below covers the
+// cookie-present case).
+let accessToken: string | null = null;
 
-let tokens: Tokens | null = loadTokens();
-
-function loadTokens(): Tokens | null {
+function decodeExp(token: string): number | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Tokens) : null;
+    const payload = JSON.parse(atob(token.split(".")[1] as string)) as { exp?: unknown };
+    return typeof payload.exp === "number" ? payload.exp : null;
   } catch {
     return null;
   }
 }
 
-function saveTokens(t: Tokens) {
-  tokens = t;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(t));
-}
-
+/** True only with a non-expired in-memory access token. */
 export function isLoggedIn(): boolean {
-  return tokens !== null;
+  if (!accessToken) return false;
+  const exp = decodeExp(accessToken);
+  if (exp !== null && exp * 1000 <= Date.now()) {
+    accessToken = null;
+    return false;
+  }
+  return true;
 }
 
 export function logout() {
-  tokens = null;
-  localStorage.removeItem(STORAGE_KEY);
+  accessToken = null;
+  // Best-effort server-side cookie clear; ignore failures (offline etc.).
+  fetch(`${API_URL}/v1/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
 }
 
 export async function login(email: string, password: string): Promise<void> {
@@ -38,39 +41,49 @@ export async function login(email: string, password: string): Promise<void> {
   const res = await fetch(`${API_URL}/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    // Required so the HttpOnly auth cookies are stored.
+    credentials: "include",
     body,
   });
   if (!res.ok) {
     throw new Error(res.status === 401 ? "Invalid email or password" : `Login failed (${res.status})`);
   }
-  saveTokens((await res.json()) as Tokens);
+  const data = (await res.json()) as { access_token?: string };
+  accessToken = typeof data.access_token === "string" ? data.access_token : null;
 }
 
 async function refresh(): Promise<boolean> {
-  if (!tokens) return false;
+  // Cookie-first refresh: the backend accepts the HttpOnly
+  // cymatic_refresh_token cookie when the body token is absent, so no
+  // refresh token is stored anywhere on this client.
   const res = await fetch(`${API_URL}/v1/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: tokens.refresh_token }),
-  });
-  if (!res.ok) {
+    credentials: "include",
+    body: JSON.stringify({}),
+  }).catch(() => null);
+  if (!res || !res.ok) {
     logout();
     return false;
   }
-  saveTokens((await res.json()) as Tokens);
+  const data = (await res.json()) as { access_token?: string };
+  if (typeof data.access_token !== "string" || !data.access_token) {
+    logout();
+    return false;
+  }
+  accessToken = data.access_token;
   return true;
 }
 
 /** Authenticated fetch against the CYMATIC API. Retries once after a token refresh on 401. */
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  if (!tokens) throw new Error("Not logged in");
-
   const doFetch = () =>
     fetch(`${API_URL}${path}`, {
       ...init,
+      credentials: "include",
       headers: {
         ...(init.headers || {}),
-        Authorization: `Bearer ${tokens!.access_token}`,
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
     });
 
@@ -79,6 +92,14 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     res = await doFetch();
   }
   return res;
+}
+
+/** Cookie-based session restore after reload (mirrors apps/web's
+ * cookie-validation on rehydrate). Uses only the HttpOnly cookie — succeeds
+ * without any stored token. */
+export async function tryRestoreSession(): Promise<boolean> {
+  if (isLoggedIn()) return true;
+  return refresh();
 }
 
 export { API_URL };

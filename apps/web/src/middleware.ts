@@ -26,7 +26,8 @@ export function middleware(request: NextRequest) {
     res.headers.set("X-Frame-Options", "DENY")
     res.headers.set("X-Content-Type-Options", "nosniff")
     res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
-    res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    // NOTE: Permissions-Policy is owned by next.config.js headers() (single
+    // source of truth) — do NOT set it here.
     return res
   }
 
@@ -41,7 +42,8 @@ export function middleware(request: NextRequest) {
   res.headers.set("X-Frame-Options", "DENY")
   res.headers.set("X-Content-Type-Options", "nosniff")
   res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
-  res.headers.set("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()")
+  // NOTE: Permissions-Policy is owned by next.config.js headers() (single
+  // source of truth) — do NOT set it here.
   return res
 }
 

@@ -16,19 +16,32 @@ const FLOOR_COLOR = 0x22252e;
 const POI_COLOR = 0xff6b6b;
 const NAV_POINT_COLOR = 0x4ea1ff;
 
-// Bounded label cache: identical labels share one canvas texture instead
-// of allocating per entity. Caps memory on label-heavy heritage scenes.
-const labelCache = new Map<string, THREE.CanvasTexture>();
+// Bounded label cache: identical labels share one canvas texture AND one
+// SpriteMaterial instead of allocating a material per sprite. Entries are
+// refcounted: eviction and teardown dispose a texture/material only once no
+// live sprite references it — never while still in use.
+interface LabelEntry {
+  texture: THREE.CanvasTexture;
+  material: THREE.SpriteMaterial;
+  refs: number;
+}
+const labelCache = new Map<string, LabelEntry>();
 const MAX_LABEL_CACHE = 64;
 
 function makeLabelSprite(text: string): THREE.Sprite {
-  let texture = labelCache.get(text);
-  if (!texture) {
+  let entry = labelCache.get(text);
+  if (!entry) {
     if (labelCache.size >= MAX_LABEL_CACHE) {
-      const oldest = labelCache.keys().next();
-      if (!oldest.done) {
-        labelCache.get(oldest.value)?.dispose();
-        labelCache.delete(oldest.value);
+      // Evict the oldest UNREFERENCED entry. If every entry is still
+      // referenced, keep them all (a bounded temporary overrun beats
+      // disposing a texture a live sprite is sampling).
+      for (const [key, candidate] of labelCache) {
+        if (candidate.refs === 0) {
+          candidate.texture.dispose();
+          candidate.material.dispose();
+          labelCache.delete(key);
+          break;
+        }
       }
     }
     const canvas = document.createElement("canvas");
@@ -42,13 +55,34 @@ function makeLabelSprite(text: string): THREE.Sprite {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-    texture = new THREE.CanvasTexture(canvas);
-    labelCache.set(text, texture);
+    const texture = new THREE.CanvasTexture(canvas);
+    entry = { texture, material: new THREE.SpriteMaterial({ map: texture, depthTest: false }), refs: 0 };
+    labelCache.set(text, entry);
   }
-  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false });
-  const sprite = new THREE.Sprite(material);
+  entry.refs += 1;
+  const sprite = new THREE.Sprite(entry.material);
+  sprite.userData.labelKey = text;
   sprite.scale.set(2, 0.5, 1);
   return sprite;
+}
+
+/** Releases label sprites under `root` (call on viewer teardown). Shared
+ * textures/materials are disposed only when their last referencing sprite
+ * is released. */
+export function releaseLabelSprites(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Sprite)) return;
+    const key = (obj.userData as { labelKey?: unknown } | undefined)?.labelKey;
+    if (typeof key !== "string") return;
+    const entry = labelCache.get(key);
+    if (!entry) return;
+    entry.refs = Math.max(0, entry.refs - 1);
+    if (entry.refs === 0) {
+      labelCache.delete(key);
+      entry.texture.dispose();
+      entry.material.dispose();
+    }
+  });
 }
 
 /** No real GLB assets exist yet (generation is JSON-only by design) - this is
