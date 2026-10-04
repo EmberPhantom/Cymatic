@@ -27,6 +27,10 @@ class PipelineInput(BaseModel):
     context: dict[str, Any] = {}
     # Any: see heritage PipelineInput — clarify yields bool/int answers.
     clarification_answers: dict[str, Any] = {}
+    # Generation-run id: isolates this run's checkpoint file
+    # (checkpoint_{project}_{run}) from concurrent reruns. None = legacy
+    # single-per-project checkpoint behavior.
+    run_id: str | None = None
     # Authoritative project domain from the generate_spec task. Intake still
     # detects its own domain for telemetry, but architect uses this when set
     # so API (project.domain) and worker (detected) can't fork question sets.
@@ -421,9 +425,14 @@ class RealEstatePipeline:
     ) -> PipelineResult:
         """Execute the full pipeline with checkpointing."""
         result = PipelineResult()
+        # Captured up front: reconcile below may swap input_data for the
+        # checkpoint's copy, and per-run files must stay on this run's id.
+        run_id = input_data.run_id
 
-        # Try to load existing checkpoint
-        checkpoint = self.checkpoint_manager.load_checkpoint(input_data.project_id)
+        # Try to load existing checkpoint (per-run file, legacy fallback)
+        checkpoint = self.checkpoint_manager.load_checkpoint(
+            input_data.project_id, run_id=run_id
+        )
         start_stage_index = 0
 
         if checkpoint:
@@ -495,6 +504,7 @@ class RealEstatePipeline:
                     self.checkpoint_manager.save_checkpoint(
                         PipelineCheckpoint(
                             project_id=input_data.project_id,
+                            run_id=run_id,
                             stage=stage,
                             stage_index=stage_index,
                             input_data=input_data.model_dump(),
@@ -515,6 +525,7 @@ class RealEstatePipeline:
                 self.checkpoint_manager.save_checkpoint(
                     PipelineCheckpoint(
                         project_id=input_data.project_id,
+                        run_id=run_id,
                         stage=stage,
                         stage_index=stage_index,
                         input_data=input_data.model_dump(),
@@ -536,7 +547,9 @@ class RealEstatePipeline:
 
             # Clear checkpoint only on successful completion (HIGH: 327 clear only success)
             if result.status == "completed":
-                self.checkpoint_manager.clear_checkpoint(input_data.project_id)
+                self.checkpoint_manager.clear_checkpoint(
+                    input_data.project_id, run_id=run_id
+                )
 
         except Exception as e:  # noqa: BLE001 - broad catch to ensure pipeline reports failure for any error (HIGH: outer except)
             logger.error(
@@ -558,6 +571,7 @@ async def generate_real_estate_spec(
     context: dict[str, Any] | None = None,
     clarification_answers: dict[str, Any] | None = None,
     expected_domain: str | None = None,
+    run_id: str | None = None,
 ) -> PipelineResult:
     """Convenience function for real estate spec generation."""
     input_data = PipelineInput(
@@ -566,5 +580,6 @@ async def generate_real_estate_spec(
         context=context or {},
         clarification_answers=clarification_answers or {},
         expected_domain=expected_domain or "real_estate",
+        run_id=run_id,
     )
     return await real_estate_pipeline.run(input_data)

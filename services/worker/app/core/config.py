@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     S3_REGION: str = "us-east-1"
 
     LLM_ROUTER_URL: str = "http://localhost:8001"
-    LLM_TIMEOUT: float = 5.0
+    # Default router timeout (s) wired as LLMRouterClient's default.
+    # Per-agent overrides take precedence: intake 120s, clarification 180s,
+    # cloud architect path uses this default, local SLM uses LOCAL_LLM_TIMEOUT.
+    LLM_TIMEOUT: float = 60.0
 
     # Offline <3B SLM for spec generation (feature-flagged, default off).
     # LAN compose with `--profile local` sets ENABLE_LOCAL_LLM=true.
@@ -49,8 +52,32 @@ class Settings(BaseSettings):
     ENABLE_LOCAL_LLM: bool = False
     LOCAL_LLM_TIMEOUT: float = 300.0
 
+    # RESERVED, currently unused — kept for env compat. worker_loop
+    # (app/main.py) is intentionally SERIAL: one job at a time, one process
+    # (uvicorn --workers is pinned to 1 in the Dockerfile). A value here
+    # does NOT create in-process parallelism and must NOT be used to fan out
+    # uvicorn processes (each would run its own competing loop over the same
+    # Redis queues). Reserved for a future semaphore-bounded multi-queue loop.
+    # Scale today by running more worker containers.
     WORKER_CONCURRENCY: int = 4
     WORKER_QUEUES: str = "generation,spec,asset,analytics"
+
+    # Checkpoint retention/guardrails (mirrors app/pipelines/checkpoint.py
+    # env reads; settings exist so the knobs are validated/discoverable).
+    # Stale checkpoints older than this are ignored and pruned on load.
+    CHECKPOINT_TTL_HOURS: float = 24.0
+    # Per-stage cap on serialized stage_outputs; oversize stages are stored
+    # as a pointer/summary instead of the full payload.
+    CHECKPOINT_MAX_STAGE_BYTES: int = 1_000_000
+
+    # Worker-side LLM-call budget (see app/core/llm_client.py +
+    # cymatic_shared.agents.llm_budget): bounded retries with exponential
+    # backoff around router calls, plus a consecutive-failure circuit
+    # breaker that pauses the loop instead of hammering a downed router.
+    LLM_BUDGET_MAX_RETRIES: int = 3
+    LLM_BUDGET_BACKOFF_BASE_S: float = 1.0
+    LLM_BUDGET_MAX_CONSECUTIVE_FAILURES: int = 5
+    LLM_BUDGET_COOLDOWN_S: float = 30.0
 
     ADMIN_API_KEY: str = ""
     RATE_LIMIT_API: str = "1000/minute"

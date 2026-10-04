@@ -41,13 +41,43 @@ def _get_settings():
     return _settings
 
 
+def _reset_settings() -> None:
+    """Clear the cached settings (test hook; next access re-resolves)."""
+    global _settings
+    _settings = None
+
+
+# Fallback when no settings object provides LLM_TIMEOUT (e.g. standalone
+# shared-package use without a service config on the path).
+_DEFAULT_LLM_TIMEOUT = 60.0
+
+
+def _default_llm_timeout() -> float:
+    """Default router timeout, sourced from settings (LLM_TIMEOUT).
+
+    Per-agent overrides take precedence over this default and are passed
+    per-request: intake ~120s, clarification ~180s, local SLM
+    LOCAL_LLM_TIMEOUT ~300s (CPU inference). The cloud architect path uses
+    this default (no per-request override).
+    """
+    try:
+        return float(getattr(_get_settings(), "LLM_TIMEOUT", _DEFAULT_LLM_TIMEOUT))
+    except (TypeError, ValueError):
+        return _DEFAULT_LLM_TIMEOUT
+
+
 class LLMRouterClient:
-    """Client for calling LLM Router from any service."""
+    """Client for calling LLM Router from any service.
+
+    `timeout` defaults to settings LLM_TIMEOUT (fallback 60.0s); pass an
+    explicit value — or the per-request `timeout` on chat_completion — for
+    slow paths (intake 120s, clarification 180s, local SLM 300s).
+    """
 
     def __init__(
         self,
         base_url: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         api_key: str | None = None,
     ):
         settings = _get_settings()
@@ -59,7 +89,8 @@ class LLMRouterClient:
         self.api_key = (
             getattr(settings, "ADMIN_API_KEY", "") or "" if api_key is None else api_key
         )
-        self.client = httpx.AsyncClient(timeout=timeout)
+        resolved_timeout = timeout if timeout is not None else _default_llm_timeout()
+        self.client = httpx.AsyncClient(timeout=resolved_timeout)
 
     async def close(self):
         await self.client.aclose()

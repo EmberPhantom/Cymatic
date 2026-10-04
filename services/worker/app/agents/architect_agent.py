@@ -7,7 +7,7 @@ from pydantic import BaseModel, ValidationError
 
 from cymatic_shared.schemas.simulation_spec import Entity, SimulationSpec
 import structlog
-from app.core.llm_client import call_llm_json
+from app.core.llm_client import call_llm_json, call_llm_json_with_budget
 
 logger = structlog.get_logger()
 
@@ -256,7 +256,10 @@ async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
     ]
 
     try:
-        result = await call_llm_json(
+        # Budget-guarded: bounded retries + consecutive-failure breaker so a
+        # downed router pauses instead of failing every dequeue cycle at full
+        # rate. Returns {} when unrecoverable -> template fallback below.
+        result = await call_llm_json_with_budget(
             messages=messages,
             task_type="spec_generation",
             sensitivity="internal",

@@ -307,6 +307,7 @@ def mock_llm_client():
       - cymatic_shared primary client and agent re-exports
       - worker app core and architect consumers
       - services.worker.* alternate import path (PYTHONPATH . ../../)
+      - the worker budget-guarded wrapper (same mock: identical contract)
     """
     mock = AsyncMock(side_effect=_async_dispatch_llm)
 
@@ -315,9 +316,13 @@ def mock_llm_client():
         "cymatic_shared.agents.intake_agent.call_llm_json",
         "cymatic_shared.agents.clarification_agent.call_llm_json",
         "app.core.llm_client.call_llm_json",
+        "app.core.llm_client.call_llm_json_with_budget",
         "app.agents.architect_agent.call_llm_json",
+        "app.agents.architect_agent.call_llm_json_with_budget",
         "services.worker.app.core.llm_client.call_llm_json",
+        "services.worker.app.core.llm_client.call_llm_json_with_budget",
         "services.worker.app.agents.architect_agent.call_llm_json",
+        "services.worker.app.agents.architect_agent.call_llm_json_with_budget",
     ]
 
     patches = []

@@ -67,6 +67,8 @@ async def generate_spec_task(payload: dict) -> dict:
 
     # Run appropriate pipeline based on domain (persist run failure on ANY error
     # so GET generation-runs never stays stuck at 35% generating_spec).
+    # run_id threads into the pipeline so checkpoints land in a per-run file
+    # (checkpoint_{project}_{run}) instead of clobbering concurrent reruns.
     try:
         if project.domain == "real_estate":
             from app.pipelines.real_estate import generate_real_estate_spec
@@ -77,6 +79,7 @@ async def generate_spec_task(payload: dict) -> dict:
                 context=context,
                 clarification_answers=clarification_answers,
                 expected_domain=project.domain,
+                run_id=run_id,
             )
         elif project.domain == "heritage":
             from app.pipelines.heritage import generate_heritage_spec
@@ -87,6 +90,7 @@ async def generate_spec_task(payload: dict) -> dict:
                 context=context,
                 clarification_answers=clarification_answers,
                 expected_domain=project.domain,
+                run_id=run_id,
             )
         else:
             raise ValueError(f"Unknown domain: {project.domain}")

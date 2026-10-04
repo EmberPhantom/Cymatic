@@ -38,6 +38,10 @@ class PipelineInput(BaseModel):
     clarification_answers: dict[str, Any] = {}
     # Authoritative project domain from the generate_spec task (see real_estate).
     expected_domain: str | None = None
+    # Generation-run id: isolates this run's checkpoint file
+    # (checkpoint_{project}_{run}) from concurrent reruns. None = legacy
+    # single-per-project checkpoint behavior.
+    run_id: str | None = None
 
 
 class PipelineResult(BaseModel):
@@ -519,9 +523,14 @@ class HeritagePipeline:
     ) -> PipelineResult:
         """Execute the full heritage pipeline with checkpointing (parity with RealEstatePipeline)."""
         result = PipelineResult()
+        # Captured up front: reconcile below may swap input_data for the
+        # checkpoint's copy, and per-run files must stay on this run's id.
+        run_id = input_data.run_id
 
-        # Try to load existing checkpoint
-        checkpoint = self.checkpoint_manager.load_checkpoint(input_data.project_id)
+        # Try to load existing checkpoint (per-run file, legacy fallback)
+        checkpoint = self.checkpoint_manager.load_checkpoint(
+            input_data.project_id, run_id=run_id
+        )
         start_stage_index = 0
 
         if checkpoint:
@@ -577,6 +586,7 @@ class HeritagePipeline:
                     self.checkpoint_manager.save_checkpoint(
                         PipelineCheckpoint(
                             project_id=input_data.project_id,
+                            run_id=run_id,
                             stage=stage,
                             stage_index=stage_index,
                             input_data=input_data.model_dump(),
@@ -593,6 +603,7 @@ class HeritagePipeline:
                 self.checkpoint_manager.save_checkpoint(
                     PipelineCheckpoint(
                         project_id=input_data.project_id,
+                        run_id=run_id,
                         stage=stage,
                         stage_index=stage_index,
                         input_data=input_data.model_dump(),
@@ -608,7 +619,9 @@ class HeritagePipeline:
                 status=result.status,
             )
             if result.status == "completed":
-                self.checkpoint_manager.clear_checkpoint(input_data.project_id)
+                self.checkpoint_manager.clear_checkpoint(
+                    input_data.project_id, run_id=run_id
+                )
 
         except Exception as e:  # noqa: BLE001 - HIGH: 185 narrow except -> Exception
             logger.error(
@@ -630,6 +643,7 @@ async def generate_heritage_spec(
     context: dict[str, Any] | None = None,
     clarification_answers: dict[str, Any] | None = None,
     expected_domain: str | None = None,
+    run_id: str | None = None,
 ) -> PipelineResult:
     """Convenience function for heritage spec generation."""
     input_data = PipelineInput(
@@ -638,5 +652,6 @@ async def generate_heritage_spec(
         context=context or {},
         clarification_answers=clarification_answers or {},
         expected_domain=expected_domain or "heritage",
+        run_id=run_id,
     )
     return await heritage_pipeline.run(input_data)

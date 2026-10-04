@@ -27,12 +27,33 @@ worker_task: asyncio.Task | None = None
 
 
 async def worker_loop():
-    """Main worker loop - processes jobs from queues."""
+    """Main worker loop - processes jobs from queues.
+
+    Intentionally SERIAL: one job at a time, one process. This process must
+    be the single owner of the loop (uvicorn --workers is pinned to 1 in the
+    Dockerfile; WORKER_CONCURRENCY in config is reserved/unused). N uvicorn
+    processes would each run this loop over the same Redis ZPOPMAX queues —
+    dequeue itself is atomic (Lua), so jobs would not be lost, but the loops
+    would compete, duplicate heartbeats/lock renewals, and multiply LLM
+    traffic. Scale by running more worker containers, not uvicorn fan-out.
+
+    Consecutive job failures trip a circuit breaker (LLM_BUDGET_* settings):
+    instead of spinning dequeue->fail at full rate against a downed router,
+    the loop sleeps out a cooldown, giving the downstream time to recover.
+    """
     global running
     running = True
     logger.info("worker_started", worker_id=worker_id)
 
+    from cymatic_shared.agents.llm_budget import CircuitBreaker
+
     queues = [q.strip() for q in settings.WORKER_QUEUES.split(",")]
+    failure_breaker = CircuitBreaker(
+        max_consecutive_failures=int(
+            getattr(settings, "LLM_BUDGET_MAX_CONSECUTIVE_FAILURES", 5)
+        ),
+        cooldown_seconds=float(getattr(settings, "LLM_BUDGET_COOLDOWN_S", 30.0)),
+    )
 
     while running:
         try:
@@ -67,6 +88,7 @@ async def worker_loop():
                             timeout=settings.WORKER_JOB_TIMEOUT_SECONDS,
                         )
                         await job_queue.complete_job(job, result)
+                        failure_breaker.record_success()
                     except asyncio.TimeoutError:
                         logger.error("job_timeout", worker_id=worker_id, job_id=job.id)
                         await job_queue.fail_job(
@@ -74,6 +96,13 @@ async def worker_loop():
                             f"Job timeout after {settings.WORKER_JOB_TIMEOUT_SECONDS}s",
                             queue_name=queue_name,
                         )
+                        if failure_breaker.record_failure():
+                            logger.warning(
+                                "worker_loop_cooling_down",
+                                consecutive_failures=failure_breaker.consecutive_failures,
+                                cooldown_s=failure_breaker.cooldown_seconds,
+                            )
+                            await asyncio.sleep(failure_breaker.cooldown_seconds)
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
@@ -85,6 +114,13 @@ async def worker_loop():
                             exc_info=True,
                         )
                         await job_queue.fail_job(job, str(e), queue_name=queue_name)
+                        if failure_breaker.record_failure():
+                            logger.warning(
+                                "worker_loop_cooling_down",
+                                consecutive_failures=failure_breaker.consecutive_failures,
+                                cooldown_s=failure_breaker.cooldown_seconds,
+                            )
+                            await asyncio.sleep(failure_breaker.cooldown_seconds)
                     finally:
                         heartbeat_task.cancel()
                         try:
