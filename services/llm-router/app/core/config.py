@@ -23,7 +23,10 @@ class Settings(BaseSettings):
     LLM_ROUTER_HOST: str = "0.0.0.0"
     LLM_ROUTER_PORT: int = 8001
 
-    # Redis DB split: 1 cache, 2 usage, 3 rate
+    # Redis DB split: 1 cache, 2 usage, 3 rate.
+    # NOTE (LAN assumption, no TLS work in MVP): default URLs are plaintext
+    # redis:// on the compose LAN. Do not expose Redis off-LAN; switch to
+    # rediss:// + REDIS_PASSWORD for any non-LAN deployment.
     REDIS_URL: str = "redis://localhost:6379/1"
     REDIS_CACHE_URL: str | None = None
     REDIS_USAGE_URL: str | None = None
@@ -48,6 +51,8 @@ class Settings(BaseSettings):
 
     # Offline <3B SLM via Ollama sidecar (feature-flagged, default off for cloud CI).
     # LAN compose with `--profile local` sets ENABLE_LOCAL_LLM=true and starts ollama.
+    # NOTE (LAN assumption, no TLS work in MVP): OLLAMA_URL is plaintext HTTP on
+    # the compose/Docker LAN. Keep it off public networks.
     ENABLE_LOCAL_LLM: bool = False
     OLLAMA_URL: str = "http://ollama:11434"
     OLLAMA_MODEL: str = "phi-3-mini-3.8b-q4"

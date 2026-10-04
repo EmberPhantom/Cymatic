@@ -9,7 +9,7 @@ from typing import Any
 import litellm
 import structlog
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import get_settings
 from app.providers.sanitize import (  # noqa: F401  (re-export for tests/callers)
@@ -32,6 +32,16 @@ litellm.drop_params = True  # Drop unsupported params
 
 # Concurrency & size caps
 _MAX_CONCURRENT_LLM = 50
+# Schema bounds (422-tested; runtime sanitizers enforce the same caps)
+_MAX_TOKENS_CAP = 32768
+_MAX_RESPONSE_FORMAT_CHARS = 10000
+_MAX_METADATA_KEYS = 50
+_MAX_METADATA_CHARS = 10000
+_MAX_EMBEDDING_BATCH = 100
+_MAX_EMBEDDING_ITEM_CHARS = 10000
+_MAX_LANGUAGE_LEN = 35
+_MAX_MODEL_LEN = 200
+_MAX_SPEAKER_LEN = 100
 # Clarification/intent are highly context-dependent (prompt-specific questions).
 # Caching them on {domain, answers} alone leaks identical questions across
 # different projects, so they bypass the cache entirely.
@@ -44,20 +54,52 @@ _MAX_TTS_CHARS = 5000
 
 
 class ChatCompletionRequest(BaseModel):
-    messages: list[dict[str, str]]
-    model: str | None = None
+    messages: list[dict[str, str]] = Field(min_length=1, max_length=_MAX_MESSAGES)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.COPILOT_CHAT
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    temperature: float = 0.7
-    max_tokens: int | None = None
-    top_p: float = 1.0
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, gt=0, le=_MAX_TOKENS_CAP)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     stream: bool = False
     response_format: dict[str, Any] | None = None
-    user_id: str | None = None
-    organization_id: str | None = None
-    project_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
+    project_id: str | None = Field(default=None, max_length=200)
     use_cache: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("response_format")
+    @classmethod
+    def validate_response_format_size(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        if v is None:
+            return v
+        import json as _json
+
+        try:
+            size = len(_json.dumps(v))
+        except Exception:
+            raise ValueError("response_format must be JSON-serializable")
+        if size > _MAX_RESPONSE_FORMAT_CHARS:
+            raise ValueError(
+                f"response_format too large: {size} > {_MAX_RESPONSE_FORMAT_CHARS}"
+            )
+        return v
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata_size(cls, v: dict[str, Any]) -> dict[str, Any]:
+        import json as _json
+
+        if len(v) > _MAX_METADATA_KEYS:
+            raise ValueError(f"metadata too many keys: {len(v)} > {_MAX_METADATA_KEYS}")
+        try:
+            size = len(_json.dumps(v, default=str))
+        except Exception:
+            raise ValueError("metadata must be JSON-serializable")
+        if size > _MAX_METADATA_CHARS:
+            raise ValueError(f"metadata too large: {size} > {_MAX_METADATA_CHARS}")
+        return v
 
 
 class ChatCompletionResponse(BaseModel):
@@ -74,12 +116,22 @@ class ChatCompletionResponse(BaseModel):
 
 
 class EmbeddingRequest(BaseModel):
-    input: list[str]
-    model: str | None = None
+    input: list[str] = Field(min_length=1, max_length=_MAX_EMBEDDING_BATCH)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.EMBEDDING
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    user_id: str | None = None
-    organization_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("input")
+    @classmethod
+    def validate_input_lengths(cls, v: list[str]) -> list[str]:
+        for item in v:
+            if len(item) > _MAX_EMBEDDING_ITEM_CHARS:
+                raise ValueError(
+                    f"Embedding item too long: {len(item)} > {_MAX_EMBEDDING_ITEM_CHARS}"
+                )
+        return v
 
 
 class EmbeddingResponse(BaseModel):
@@ -93,12 +145,12 @@ class EmbeddingResponse(BaseModel):
 
 class STTRequest(BaseModel):
     audio_data: str  # base64 encoded
-    language: str = "en"
-    model: str | None = None
+    language: str = Field(default="en", min_length=2, max_length=_MAX_LANGUAGE_LEN, pattern=r"^[A-Za-z-]{2,35}$")
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.STT
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    user_id: str | None = None
-    organization_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
 
 
 class STTResponse(BaseModel):
@@ -112,13 +164,24 @@ class STTResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    language: str = "en"
-    speaker: str = "anushka"
-    model: str | None = None
+    language: str = Field(default="en", min_length=2, max_length=_MAX_LANGUAGE_LEN, pattern=r"^[A-Za-z-]{2,35}$")
+    speaker: str = Field(default="anushka", min_length=1, max_length=_MAX_SPEAKER_LEN)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.TTS
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    user_id: str | None = None
-    organization_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("text")
+    @classmethod
+    def validate_text_len(cls, v: str) -> str:
+        # Validator (not max_length) so the 422 message keeps the legacy
+        # "too long"/"empty" wording asserted by existing tests.
+        if not v or len(v.strip()) == 0:
+            raise ValueError("TTS text empty")
+        if len(v) > _MAX_TTS_CHARS:
+            raise ValueError(f"TTS text too long: {len(v)} > {_MAX_TTS_CHARS}")
+        return v
 
 
 class TTSResponse(BaseModel):

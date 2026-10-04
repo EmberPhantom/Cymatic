@@ -214,13 +214,24 @@ return current
             )
             return int(float(result)) if result is not None else 0
         except (RedisError, OSError, asyncio.TimeoutError):
-            # Fallback pipeline
+            # Crash-safe fallback: INCR first, then EXPIRE only when TTL==-1.
+            # A crash between the two RTTs leaves a TTL-less key, but the
+            # next increment repairs it (TTL==-1 -> EXPIRE), so the key can
+            # never stay permanent.
             try:
-                pipe = self._client.pipeline(transaction=False)
-                pipe.incrby(key, increment)  # type: ignore
-                pipe.expire(key, ttl)  # type: ignore
-                res = await pipe.execute()
-                return int(res[0]) if res else 0
+                val = await self._client.incrby(key, increment)  # type: ignore
+                try:
+                    ttl_left = await self._client.ttl(key)  # type: ignore
+                except (RedisError, OSError, asyncio.TimeoutError):
+                    ttl_left = -1
+                if ttl_left == -1:
+                    try:
+                        await self._client.expire(key, ttl)  # type: ignore
+                    except (RedisError, OSError, asyncio.TimeoutError) as e:
+                        logger.warning(
+                            "quota_expire_failed", key=key, error=str(e)
+                        )
+                return int(val) if val is not None else 0
             except (RedisError, OSError, asyncio.TimeoutError) as e:
                 logger.warning("quota_incr_failed", key=key, error=str(e))
                 return 0
@@ -236,12 +247,21 @@ return current
             )
             return float(result) if result is not None else 0.0
         except (RedisError, OSError, asyncio.TimeoutError):
+            # Crash-safe fallback (see _redis_incr): repair TTL-less keys.
             try:
-                pipe = self._client.pipeline(transaction=False)
-                pipe.incrbyfloat(key, increment)  # type: ignore
-                pipe.expire(key, ttl)  # type: ignore
-                res = await pipe.execute()
-                return float(res[0]) if res else 0.0
+                val = await self._client.incrbyfloat(key, increment)  # type: ignore
+                try:
+                    ttl_left = await self._client.ttl(key)  # type: ignore
+                except (RedisError, OSError, asyncio.TimeoutError):
+                    ttl_left = -1
+                if ttl_left == -1:
+                    try:
+                        await self._client.expire(key, ttl)  # type: ignore
+                    except (RedisError, OSError, asyncio.TimeoutError) as e:
+                        logger.warning(
+                            "quota_expire_failed", key=key, error=str(e)
+                        )
+                return float(val) if val is not None else 0.0
             except (RedisError, OSError, asyncio.TimeoutError) as e:
                 logger.warning("quota_incr_float_failed", key=key, error=str(e))
                 return 0.0
@@ -662,7 +682,71 @@ return current
         if int(stats["total_requests"]) > 0:
             stats["avg_latency_ms"] = latency_sum / int(stats["total_requests"])
 
+        # Populate by_model from existing per-call records (bounded scan so
+        # the stats endpoint cannot trigger unbounded Redis load).
+        try:
+            await self._populate_by_model(days, stats)
+        except Exception as e:
+            logger.debug("usage_by_model_failed", error=str(e))
+
         return stats
+
+    async def _populate_by_model(self, days: int, stats: dict[str, Any]) -> None:
+        """Aggregate per-model counts/tokens from `usage:{date}:{id}` records.
+
+        Reads only existing per-call data (no new writes). Bounded: at most
+        200 records per day, 50 keys per SCAN round.
+        """
+        import json as _json
+
+        if self._client is None:
+            return
+        by_model: dict[str, Any] = stats.setdefault("by_model", {})
+        for i in range(days):
+            day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
+            pattern = f"usage:{day}:*"
+            scanned = 0
+            cursor: Any = 0
+            try:
+                while scanned < 200:
+                    cursor, keys = await self._client.scan(
+                        cursor=cursor, match=pattern, count=50
+                    )
+                    if keys:
+                        for k in keys:
+                            if scanned >= 200:
+                                break
+                            scanned += 1
+                            k_str = (
+                                k.decode() if isinstance(k, bytes) else str(k)
+                            )
+                            try:
+                                raw = await self._client.get(k_str)
+                            except Exception:
+                                continue
+                            if not raw:
+                                continue
+                            raw_str = (
+                                raw.decode()
+                                if isinstance(raw, bytes)
+                                else str(raw)
+                            )
+                            try:
+                                rec = _json.loads(raw_str)
+                            except Exception:
+                                continue
+                            model = str(rec.get("model", "unknown"))
+                            tokens = int(rec.get("total_tokens", 0) or 0)
+                            entry = by_model.get(model)
+                            if not isinstance(entry, dict):
+                                entry = {"count": 0, "tokens": 0}
+                                by_model[model] = entry
+                            entry["count"] = int(entry.get("count", 0)) + 1
+                            entry["tokens"] = int(entry.get("tokens", 0)) + tokens
+                    if cursor == 0 or cursor == "0":
+                        break
+            except Exception:
+                continue
 
 
 # Global usage tracker

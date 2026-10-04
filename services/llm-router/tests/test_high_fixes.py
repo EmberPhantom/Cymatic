@@ -422,8 +422,10 @@ def test_tts_size_cap():
 
     c = LiteLLMClient()
     long_text = "a" * 6000
-    req = TTSRequest(text=long_text)
     try:
+        # Phase C schema bound: over-limit text raises at construction (422);
+        # pre-Phase C it raised inside tts(). Both are ValueError-shaped.
+        req = TTSRequest(text=long_text)
         asyncio.run(c.tts(req))
         assert False
     except ValueError as e:

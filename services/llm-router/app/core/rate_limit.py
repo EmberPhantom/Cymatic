@@ -31,6 +31,24 @@ def _get_redis() -> redis.Redis | None:
     return _redis
 
 
+# Per-path default limits. Chat uses the shared RATE_LIMIT_LLM default;
+# embeddings/audio use stricter buckets. An explicit `limit` argument always
+# wins (backward compatible); otherwise the path map wins; otherwise
+# settings.RATE_LIMIT_LLM.
+_PATH_DEFAULT_LIMITS: dict[str, str] = {
+    "/v1/embeddings": "30/minute",
+    "/v1/audio/transcriptions": "20/minute",
+    "/v1/audio/speech": "20/minute",
+}
+
+
+def _default_limit_for_path(path: str, fallback: str) -> str:
+    for prefix, path_limit in _PATH_DEFAULT_LIMITS.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return path_limit
+    return fallback
+
+
 def _get_forwarded_ip(request: Request) -> str | None:
     xff = request.headers.get("x-forwarded-for") or request.headers.get(
         "X-Forwarded-For"
@@ -109,11 +127,16 @@ async def is_rate_limited_for_provider(
 
 
 async def rate_limit_dependency(request: Request, limit: str | None = None) -> None:
-    # Resolve limit: explicit or default from settings
-    effective_limit = limit or settings.RATE_LIMIT_LLM
+    # Resolve limit: explicit arg wins (backward compatible), else per-path
+    # default, else shared settings.RATE_LIMIT_LLM.
+    path = request.url.path or ""
+    if limit is not None:
+        effective_limit = limit
+    else:
+        effective_limit = _default_limit_for_path(path, settings.RATE_LIMIT_LLM)
     identifier = _resolve_identifier(request)
     # Include path to scope, but per-provider check is handled separately
-    key = f"{identifier}:{request.url.path}"
+    key = f"{identifier}:{path}"
     limited, retry_after = await is_rate_limited(key, effective_limit)
     if limited:
         raise HTTPException(
@@ -126,30 +149,48 @@ async def rate_limit_dependency(request: Request, limit: str | None = None) -> N
         "provider"
     )
     if provider_hint:
-        # Map provider to its configured rpm limit if known
+        prov = provider_hint.strip().lower()
+        # Known-provider check first (enum + live routing table).
+        from app.schemas.providers import ProviderName  # local import to avoid cycle
+        from app.routing.engine import routing_engine
+
+        known_values = [p.value for p in ProviderName]
+        is_known = prov in known_values
+        if not is_known:
+            logger.debug("rate_limit_unknown_provider_hint", hint=provider_hint)
+            return
+        # Known provider hint: fail closed (deny) when the limit cannot be
+        # evaluated; never silently skip the provider check.
         try:
-            from app.schemas.providers import (
-                ProviderName,
-            )  # local import to avoid cycle
-
-            # Try to resolve provider config for limit
-            # Fallback to generic limit if not found
-            prov = provider_hint.strip().lower()
-            # Try to find provider config via routing_engine
-            from app.routing.engine import routing_engine
-
-            cfg = (
-                routing_engine.providers.get(ProviderName(prov))
-                if prov in [p.value for p in ProviderName]
-                else None
-            )
+            cfg = None
+            try:
+                cfg = routing_engine.providers.get(ProviderName(prov))
+            except Exception as e:
+                logger.warning(
+                    "rate_limit_provider_resolve_failed", provider=prov, error=str(e)
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit unavailable for provider {prov}",
+                    headers={"Retry-After": "60"},
+                ) from e
             if cfg is not None:
                 prov_limit = f"{cfg.rate_limit_rpm}/minute"
             else:
                 prov_limit = effective_limit
-            p_limited, p_retry = await is_rate_limited_for_provider(
-                prov, identifier, prov_limit
-            )
+            try:
+                p_limited, p_retry = await is_rate_limited_for_provider(
+                    prov, identifier, prov_limit
+                )
+            except Exception as e:
+                logger.warning(
+                    "rate_limit_provider_check_failed", provider=prov, error=str(e)
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit unavailable for provider {prov}",
+                    headers={"Retry-After": "60"},
+                ) from e
             if p_limited:
                 raise HTTPException(
                     status_code=429,
@@ -158,12 +199,9 @@ async def rate_limit_dependency(request: Request, limit: str | None = None) -> N
                 )
         except HTTPException:
             raise
-        except Exception:
-            # Fail-closed already handled in is_rate_limited
-            pass
 
 
-def rate_limit(limit: str) -> Callable[[Request], Awaitable[None]]:
+def rate_limit(limit: str | None = None) -> Callable[[Request], Awaitable[None]]:
     async def _dep(request: Request) -> None:
         await rate_limit_dependency(request, limit)
 

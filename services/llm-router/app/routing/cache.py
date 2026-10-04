@@ -214,22 +214,37 @@ class LLMCache:
         self._promote_to_local(key, entry)
 
     def _promote_to_local(self, key: str, entry: CacheEntry) -> None:
-        """Add entry to local hot cache with LRU eviction and TTL respect."""
-        # Evict expired first
-        expired = [k for k, v in self._local_cache.items() if self._is_local_expired(v)]
-        for k in expired:
-            self._local_cache.pop(k, None)
+        """Add entry to local hot cache with O(1)-ish eviction + TTL-lazy expiry.
+
+        Avoids the old O(n) full scan on every write: expired entries are
+        evicted lazily on read (see get()) plus a bounded random-sample
+        probe here; capacity is enforced by popping the oldest inserted key
+        (dict insertion order), which is O(1).
+        """
+        import random
+
+        # Refresh insertion order on re-set
+        if key in self._local_cache:
+            self._local_cache.pop(key, None)
+        # Bounded opportunistic expiry probe (max 5 keys, no full scan)
         if len(self._local_cache) >= self._max_local_size:
-            # Remove least recently used (oldest created_at)
-            # Filter non-expired only
             try:
-                oldest_key = min(
-                    self._local_cache.keys(),
-                    key=lambda k: self._local_cache[k].created_at,
-                )
-                del self._local_cache[oldest_key]
-            except ValueError:
+                sample_size = min(5, len(self._local_cache))
+                for k in random.sample(
+                    list(self._local_cache.keys()), sample_size
+                ):
+                    v = self._local_cache.get(k)
+                    if v is not None and self._is_local_expired(v):
+                        self._local_cache.pop(k, None)
+            except Exception:
                 pass
+        # Bound writes by popping oldest inserted (insertion order)
+        while len(self._local_cache) >= self._max_local_size:
+            try:
+                oldest = next(iter(self._local_cache))
+            except StopIteration:
+                break
+            self._local_cache.pop(oldest, None)
 
         self._local_cache[key] = entry
 

@@ -113,10 +113,6 @@ class RoutingEngine:
                 except Exception:
                     pass
 
-    def _apply_local_llm_flag(self) -> None:
-        """Backward-compatible alias for _apply_provider_flags."""
-        self._apply_provider_flags()
-
     def _initialize_status(self) -> None:
         """Initialize provider status for all configured providers."""
         for provider_name in ProviderName:
@@ -147,8 +143,6 @@ class RoutingEngine:
         self.policies = build_default_policies(
             local_enabled=local_enabled, apinex_active=apinex_active
         )
-        # --- legacy inline table follows (now unreachable, kept for reference
-        # during review; delete after one green cycle) ---
 
     def get_policy(
         self, task_type: TaskType, sensitivity: SensitivityLevel

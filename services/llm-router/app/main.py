@@ -174,7 +174,7 @@ async def root() -> dict[str, str]:
     "/v1/chat/completions",
     dependencies=[
         Depends(verify_data_plane_key),
-        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+        Depends(rate_limit()),
     ],
 )
 async def chat_completions(request: ChatCompletionRequest) -> Any:
@@ -206,7 +206,7 @@ async def chat_completions(request: ChatCompletionRequest) -> Any:
     "/v1/embeddings",
     dependencies=[
         Depends(verify_data_plane_key),
-        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+        Depends(rate_limit()),
     ],
 )
 async def embeddings(request: EmbeddingRequest) -> Any:
@@ -228,7 +228,7 @@ async def embeddings(request: EmbeddingRequest) -> Any:
     "/v1/audio/transcriptions",
     dependencies=[
         Depends(verify_data_plane_key),
-        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+        Depends(rate_limit()),
     ],
 )
 async def transcribe(request: STTRequest) -> Any:
@@ -250,7 +250,7 @@ async def transcribe(request: STTRequest) -> Any:
     "/v1/audio/speech",
     dependencies=[
         Depends(verify_data_plane_key),
-        Depends(rate_limit(settings.RATE_LIMIT_LLM)),
+        Depends(rate_limit()),
     ],
 )
 async def speech(request: TTSRequest) -> Any:
