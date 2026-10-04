@@ -28,6 +28,22 @@ def _ensure_manual_editing():
         )
 
 
+async def _require_org_project(
+    db: AsyncSession, project_id: int, organization_id: int
+) -> Project:
+    """404 unless the project belongs to the caller's organization."""
+    result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.organization_id == organization_id,
+        )
+    )
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
 class EditOperation(BaseModel):
     operation: Literal[
         "move",
@@ -289,6 +305,7 @@ async def patch_entity(
 ):
     """Patch a single entity in the spec"""
     _ensure_manual_editing()
+    await _require_org_project(db, project_id, current_user.organization_id)
 
     # Validate patch shapes before mutating stored state (spec-first:
     # never persist untrusted DRAFT without a schema check).
@@ -357,6 +374,7 @@ async def validate_spec_edits(
 ):
     """Validate a spec after edits"""
     _ensure_manual_editing()
+    await _require_org_project(db, project_id, current_user.organization_id)
 
     result = await db.execute(
         select(SimulationSpec).where(
@@ -392,6 +410,7 @@ async def diff_specs(
 ):
     """Compare two spec versions"""
     _ensure_manual_editing()
+    await _require_org_project(db, project_id, current_user.organization_id)
 
     result = await db.execute(
         select(SimulationSpec).where(

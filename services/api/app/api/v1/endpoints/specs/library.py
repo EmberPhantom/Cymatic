@@ -28,6 +28,15 @@ async def validate_spec(
 ):
     """Validate the latest spec for the project (async job)"""
     result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.organization_id == current_user.organization_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    result = await db.execute(
         select(SimulationSpec)
         .where(SimulationSpec.project_id == project_id)
         .order_by(SimulationSpec.version.desc())

@@ -19,6 +19,7 @@ from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from app.models.user import User, UserRole
 from app.models.organization import Organization
 
@@ -163,7 +164,16 @@ async def register(
         is_active=True,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Concurrent same-email register won the race after the
+        # check-then-insert above: report conflict, not a 500.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        )
     await db.refresh(user)
 
     return user

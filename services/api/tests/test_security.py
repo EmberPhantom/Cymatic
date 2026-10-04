@@ -28,13 +28,13 @@ def test_expired_token_is_rejected():
 
 
 @pytest.mark.asyncio
-async def test_revocation_transport_error_fails_open():
-    """Redis down must not DoS all authenticated traffic."""
+async def test_revocation_transport_error_fails_closed():
+    """Redis down must deny rather than admit (stolen tokens stay dead)."""
     token = create_access_token({"sub": "1"})
     broken = AsyncMock()
     broken.exists.side_effect = RedisError("down")
     with patch("app.core.security._get_redis", return_value=broken):
-        assert await is_token_revoked(token) is False
+        assert await is_token_revoked(token) is True
 
 
 @pytest.mark.asyncio

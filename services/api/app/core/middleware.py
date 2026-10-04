@@ -35,8 +35,13 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class TenantScopingMiddleware(BaseHTTPMiddleware):
-    """Middleware to enforce tenant scoping on all requests."""
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Attach a request ID + timing headers to all non-exempt requests.
+
+    NOTE: despite the former name (TenantScopingMiddleware), this middleware
+    does NOT enforce tenant isolation — that is done per-endpoint via
+    organization_id filters (see _require_org_project and friends).
+    """
 
     EXEMPT_PATHS = {
         "/health",

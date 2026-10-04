@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from app.core.config import get_settings
 from app.core.middleware import (
-    TenantScopingMiddleware,
+    RequestIdMiddleware,
     AuditLoggingMiddleware,
     RequestContextMiddleware,
     CorrelationIdMiddleware,
@@ -63,7 +63,7 @@ app = FastAPI(
 # Add middleware (order matters - first added is outermost)
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
-app.add_middleware(TenantScopingMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(AuditLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,

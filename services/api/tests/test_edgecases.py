@@ -4,6 +4,51 @@ import pytest
 
 
 @pytest.mark.asyncio
+async def test_cross_tenant_spec_endpoints(
+    client, auth_headers, test_project, monkeypatch
+):
+    """Spec/edit paths must 404 on another org's project (no existence leak)."""
+    await client.post(
+        "/v1/auth/register",
+        json={
+            "email": "other-spec@example.com",
+            "password": "testpass12345",
+            "name": "OtherSpec",
+        },
+    )
+    login = await client.post(
+        "/v1/auth/login",
+        data={"username": "other-spec@example.com", "password": "testpass12345"},
+    )
+    other_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    pid = test_project.id
+
+    # Library validate-spec: no project check existed -> must 404 now.
+    resp = await client.post(f"/v1/projects/{pid}/validate-spec", headers=other_headers)
+    assert resp.status_code == 404
+
+    # Editing endpoints sit behind the manual-editing flag; enable it so the
+    # org check (not the flag) is what rejects the cross-org caller.
+    import app.api.v1.endpoints.editing as editing_mod
+
+    monkeypatch.setattr(editing_mod.settings, "ENABLE_MANUAL_EDITING", True)
+    resp = await client.patch(
+        f"/v1/projects/{pid}/specs/1/entities/e1",
+        json={"position": [0, 0, 0]},
+        headers=other_headers,
+    )
+    assert resp.status_code == 404
+    resp = await client.post(
+        f"/v1/projects/{pid}/specs/1/validate", headers=other_headers
+    )
+    assert resp.status_code == 404
+    resp = await client.get(
+        f"/v1/projects/{pid}/specs/1/diff/2", headers=other_headers
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_auth_refresh_and_revoke(client):
     # Register and login
     await client.post(

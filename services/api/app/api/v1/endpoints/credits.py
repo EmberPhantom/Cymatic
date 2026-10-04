@@ -7,6 +7,7 @@ from sqlalchemy import select, func
 from app.core.dependencies import require_owner, require_viewer
 from app.db.session import get_db
 from app.models.credit_ledger import CreditLedger
+from app.models.organization import Organization
 from app.models.user import User
 
 router = APIRouter()
@@ -100,6 +101,18 @@ async def adjust_credits(
     """Adjust credit balance (admin/owner only) - positive for adding, negative for deducting"""
     if adjustment.amount == 0:
         raise HTTPException(status_code=400, detail="Amount must be non-zero")
+    # Serialize adjustments per org: lock the Organization row (always
+    # present, unlike ledger rows) so concurrent debits can't both read
+    # the same balance and drive it negative (TOCTOU).
+    org = (
+        await db.execute(
+            select(Organization)
+            .where(Organization.id == current_user.organization_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
     # Compute balance before and after
     result = await db.execute(
         select(func.sum(CreditLedger.amount)).where(

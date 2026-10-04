@@ -77,8 +77,9 @@ async def revoke_token(token: str, ttl_seconds: int = REVOKE_TTL_SECONDS) -> Non
 async def is_token_revoked(token: str) -> bool:
     """Check if a token's jti has been revoked.
 
-    Fail-open ONLY on transport errors (Redis down must not DoS all auth);
-    fail-closed on unexpected errors (deny rather than admit on unknown state).
+    Fail-closed on ALL errors: an unverifiable revocation state must deny
+    rather than admit (a stolen/logged-out token must never pass during a
+    Redis blip).
     """
     jti = _extract_jti(token)
     if not jti:
@@ -88,7 +89,7 @@ async def is_token_revoked(token: str) -> bool:
         return bool(await r.exists(f"{_revoked_tokens_key}:{jti}"))
     except (RedisError, OSError, asyncio.TimeoutError) as e:
         logger.warning("redis_revocation_check_failed", error=str(e))
-        return False
+        return True
     except Exception as e:
         logger.error("revocation_check_unexpected", error=str(e))
         return True

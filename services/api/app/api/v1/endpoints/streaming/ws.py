@@ -41,7 +41,9 @@ async def websocket_signaling(
         await websocket.close(code=4002, reason="Invalid session ID")
         return
 
-    # Token handling: prefer Authorization header to avoid URL leak, fallback to query for compat
+    # Token handling: Authorization header or Sec-WebSocket-Protocol only.
+    # ?token= was removed: JWTs in URLs leak into access logs, proxies
+    # and browser history.
     auth_header = websocket.headers.get("authorization") or websocket.headers.get(
         "Authorization"
     )
@@ -55,10 +57,13 @@ async def websocket_signaling(
         ) or websocket.headers.get("Sec-WebSocket-Protocol")
         if proto and proto.lower().startswith("bearer "):
             token = proto[7:].strip()
-        else:
-            token = websocket.query_params.get("token")
-            if token:
-                logger.warning("ws_token_in_query_deprecated", session_id=session_id)
+
+    if websocket.query_params.get("token"):
+        logger.warning("ws_token_in_query_rejected", session_id=session_id)
+        await websocket.close(
+            code=4001, reason="Token in query no longer accepted; use header"
+        )
+        return
 
     if not token:
         await websocket.close(code=4001, reason="Missing token")
