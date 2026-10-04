@@ -44,13 +44,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout tested revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Create CI environment
         run: |
           cp .env.example .env
           sed -i 's/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=test-secret-key-for-compose-that-is-at-least-32-chars/' .env
           sed -i 's/^ADMIN_API_KEY=.*/ADMIN_API_KEY=test-admin-key-for-compose/' .env
+          # .env.example defaults to production-safe values; the compose test
+          # stack runs over plain HTTP, where Secure auth cookies (production
+          # mode) would never be sent — opt back into development for tests.
+          sed -i 's/^ENVIRONMENT=.*/ENVIRONMENT=development/' .env
 
       # NOTE: s3mock override replaces quay.io MinIO (anonymous pulls
       # rejected) with a Docker Hub S3 mock under the same service name.
@@ -119,7 +123,7 @@ jobs:
 
       - name: Upload integration logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compose-integration-logs
           path: compose-integration.log

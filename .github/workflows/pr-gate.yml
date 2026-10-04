@@ -47,16 +47,16 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: apps/web/node_modules
           key: ${{ runner.os }}-web-node-${{ hashFiles('apps/web/package-lock.json') }}
@@ -73,7 +73,7 @@ jobs:
       - run: npm run test -- --coverage --reporter=default --reporter=junit --outputFile=frontend-test-results.xml
       - run: npm run build
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: frontend-test-results
           path: |
@@ -171,7 +171,7 @@ jobs:
           --health-retries 10
       # S3 mock (moto) — see note on the frontend-e2e minio service below.
       minio:
-        image: motoserver/moto:latest
+        image: motoserver/moto@sha256:91fd602a21f49cf9eb82fdf474015a3c131d40104c8297ea6a2ca920708ae32c # :latest pinned 2026-10-04 (immutable; was floating :latest)
         command: -H 0.0.0.0 -p 9000
         ports: ["9000:9000"]
         options: >-
@@ -183,16 +183,16 @@ jobs:
       run:
         working-directory: ${{ matrix.working_dir }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: ${{ matrix.working_dir }}/requirements.txt
       - name: Cache Python venv
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ matrix.working_dir }}/.venv
           key: ${{ runner.os }}-${{ matrix.service }}-venv-${{ hashFiles(format('{0}/requirements.txt', matrix.working_dir)) }}
@@ -204,7 +204,7 @@ jobs:
           source .venv/bin/activate
           pip install -r requirements.txt
           pip install -e ../../packages/cymatic-shared
-          pip install diff-cover==6.5.0 ruff==0.8.4 mypy==1.11.2
+          pip install diff-cover==6.5.0 ruff==0.8.4 mypy==1.11.2 pip-audit==2.10.1
       - name: Audit Python dependencies
         continue-on-error: true
         run: .venv/bin/pip-audit -r requirements.txt || echo "::warning::pip-audit found vulnerabilities"
@@ -246,7 +246,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=70
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.service }}-test-results
           path: |
@@ -257,10 +257,10 @@ jobs:
     name: Shared Schema Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - run: |
@@ -269,7 +269,7 @@ jobs:
           python -m pip install -e packages/cymatic-shared
           python -m py_compile schemas/simulation_spec.py
           python -m pytest packages/cymatic-shared/tests/ -q
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
       - run: npx --yes -p typescript@5.7.2 tsc schemas/simulation_spec.ts --noEmit --strict
@@ -307,7 +307,7 @@ jobs:
       # quay.io rejects anonymous pulls; moto speaks the S3 operations
       # the suites exercise (put/get/presigned/stat).
       minio:
-        image: motoserver/moto:latest
+        image: motoserver/moto@sha256:91fd602a21f49cf9eb82fdf474015a3c131d40104c8297ea6a2ca920708ae32c # :latest pinned 2026-10-04 (immutable; was floating :latest)
         command: -H 0.0.0.0 -p 9000
         ports: ["9000:9000"]
         options: >-
@@ -319,16 +319,16 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: apps/web/node_modules
           key: ${{ runner.os }}-web-node-${{ hashFiles('apps/web/package-lock.json') }}
@@ -354,7 +354,7 @@ jobs:
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
         run: npm run test:e2e
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: frontend-e2e-results
           path: |
@@ -366,27 +366,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build all images via bake (shared context parity with compose)
         run: docker buildx bake -f docker-bake.hcl --load
       - name: Lint Dockerfiles
-        uses: hadolint/hadolint-action@v3.5.0
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: services/api/Dockerfile
       - name: Lint Worker Dockerfile
-        uses: hadolint/hadolint-action@v3.5.0
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: services/worker/Dockerfile
       - name: Lint LLM Router Dockerfile
-        uses: hadolint/hadolint-action@v3.5.0
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: services/llm-router/Dockerfile
       - name: Lint Frontend Dockerfile
-        uses: hadolint/hadolint-action@v3.5.0
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: apps/web/Dockerfile
       - name: Verify images
@@ -396,8 +396,8 @@ jobs:
     name: Pre-commit Hooks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       # pydantic is required by the local check-schema-sync hook (system python).
@@ -411,27 +411,27 @@ jobs:
     if: always()
     steps:
       - name: Download API test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: api-test-results
           path: test-results/api
       - name: Download Worker test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: worker-test-results
           path: test-results/worker
       - name: Download Router test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: router-test-results
           path: test-results/router
       - name: Download Frontend test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: frontend-test-results
           path: test-results/frontend
       - name: Download E2E test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: always()
         with:
           name: frontend-e2e-results
@@ -469,7 +469,7 @@ jobs:
             fi
           done
       - name: Upload unified test report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unified-test-report
           path: test-results/

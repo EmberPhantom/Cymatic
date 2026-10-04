@@ -34,11 +34,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
+        # NOTE: tag is v0.24.0 (v-prefix); bare `0.24.0` does not exist upstream.
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           scan-type: fs
           scan-ref: .
@@ -46,18 +47,18 @@ jobs:
           output: trivy-results.sarif
           ignore-unfixed: true
       - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3
         with:
           sarif_file: trivy-results.sarif
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Secret scan (TruffleHog)
-        uses: trufflesecurity/trufflehog@v3.8.0
+        uses: trufflesecurity/trufflehog@0d8a154330a89a27c961428c3b1d1400b11f427c # v3.8.0
         with:
           path: ./
           base: main
           head: HEAD
       - name: Secret scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        # Blocking: secret leaks must fail the gate (no continue-on-error).
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         with:
           args: detect --source=. --verbose --redact --config=.gitleaks.toml
-        continue-on-error: true

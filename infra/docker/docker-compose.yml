@@ -52,6 +52,7 @@ services:
       --save "60 1"
       --maxmemory 512mb
       --maxmemory-policy volatile-lru
+      --databases 32
       --requirepass ${REDIS_PASSWORD:-cymatic_redis_pass}
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-cymatic_redis_pass}
@@ -198,6 +199,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@postgres:5432/${POSTGRES_DB:-cymatic}
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/0
       REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/3
+      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/4
       REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/5
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -398,10 +400,15 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_test
+      # Test DB block 6-11 mirrors the prod purpose split (queue 0/rate 3/
+      # revoked 4/pubsub 5) offset by +6, so queue/rate/revoked/pubsub never
+      # share a DB within this service. Blocks 12-17 (test-worker) and 18-20
+      # (test-llm-router) keep the other suites isolated; redis runs with
+      # --databases 32 to cover DBs 0-20.
       REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
-      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
-      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
-      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/6
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/9
+      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/10
+      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/11
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -432,10 +439,12 @@ services:
     env_file: ../../.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-cymatic}:${POSTGRES_PASSWORD:-cymatic}@test-postgres:5432/cymatic_worker_test
-      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
-      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
-      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
-      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/7
+      # Test DB block 12-17: same prod purpose split as test-api (queue/rate/
+      # revoked/pubsub) offset by +12, isolated from the other suites.
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/12
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/15
+      REDIS_REVOKED_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/16
+      REDIS_PUBSUB_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/17
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -460,10 +469,14 @@ services:
         condition: service_healthy
     env_file: ../../.env
     environment:
-      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
-      REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
-      REDIS_USAGE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
-      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/8
+      # Test DB block 18-20 mirrors the prod llm-router split (queue+cache share
+      # DB 1, usage DB 2, rate DB 3) offset by +17, isolated from the API/worker
+      # test blocks. Requires redis --databases 32 (DBs 0-15 are insufficient
+      # for 3 suites x per-purpose DBs).
+      REDIS_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/18
+      REDIS_CACHE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/18
+      REDIS_USAGE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/19
+      REDIS_RATE_URL: redis://:${REDIS_PASSWORD:-cymatic_redis_pass}@redis:6379/20
       DEBUG: "false"
       ENABLE_LOCAL_LLM: "false"
     profiles: ["test"]

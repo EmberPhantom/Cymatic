@@ -14,7 +14,10 @@
 
 services:
   minio:
-    image: motoserver/moto:latest
+    # Pinned by digest (immutable; was floating :latest). Digest is the live
+    # registry index digest verified 2026-10-04 via
+    # `docker buildx imagetools inspect motoserver/moto:latest`; re-pin to move.
+    image: motoserver/moto@sha256:91fd602a21f49cf9eb82fdf474015a3c131d40104c8297ea6a2ca920708ae32c
     command: -H 0.0.0.0 -p 9000
     environment:
       # Unused by moto (accepts any creds); kept so `env_file` interpolation stays valid.
