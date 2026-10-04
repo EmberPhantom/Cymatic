@@ -2,6 +2,7 @@ package com.cymatic.client.render
 
 import com.cymatic.client.network.model.SceneAssetManifest
 import com.cymatic.client.network.model.SceneEntity
+import com.cymatic.client.network.model.ScenePerfBudget
 
 /**
  * Maps cymatic_v1 entities to engine-agnostic render commands.
@@ -67,7 +68,11 @@ sealed class RenderCommand {
         override val rotationRad: FloatArray,
         override val scale: FloatArray,
         val uri: String,
-        val estimatedTriangles: Int
+        val estimatedTriangles: Int,
+        /** True when the model was kept despite exceeding the perf budget
+         * (caller must cap pixel cost / note the downgrade); normally an
+         * over-budget model falls back to a primitive Box instead. */
+        val downgraded: Boolean = false
     ) : RenderCommand()
 
     data class Light(
@@ -123,32 +128,98 @@ object EntityMapper {
         return out
     }
 
-    fun mapEntity(entity: SceneEntity, manifestUris: Map<String, String>): List<RenderCommand> {
+    /** Filename portion of an asset path/hint (after the last separator). */
+    fun filenameOf(path: String): String =
+        path.substringAfterLast('/').substringAfterLast('\\')
+
+    /** True for loadable 3D model extensions (GLB preferred, glTF accepted). */
+    fun isModelUri(uri: String): Boolean {
+        val lower = uri.lowercase()
+        return lower.endsWith(".glb") || lower.endsWith(".gltf")
+    }
+
+    /**
+     * Resolve the GLB URI for an entity: exact id match first, else an exact
+     * (case-insensitive) filename match of the prefab hint against manifest
+     * URIs. Substring matching is deliberately NOT used — a hint of "chair"
+     * must not resolve "armchair.glb". Returns null when nothing matches
+     * exactly or the match is not a model file.
+     */
+    fun resolveModelUri(
+        entityId: String,
+        prefabPath: String?,
+        manifestUris: Map<String, String>
+    ): String? {
+        manifestUris[entityId]?.let { if (isModelUri(it)) return it }
+        val hint = prefabPath?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        // An exact prefab path that is itself a manifest key wins.
+        manifestUris[hint]?.let { if (isModelUri(it)) return it }
+        val want = filenameOf(hint).lowercase()
+        if (want.isEmpty()) return null
+        for (uri in manifestUris.values.toSet()) {
+            if (!isModelUri(uri)) continue
+            if (filenameOf(uri).lowercase() == want) return uri
+        }
+        return null
+    }
+
+    /**
+     * True when [estTris] blows through [budget]'s triangle limit. Null budget
+     * means "no constraint" (legacy callers). Never silently ignored: callers
+     * must fall back to a primitive or mark the Model downgraded.
+     */
+    fun budgetExceeded(estTris: Int, budget: ScenePerfBudget?): Boolean {
+        if (budget == null) return false
+        if (estTris <= 0) return false
+        return estTris > budget.maxTriangles
+    }
+
+    fun mapEntity(
+        entity: SceneEntity,
+        manifestUris: Map<String, String>,
+        performanceBudget: ScenePerfBudget? = null
+    ): List<RenderCommand> {
         val out = mutableListOf<RenderCommand>()
-        mapOne(entity, manifestUris, out)
+        mapOne(entity, manifestUris, performanceBudget, out)
         return out
     }
 
-    fun mapAll(entities: List<SceneEntity>, manifestUris: Map<String, String>): List<RenderCommand> {
+    fun mapAll(
+        entities: List<SceneEntity>,
+        manifestUris: Map<String, String>,
+        performanceBudget: ScenePerfBudget? = null
+    ): List<RenderCommand> {
         val out = mutableListOf<RenderCommand>()
-        for (e in entities) mapOne(e, manifestUris, out)
+        for (e in entities) mapOne(e, manifestUris, performanceBudget, out)
         return out
     }
 
-    private fun mapOne(entity: SceneEntity, manifestUris: Map<String, String>, out: MutableList<RenderCommand>) {
+    private fun mapOne(
+        entity: SceneEntity,
+        manifestUris: Map<String, String>,
+        performanceBudget: ScenePerfBudget?,
+        out: MutableList<RenderCommand>
+    ) {
         val pos = SceneCoords.toFilament(entity.position)
         val rot = SceneCoords.eulerToRadians(entity.rotation)
         val scl = SceneCoords.scaleOrDefault(entity.scale)
         val (color, rough) = styleColor(entity.properties)
 
-        // GLB wins when the manifest resolves this entity (id match, else prefab hint).
-        val modelUri = manifestUris[entity.id]
-            ?: entity.prefabPath?.let { hint -> manifestUris.entries.firstOrNull { it.key.contains(hint) }?.value }
+        // GLB wins for ANY entity type with an exactly-resolved manifest URI.
+        val modelUri = resolveModelUri(entity.id, entity.prefabPath, manifestUris)
         val estTris = ((entity.properties["estimated_triangles"] as? Number)?.toInt()) ?: 0
-        if (modelUri != null && (entity.type == "furniture" || entity.type == "decoration")) {
-            out.add(
-                RenderCommand.Model(entity.id, entity.name, pos, rot, scl, modelUri, estTris)
-            )
+        if (modelUri != null) {
+            if (budgetExceeded(estTris, performanceBudget)) {
+                // Explicit fallback: primitive box, never a silent blow-through.
+                out.add(
+                    RenderCommand.Box(entity.id, entity.name, pos, rot, scl,
+                        floatArrayOf(0.6f, 0.6f, 0.6f), color, rough)
+                )
+            } else {
+                out.add(
+                    RenderCommand.Model(entity.id, entity.name, pos, rot, scl, modelUri, estTris)
+                )
+            }
         } else when (entity.type) {
             "room", "wall" -> {
                 val size = doubleListProp(entity.properties, "size")
@@ -205,6 +276,6 @@ object EntityMapper {
                     floatArrayOf(0.6f, 0.6f, 0.6f), color, rough)
             )
         }
-        for (child in entity.children) mapOne(child, manifestUris, out)
+        for (child in entity.children) mapOne(child, manifestUris, performanceBudget, out)
     }
 }

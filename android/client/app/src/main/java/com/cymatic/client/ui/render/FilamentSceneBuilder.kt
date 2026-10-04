@@ -4,9 +4,12 @@ import android.view.Choreographer
 import android.view.SurfaceView
 import com.cymatic.client.render.LightingPresets
 import com.cymatic.client.render.RenderCommand
+import com.cymatic.client.render.SceneTransform
+import com.cymatic.client.render.StereoMath
 import com.google.android.filament.Colors
 import com.google.android.filament.Engine
 import com.google.android.filament.IndexBuffer
+import com.google.android.filament.IndirectLight
 import com.google.android.filament.LightManager
 import com.google.android.filament.Material
 import com.google.android.filament.RenderableManager
@@ -18,6 +21,7 @@ import com.google.android.filament.VertexBuffer
 import com.google.android.filament.View
 import com.google.android.filament.android.DisplayHelper
 import com.google.android.filament.android.UiHelper
+import java.lang.ref.WeakReference
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -58,6 +62,18 @@ class FilamentSceneBuilder private constructor(
     private var cameraLeft: com.google.android.filament.Camera? = null
     private var cameraRight: com.google.android.filament.Camera? = null
 
+    // ---- tracked GPU/runtime resources for leak-free destroy() ----
+    private val entities = mutableListOf<Int>()
+    private val vertexBuffers = mutableListOf<VertexBuffer>()
+    private val indexBuffers = mutableListOf<IndexBuffer>()
+    private val materialInstances = mutableListOf<Material.MaterialInstance>()
+    private var baseMaterial: Material? = null
+    private var skybox: Skybox? = null
+    private var indirectLight: IndirectLight? = null
+    private var sunEntity: Int? = null
+    private val cameraEntities = mutableListOf<Int>()
+    private var surfaceRef: WeakReference<SurfaceView>? = null
+
     companion object {
         private const val NEAR = 0.05
         private const val FAR = 500.0
@@ -70,7 +86,12 @@ class FilamentSceneBuilder private constructor(
          * Builds (or returns) the shared scene for [surfaceView].
          * @param materialBytes compiled ubershader (.filamat). Null only when
          * the caller already degraded to preview mode.
+         *
+         * The singleton never retains the Activity: DisplayHelper gets the
+         * application context and the SurfaceView is held only weakly.
+         * Call [releaseInstance] (or [FilamentSceneBuilder.destroy]) to drop it.
          */
+        @Synchronized
         fun build(
             surfaceView: SurfaceView,
             commands: List<RenderCommand>,
@@ -85,14 +106,22 @@ class FilamentSceneBuilder private constructor(
             val viewLeft = engine.createView()
             val viewRight = engine.createView()
             val uiHelper = UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK)
-            val displayHelper = DisplayHelper(surfaceView.context)
+            val appContext = surfaceView.context.applicationContext
+            val displayHelper = DisplayHelper(appContext)
             val builder = FilamentSceneBuilder(
                 engine, renderer, scene, viewLeft, viewRight, uiHelper, displayHelper
             )
+            builder.surfaceRef = WeakReference(surfaceView)
             builder.attach(surfaceView)
             builder.populate(commands, preset, materialBytes)
             instance = builder
             return builder
+        }
+
+        /** Drop the singleton without touching the engine (testing escape hatch). */
+        @Synchronized
+        fun releaseInstance() {
+            instance = null
         }
 
     }
@@ -110,8 +139,12 @@ class FilamentSceneBuilder private constructor(
     }
 
     private fun attach(surfaceView: SurfaceView) {
-        cameraLeft = engine.createCamera(engine.entityManager.create())
-        cameraRight = engine.createCamera(engine.entityManager.create())
+        val camLeftEntity = engine.entityManager.create()
+        val camRightEntity = engine.entityManager.create()
+        cameraLeft = engine.createCamera(camLeftEntity)
+        cameraRight = engine.createCamera(camRightEntity)
+        cameraEntities.add(camLeftEntity)
+        cameraEntities.add(camRightEntity)
         viewLeft.camera = cameraLeft
         viewRight.camera = cameraRight
         uiHelper.attachTo(surfaceView)
@@ -142,21 +175,24 @@ class FilamentSceneBuilder private constructor(
         materialBytes: ByteArray
     ) {
         // Sky tint backdrop.
-        val skybox = Skybox.Builder().color(
+        skybox = Skybox.Builder().color(
             preset.skyTint[0], preset.skyTint[1], preset.skyTint[2], 1.0f
         ).build(engine)
         scene.skybox = skybox
-        scene.indirectLight = com.google.android.filament.IndirectLight.Builder()
-            .irradiance(3, sh(preset.ambient))
+        // Unit SH ambient scaled once by intensity (see unitAmbientSH docs).
+        indirectLight = IndirectLight.Builder()
+            .irradiance(3, LightingPresets.unitAmbientSH())
             .intensity(preset.ambient)
             .build(engine)
+        scene.indirectLight = indirectLight
 
-        // Sun.
+        // Sun honors the spec sun_direction (resolved + normalized).
         val sun = engine.entityManager.create()
+        sunEntity = sun
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .color(preset.sunColor[0], preset.sunColor[1], preset.sunColor[2])
             .intensity(preset.sunIntensity * 1000f)
-            .direction(0.3f, -1.0f, -0.4f)
+            .direction(preset.sunDirection[0], preset.sunDirection[1], preset.sunDirection[2])
             .castShadows(true)
             .build(engine, sun)
         scene.addEntities(sun)
@@ -164,26 +200,32 @@ class FilamentSceneBuilder private constructor(
         val material = Material.Builder()
             .payload(ByteBuffer.wrap(materialBytes), materialBytes.size)
             .build(engine)
+        baseMaterial = material
 
         for (cmd in commands) {
             when (cmd) {
                 is RenderCommand.Model -> {
                     // gltfio path lands in P3b (needs .glb bytes + ResourceLoader);
                     // until then every model degrades to its labeled fallback box.
-                    addBox(cmd.id, cmd.position, cmd.scale, floatArrayOf(0.55f, 0.5f, 0.55f), 0.8f, material)
+                    addBox(cmd.id, cmd.position, cmd.rotationRad, cmd.scale, null,
+                        floatArrayOf(0.55f, 0.5f, 0.55f), 0.8f, material)
                 }
-                is RenderCommand.Box -> addBox(cmd.id, cmd.position, cmd.scale, cmd.colorRgb, cmd.roughness, material)
+                is RenderCommand.Box -> addBox(cmd.id, cmd.position, cmd.rotationRad,
+                    cmd.scale, cmd.size, cmd.colorRgb, cmd.roughness, material)
                 is RenderCommand.Plane -> addPlane(cmd, material)
                 is RenderCommand.Marker -> {
-                    addBox(cmd.id, cmd.position, floatArrayOf(0.35f, 0.35f, 0.35f),
+                    addBox(cmd.id, cmd.position, cmd.rotationRad, cmd.scale,
+                        floatArrayOf(0.35f, 0.35f, 0.35f),
                         floatArrayOf(1.0f, 0.75f, 0.2f), 0.3f, material)
                     // Floating text labels arrive with the label-sprite pass (P3b).
                 }
-                is RenderCommand.NavBeacon -> addBox(cmd.id, cmd.position, floatArrayOf(0.5f, 0.06f, 0.5f),
+                is RenderCommand.NavBeacon -> addBox(cmd.id, cmd.position, cmd.rotationRad,
+                    cmd.scale, floatArrayOf(0.5f, 0.06f, 0.5f),
                     floatArrayOf(0.2f, 0.8f, 1.0f), 0.5f, material)
                 is RenderCommand.Light -> {
                     if (--customLightBudget < 0) continue
                     val e = engine.entityManager.create()
+                    entities.add(e)
                     LightManager.Builder(LightManager.Type.POINT)
                         .color(cmd.colorRgb[0], cmd.colorRgb[1], cmd.colorRgb[2])
                         .intensity(cmd.intensity * 50f)
@@ -201,30 +243,27 @@ class FilamentSceneBuilder private constructor(
 
     private var customLightBudget = 4
 
-    private fun sh(ambient: Float): FloatArray {
-        // Flat ambient spherical-harmonics stub scaled by preset.
-        val v = ambient * 0.6f
-        return FloatArray(27) { i -> if (i % 9 == 0) v else 0f }
-    }
-
-    // ---- minimal unit-cube / unit-plane geometry (positions + normals) ----
-
     private fun addBox(
-        id: String, pos: FloatArray, scale: FloatArray,
-        color: FloatArray, roughness: Float, material: Material
+        id: String, pos: FloatArray, rotationRad: FloatArray, scale: FloatArray,
+        size: FloatArray?, color: FloatArray, roughness: Float, material: Material
     ) {
         // One instance per entity: baseColor/roughness are per-instance state.
         val mat = material.createInstance()
-        val half = floatArrayOf(0.5f * scale[0], 0.5f * scale.getOrElse(1) { 1f }, 0.5f * scale.getOrElse(2) { 1f })
+        materialInstances.add(mat)
+        // Effective dims = size * scale (size null -> unit cube scaled by scale).
+        val es = SceneTransform.effectiveScale(scale, size)
+        val half = floatArrayOf(0.5f * es[0], 0.5f * es[1], 0.5f * es[2])
         val v = cubeVertices(half)
-        val entity = renderable(v.first, v.second, mat)
-        setTransform(entity, pos)
+        val entity = renderable(v.first, v.second, v.third, mat, half)
+        entities.add(entity)
+        setTransform(entity, pos, rotationRad, scale, size)
         setBaseColor(entity, mat, color, roughness)
         scene.addEntities(entity)
     }
 
     private fun addPlane(cmd: RenderCommand.Plane, material: Material) {
         val mat = material.createInstance()
+        materialInstances.add(mat)
         val hw = cmd.width / 2f
         val hh = cmd.height / 2f
         val positions = floatArrayOf(
@@ -233,8 +272,11 @@ class FilamentSceneBuilder private constructor(
         val normals = floatArrayOf(0f, 1f, 0f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 1f, 0f)
         // (0,2,1),(0,3,2): CCW seen from +Y (verified by cross product).
         val indices = shortArrayOf(0, 2, 1, 0, 3, 2)
-        val entity = renderable(positions, normals, indices, mat)
-        setTransform(entity, cmd.position)
+        val entity = renderable(positions, normals, indices, mat,
+            floatArrayOf(hw, 0.01f, hh))
+        entities.add(entity)
+        // Planes honor rotation (yaw orients rugs/decks) and scale.
+        setTransform(entity, cmd.position, cmd.rotationRad, cmd.scale, null)
         setBaseColor(entity, mat, cmd.colorRgb, 0.9f)
         scene.addEntities(entity)
     }
@@ -274,7 +316,7 @@ class FilamentSceneBuilder private constructor(
 
     private fun renderable(
         positions: FloatArray, normals: FloatArray, indices: ShortArray,
-        mat: Material.MaterialInstance
+        mat: Material.MaterialInstance, halfExtents: FloatArray
     ): Int {
         // Interleaved layout: position xyz + normal xyz = 24 bytes/vertex.
         val vb = VertexBuffer.Builder()
@@ -283,6 +325,7 @@ class FilamentSceneBuilder private constructor(
             .attribute(VertexBuffer.VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 24)
             .attribute(VertexBuffer.VertexAttribute.NORMAL, 0, VertexBuffer.AttributeType.FLOAT3, 12, 24)
             .build(engine)
+        vertexBuffers.add(vb)
         // Interleave positions + normals into one buffer.
         val interleaved = ByteBuffer.allocateDirect(positions.size * 4 + normals.size * 4)
             .order(ByteOrder.nativeOrder())
@@ -296,13 +339,15 @@ class FilamentSceneBuilder private constructor(
             .indexCount(indices.size)
             .bufferType(IndexBuffer.Builder.IndexType.USHORT)
             .build(engine)
+        indexBuffers.add(ib)
         val ibBuf = ByteBuffer.allocateDirect(indices.size * 2).order(ByteOrder.nativeOrder())
         for (s in indices) ibBuf.putShort(s)
         ibBuf.flip()
         ib.setBuffer(engine, ibBuf)
         val entity = engine.entityManager.create()
         RenderableManager.Builder(1)
-            .boundingBox(com.google.android.filament.Box(0f, 0f, 0f, 1f, 1f, 1f))
+            .boundingBox(com.google.android.filament.Box(
+                0f, 0f, 0f, halfExtents[0], halfExtents[1], halfExtents[2]))
             .material(0, mat)
             .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vb, ib)
             .culling(true)
@@ -312,13 +357,13 @@ class FilamentSceneBuilder private constructor(
         return entity
     }
 
-    private fun setTransform(entity: Int, pos: FloatArray) {
+    private fun setTransform(
+        entity: Int, pos: FloatArray, rotationRad: FloatArray,
+        scale: FloatArray, size: FloatArray?
+    ) {
         val tm: TransformManager = engine.transformManager
         val instance = tm.getInstance(entity)
-        val m = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(m, 0)
-        android.opengl.Matrix.translateM(m, 0, pos[0], pos[1], pos[2])
-        tm.setTransform(instance, m)
+        tm.setTransform(instance, SceneTransform.compose(pos, rotationRad, scale, size))
     }
 
     private fun setBaseColor(
@@ -345,18 +390,12 @@ class FilamentSceneBuilder private constructor(
         camera: com.google.android.filament.Camera?, rot: FloatArray, xOffset: Float
     ) {
         camera ?: return
-        val eye = FloatArray(16)
-        android.opengl.Matrix.multiplyMM(eye, 0, rot, 0, translationMatrix(xOffset, 0f, 0f), 0)
-        // Filament camera looks down -Z; head pose from SensorFusion is +Z-forward,
-        // so rotate 180° about Y to face the scene.
-        val fix = FloatArray(16)
-        android.opengl.Matrix.setRotateM(fix, 0, 180f, 0f, 1f, 0f)
-        val model = FloatArray(16)
-        android.opengl.Matrix.multiplyMM(model, 0, fix, 0, eye, 0)
-        // Position comes from the tour/free-look rig via setEyePosition.
-        val withPos = FloatArray(16)
-        android.opengl.Matrix.multiplyMM(withPos, 0, translationMatrix(eyeX, eyeY, eyeZ), 0, model, 0)
-        camera.setModelMatrix(withPos)
+        // IPD offset is applied AFTER the 180° fix (screen space) so the left
+        // eye stays left on screen; see StereoMath for the order rationale.
+        val model = StereoMath.composeEye(
+            rot, floatArrayOf(eyeX, eyeY, eyeZ), xOffset
+        )
+        camera.setModelMatrix(model)
     }
 
     @Volatile var eyeX = 0f
@@ -368,32 +407,10 @@ class FilamentSceneBuilder private constructor(
     }
 
     private fun translationMatrix(x: Float, y: Float, z: Float): FloatArray {
-        val m = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(m, 0)
-        android.opengl.Matrix.translateM(m, 0, x, y, z)
-        return m
+        return SceneTransform.translation(x, y, z)
     }
 
-    internal fun quatToMatrix(q: FloatArray): FloatArray {
-        val m = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(m, 0)
-        if (q.size >= 4) {
-            try {
-                val w = q[3].toDouble().coerceIn(-1.0, 1.0)
-                val norm = Math.sqrt(
-                    q[0] * q[0] + q[1] * q[1] + q[2] * q[2].toDouble() + w * w
-                ).toFloat().coerceAtLeast(1e-6f)
-                android.opengl.Matrix.setRotateM(
-                    m, 0,
-                    Math.toDegrees(2 * Math.acos(w)).toFloat(),
-                    q[0] / norm, q[1] / norm, q[2] / norm
-                )
-            } catch (e: Exception) {
-                // Degenerate quaternion: keep identity.
-            }
-        }
-        return m
-    }
+    internal fun quatToMatrix(q: FloatArray): FloatArray = StereoMath.quatToMatrix(q)
 
     fun setResolutionScale(scale: Float) {
         resolutionScale = scale.coerceIn(0.4f, 1.0f)
@@ -415,23 +432,103 @@ class FilamentSceneBuilder private constructor(
         Choreographer.getInstance().postFrameCallback(frameCallback!!)
     }
 
+    /**
+     * Idempotent, null-guarded teardown: stops the frame loop, removes and
+     * destroys every tracked entity (renderables, lights, sun), GPU buffers,
+     * material instances, IBL/skybox, eye cameras, views, renderer and scene,
+     * then detaches the UI/display helpers and clears the singleton so the
+     * Activity context can be GC'd.
+     */
+    @Synchronized
     fun destroy() {
+        if (destroyed) return
         destroyed = true
-        frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
+        try {
+            frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
+        } catch (e: Exception) {
+            // Best effort during teardown.
+        }
         frameCallback = null
         try {
             swapChain?.let { engine.destroySwapChain(it) }
             swapChain = null
+        } catch (e: Exception) {
+        }
+        // Entities first: drop components, then the entities themselves.
+        try {
+            if (entities.isNotEmpty()) {
+                scene.removeEntities(entities.toIntArray())
+            }
+            sunEntity?.let { sun ->
+                try { engine.lightManager.destroy(sun) } catch (e: Exception) { }
+                try { engine.entityManager.destroy(sun) } catch (e: Exception) { }
+            }
+            for (e in entities) {
+                try { engine.renderableManager.destroy(e) } catch (ex: Exception) { }
+                try { engine.lightManager.destroy(e) } catch (ex: Exception) { }
+                try { engine.entityManager.destroy(e) } catch (ex: Exception) { }
+            }
+        } catch (e: Exception) {
+        } finally {
+            entities.clear()
+            sunEntity = null
+        }
+        try {
+            for (vb in vertexBuffers) {
+                try { engine.destroyVertexBuffer(vb) } catch (e: Exception) { }
+            }
+            for (ib in indexBuffers) {
+                try { engine.destroyIndexBuffer(ib) } catch (e: Exception) { }
+            }
+        } catch (e: Exception) {
+        } finally {
+            vertexBuffers.clear()
+            indexBuffers.clear()
+        }
+        try {
+            for (mi in materialInstances) {
+                try { engine.destroyMaterialInstance(mi) } catch (e: Exception) { }
+            }
+            baseMaterial?.let { engine.destroyMaterial(it) }
+        } catch (e: Exception) {
+        } finally {
+            materialInstances.clear()
+            baseMaterial = null
+        }
+        try {
+            indirectLight?.let { engine.destroyIndirectLight(it) }
+            skybox?.let { engine.destroySkybox(it) }
+        } catch (e: Exception) {
+        } finally {
+            indirectLight = null
+            skybox = null
+            scene.skybox = null
+            scene.indirectLight = null
+        }
+        try {
+            for (cam in cameraEntities) {
+                try { engine.destroyCameraComponent(cam) } catch (e: Exception) { }
+                try { engine.entityManager.destroy(cam) } catch (e: Exception) { }
+            }
+        } catch (e: Exception) {
+        } finally {
+            cameraEntities.clear()
+            cameraLeft = null
+            cameraRight = null
+        }
+        try {
             engine.destroyRenderer(renderer)
             engine.destroyView(viewLeft)
             engine.destroyView(viewRight)
             engine.destroyScene(scene)
-            engine.destroy()
         } catch (e: Exception) {
-            // Best effort during teardown.
-        } finally {
-            if (instance === this) instance = null
         }
+        try { uiHelper.detach() } catch (e: Exception) { }
+        try { displayHelper.detach() } catch (e: Exception) { }
+        surfaceRef?.clear()
+        surfaceRef = null
+        try { engine.destroy() } catch (e: Exception) { }
+        if (instance === this) instance = null
     }
 }
 

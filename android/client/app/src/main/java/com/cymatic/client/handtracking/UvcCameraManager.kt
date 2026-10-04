@@ -3,24 +3,15 @@ package com.cymatic.client.handtracking
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
-import android.media.Image
 import android.media.ImageReader
 import android.util.Log
-import android.util.Size
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.google.common.util.concurrent.ListenableFuture
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
-import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 
 class UvcCameraManager(
@@ -30,6 +21,7 @@ class UvcCameraManager(
 ) {
 
     private var cameraProvider: ListenableFuture<ProcessCameraProvider>? = null
+    private var boundProvider: ProcessCameraProvider? = null
     private var cameraExecutor = Executors.newSingleThreadExecutor()
     private var imageReader: ImageReader? = null
     private var isCameraActive = false
@@ -37,6 +29,7 @@ class UvcCameraManager(
 
     // Frame callback
     private val frameChannel = Channel<ImageProxy>(10)
+    private var droppedFrames = 0
     private var onFrameAvailable: ((ImageProxy) -> Unit)? = null
 
     init {
@@ -44,6 +37,10 @@ class UvcCameraManager(
     }
 
     fun startCamera(device: UsbDevice) {
+        if (isCameraActive) {
+            Log.d("UvcCamera", "already active, ignoring start")
+            return
+        }
         currentDevice = device
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
@@ -58,41 +55,58 @@ class UvcCameraManager(
     }
 
     private fun bindCamera(provider: ProcessCameraProvider) {
-        // For UVC cameras, we need to use a custom camera selector
-        // This is simplified - real implementation would enumerate UVC devices
+        // UVC devices are not exposed through CameraX's selector: real
+        // enumeration needs UsbManager permission + a UVC driver (e.g. UVCCamera)
+        // feeding frames into imageReader. Until that driver lands, there is no
+        // CameraX use case to bind — the old code left a commented-out
+        // bindToLifecycle here while reporting active. Keep this honest: record
+        // the provider for stopCamera's unbindAll and only mark active when a
+        // real source is attached (set by the future UVC driver via onSourceReady).
+        boundProvider = provider
+        Log.w("UvcCamera", "UVC driver not implemented: camera not started (optional feature)")
+    }
 
-        val preview = Preview.Builder()
-            .setTargetRotation(previewView.display.rotation)
-            .build()
-            .also { it.setSurfaceProvider(previewView.surfaceProvider) }
-
-        val imageAnalysis = ImageAnalysis.Builder()
-            .setTargetResolution(Size(640, 480))
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
-            .also {
-                it.setAnalyzer(cameraExecutor) { imageProxy ->
-                    processFrame(imageProxy)
-                }
-            }
-
-        // For UVC, we'd need a custom camera selector
-        // This is a placeholder - real implementation needs USB camera enumeration
-
-        try {
-            // provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageAnalysis)
-            isCameraActive = true
-        } catch (e: Exception) {
-            Log.e("UvcCamera", "Camera bind failed", e)
-        }
+    /**
+     * Called by the future UVC driver once it can produce frames. Separated
+     * from bindCamera so nothing reports "active" without a live source.
+     */
+    fun onSourceReady() {
+        isCameraActive = true
     }
 
     private fun processFrame(imageProxy: ImageProxy) {
-        // Send frame to hand tracking
-        frameChannel.trySend(imageProxy)
-        onFrameAvailable?.invoke(imageProxy)
-
-        // Don't close - let the analyzer handle it
+        // The analyzer contract requires EVERY ImageProxy to be closed, or the
+        // pipeline stalls after filling (the old code never closed -> leak).
+        // Single-owner rule: the synchronous listener only BORROWS the frame
+        // (copy what you need inside the callback); otherwise ownership moves
+        // to the channel receiver, which MUST close (see getFrameChannel).
+        var owned = true
+        try {
+            val listener = onFrameAvailable
+            if (listener != null) {
+                try {
+                    listener(imageProxy)
+                } catch (e: Exception) {
+                    Log.w("UvcCamera", "frame listener failed", e)
+                }
+            } else {
+                if (frameChannel.trySend(imageProxy).isSuccess) {
+                    owned = false // receiver now owns the close
+                } else {
+                    frameChannel.tryReceive().getOrNull()?.close()
+                    droppedFrames++
+                    if (frameChannel.trySend(imageProxy).isSuccess) {
+                        owned = false
+                    } else {
+                        Log.w("UvcCamera", "frame dropped, channel saturated (total=$droppedFrames)")
+                    }
+                }
+            }
+        } finally {
+            if (owned) {
+                try { imageProxy.close() } catch (e: Exception) { }
+            }
+        }
     }
 
     fun setOnFrameAvailable(listener: (ImageProxy) -> Unit) {
@@ -100,14 +114,30 @@ class UvcCameraManager(
     }
 
     fun stopCamera() {
+        if (!isCameraActive && boundProvider == null) return
         isCameraActive = false
-        cameraExecutor.shutdown()
+        currentDevice = null
+        try { boundProvider?.unbindAll() } catch (e: Exception) { }
+        boundProvider = null
+        // Drain undelivered frames (each owned proxy must still be closed).
+        var drained = 0
+        while (true) {
+            val proxy = frameChannel.tryReceive().getOrNull() ?: break
+            try { proxy.close() } catch (e: Exception) { }
+            drained++
+        }
+        if (drained > 0) Log.d("UvcCamera", "drained $drained queued frames on stop")
+        try { imageReader?.close() } catch (e: Exception) { }
+        imageReader = null
+        try { cameraExecutor.shutdownNow() } catch (e: Exception) { }
+        cameraExecutor = Executors.newSingleThreadExecutor()
     }
 
     fun setFrameListener(listener: (ImageProxy) -> Unit) {
         onFrameAvailable = listener
     }
 
+    /** Channel receivers own each frame and MUST call [ImageProxy.close]. */
     fun getFrameChannel(): Channel<ImageProxy> = frameChannel
 
     companion object {

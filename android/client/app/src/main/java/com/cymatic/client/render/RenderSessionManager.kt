@@ -8,7 +8,13 @@ import com.cymatic.client.network.ApiClient
 import com.cymatic.client.network.model.RenderSessionRequest
 import com.cymatic.client.network.model.RenderSessionResponse
 import com.cymatic.client.network.model.ScenePackageView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.coroutines.coroutineContext
 
 /**
  * Owns the native render session lifecycle: create (device registry happens
@@ -37,18 +43,31 @@ class RenderSessionManager(
         }
         session = create.body()
 
+        // Exponential backoff honoring cancellation: delay() throws on cancel,
+        // and ensureActive() aborts before wasted network calls.
         var lastError = "scene_not_ready"
-        repeat(maxSceneAttempts) {
-            val view = ApiClient.apiService.getScenePackageView(projectId)
-            if (view.isSuccessful && view.body() != null) {
-                scene = view.body()
-                return Result.success(scene!!)
+        for (attempt in 0 until maxSceneAttempts) {
+            coroutineContext.ensureActive()
+            try {
+                val view = ApiClient.apiService.getScenePackageView(projectId)
+                if (view.isSuccessful && view.body() != null) {
+                    scene = view.body()
+                    return Result.success(scene!!)
+                }
+                lastError = "scene_${view.code()}"
+                if (!RetryPolicy.shouldRetryHttp(view.code())) break
+            } catch (e: Exception) {
+                coroutineContext.ensureActive()
+                lastError = "scene_error_${e.javaClass.simpleName}"
             }
-            lastError = "scene_${view.code()}"
-            delay(5000)
+            if (!RetryPolicy.shouldRetryAttempt(attempt + 1, maxSceneAttempts)) break
+            delay(RetryPolicy.delayForAttempt(attempt))
         }
         return Result.failure(RenderException(lastError))
     }
+
+    /** Recovery state surfaced to the UI by the heartbeat loop. */
+    enum class SessionHealth { OK, RETRYING, LOST }
 
     suspend fun heartbeat(): Boolean {
         val id = session?.id ?: return false
@@ -56,6 +75,34 @@ class RenderSessionManager(
             ApiClient.apiService.renderHeartbeat(id).isSuccessful
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /**
+     * Repeating heartbeat while the session is alive. Reports OK on success,
+     * RETRYING while [RetryPolicy.HEARTBEAT_LOST_AFTER] consecutive failures
+     * accumulate, LOST after that. The job ends when the scope cancels or the
+     * session is cleared.
+     */
+    fun startHeartbeatLoop(
+        scope: CoroutineScope,
+        intervalMs: Long = 60_000,
+        onHealth: (SessionHealth) -> Unit = {}
+    ): Job = scope.launch {
+        var consecutiveFailures = 0
+        while (isActive && session != null) {
+            delay(intervalMs)
+            if (!isActive || session == null) break
+            if (heartbeat()) {
+                consecutiveFailures = 0
+                onHealth(SessionHealth.OK)
+            } else {
+                consecutiveFailures++
+                onHealth(
+                    if (consecutiveFailures >= RetryPolicy.HEARTBEAT_LOST_AFTER) SessionHealth.LOST
+                    else SessionHealth.RETRYING
+                )
+            }
         }
     }
 

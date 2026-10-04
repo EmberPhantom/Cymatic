@@ -6,6 +6,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.media.ImageReader
 import android.util.Log
+import com.cymatic.client.util.PreferencesManager
 import com.google.mediapipe.tasks.components.containers.Category
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.core.BaseOptions
@@ -56,10 +57,27 @@ class HandTrackingManager(private val context: Context) {
     )
 
     init {
-        checkUvcSupport()
-        // Hand tracking is optional - only init if UVC available and model present
-        if (isUvcSupported) {
-            initializeHandLandmarker()
+        // Hand tracking is OPTIONAL (AGENTS.md): the MediaPipe tasks-vision
+        // dependency stays, but nothing initializes unless the user enabled
+        // the feature flag AND a UVC camera is present.
+        if (!isFlagEnabled()) {
+            Log.d("HandTracking", "disabled by feature flag (optional)")
+        } else {
+            checkUvcSupport()
+            // Hand tracking is optional - only init if UVC available and model present
+            if (isUvcSupported) {
+                initializeHandLandmarker()
+            }
+        }
+    }
+
+    /** Feature-flag gate (PreferencesManager.userPreferences.handTrackingEnabled). */
+    private fun isFlagEnabled(): Boolean {
+        return try {
+            PreferencesManager(context).isHandTrackingEnabled
+        } catch (e: Exception) {
+            Log.w("HandTracking", "prefs unavailable, treating as disabled")
+            false
         }
     }
 
@@ -240,6 +258,10 @@ class HandTrackingManager(private val context: Context) {
     }
 
     fun startTracking() {
+        if (!isFlagEnabled()) {
+            Log.d("HandTracking", "start refused: disabled by feature flag (optional)")
+            return
+        }
         if (!isUvcSupported || handLandmarker == null) {
             Log.w("HandTracking", "Cannot start: UVC not supported or landmarker not initialized (optional)")
             return
@@ -267,5 +289,6 @@ class HandTrackingManager(private val context: Context) {
         stopTracking()
         try { handLandmarker?.close() } catch (_: Exception) {}
         try { imageReader?.close() } catch (_: Exception) {}
+        try { handDataChannel.close() } catch (_: Exception) {}
     }
 }

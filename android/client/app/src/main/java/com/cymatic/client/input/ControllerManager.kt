@@ -97,7 +97,11 @@ class ControllerManager(private val context: Context) {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                     }
-                    if (device == connectedController) {
+                    // Compare by address, not instance: each intent carries a
+                    // fresh BluetoothDevice parcelable, so instance equality
+                    // is unreliable for disconnect matching.
+                    val address = try { device?.address } catch (_: SecurityException) { null }
+                    if (ControllerIdentity.sameDevice(address, connectedAddress())) {
                         onControllerDisconnected()
                     }
                 }
@@ -134,10 +138,17 @@ class ControllerManager(private val context: Context) {
     }
 
     private fun isControllerDevice(device: BluetoothDevice): Boolean {
-        val name = try { device.name?.lowercase() ?: "" } catch (_: SecurityException) { "" }
-        return name.contains("controller") || name.contains("daydream") ||
-               name.contains("gear vr") || name.contains("oculus") ||
-               name.contains("vr")
+        val name = try { device.name } catch (_: SecurityException) { null }
+        val address = try { device.address } catch (_: SecurityException) { null }
+        val allowed = ControllerIdentity.isAllowedControllerName(name)
+        if (allowed) {
+            Log.i("ControllerManager", "Controller claimed: ${ControllerIdentity.claimLabel(name, address)}")
+        }
+        return allowed
+    }
+
+    private fun connectedAddress(): String? {
+        return try { connectedController?.address } catch (_: SecurityException) { null }
     }
 
     private fun onControllerConnected(device: BluetoothDevice) {

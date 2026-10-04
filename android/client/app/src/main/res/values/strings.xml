@@ -32,4 +32,7 @@
     <string name="listening">Listening…</string>
     <string name="didnt_catch_that">Didn't catch that</string>
     <string name="session_lost">Session lost — reconnect or exit</string>
+    <string name="session_reconnecting">Session unstable — retrying heartbeat…</string>
+    <string name="session_recovered">Session recovered</string>
+    <string name="thermal_stepdown">Thermal step-down: quality %1$s</string>
 </resources>

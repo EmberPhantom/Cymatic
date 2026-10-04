@@ -483,7 +483,27 @@ class VRActivity : AppCompatActivity() {
 
         webRTCManager.dispose()
         audioManager.dispose()
+        // Native input/sensor teardown: controller receiver, sensor listeners,
+        // and the WebRTC video surface must all be released here (not just on
+        // pause) or they leak across recreations.
+        try {
+            if (::controllerManager.isInitialized) controllerManager.dispose()
+        } catch (_: Exception) {}
+        try {
+            if (::sensorFusion.isInitialized) sensorFusion.stop()
+        } catch (_: Exception) {}
+        try { surfaceViewRenderer?.release() } catch (_: Exception) {}
+        surfaceViewRenderer = null
         try { eglBase?.release() } catch (_: Exception) {}
-        audioExecutor.shutdownNow()
+        // Drain the PTT executor: orderly shutdown first so an in-flight
+        // utterance finishes, then force after a short grace period.
+        audioExecutor.shutdown()
+        try {
+            if (!audioExecutor.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) {
+                audioExecutor.shutdownNow()
+            }
+        } catch (_: InterruptedException) {
+            audioExecutor.shutdownNow()
+        }
     }
 }

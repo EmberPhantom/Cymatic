@@ -6,6 +6,19 @@ import kotlin.math.PI
  * Coordinate conversion: cymatic_v1 packages are authored in Unity's
  * left-handed Y-up space; Filament/OpenGL is right-handed Y-up.
  * Port of the web viewer's toThreeVec3: negate Z on positions and directions.
+ *
+ * Rotation convention (Unity euler degrees XYZ -> Filament radians):
+ * mirroring Z maps yaw (Y) and roll (Z) to their negations while pitch (X)
+ * passes through. Yaw is the load-bearing axis for walkthroughs: a Unity
+ * yaw of +90deg must present the same facing after the Z-flip, which needs
+ * the sign flip (verified: local +X of a yawed entity lands on the mirrored
+ * world position only when ry is negated).
+ *
+ * NOTE: the web viewer (apps/viewer/src/scene.ts) negates yaw but passes
+ * roll through unconverted, while this port negates both Y and Z (matching
+ * the pre-existing Android behavior for Z). Combined-euler mirroring is an
+ * approximation on both sides (Unity applies Y*X*Z, three.js/Filament XYZ);
+ * single-axis placements — the overwhelmingly common case — are exact here.
  * Pure math — JVM unit-tested, no Android dependencies.
  */
 object SceneCoords {
@@ -19,13 +32,13 @@ object SceneCoords {
 
     fun toFilamentDirection(direction: List<Double>): FloatArray = toFilament(direction)
 
-    /** Unity euler degrees (XYZ) -> Filament radians, with Z negated. */
+    /** Unity euler degrees (XYZ) -> Filament radians, with Y and Z negated. */
     fun eulerToRadians(rotation: List<Double>): FloatArray {
         val rx = rotation.getOrElse(0) { 0.0 }
         val ry = rotation.getOrElse(1) { 0.0 }
         val rz = rotation.getOrElse(2) { 0.0 }
         val k = (PI / 180.0).toFloat()
-        return floatArrayOf(rx.toFloat() * k, ry.toFloat() * k, (-rz).toFloat() * k)
+        return floatArrayOf(rx.toFloat() * k, (-ry).toFloat() * k, (-rz).toFloat() * k)
     }
 
     fun scaleOrDefault(scale: List<Double>): FloatArray {

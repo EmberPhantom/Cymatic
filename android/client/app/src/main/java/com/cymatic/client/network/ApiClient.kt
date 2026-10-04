@@ -24,7 +24,12 @@ import okhttp3.RequestBody
 
 object ApiClient {
 
-    private var baseUrl: String = "http://10.0.2.2:8000/" // Default for emulator; overridable via configure()
+    /**
+     * Default base URL (emulator loopback). Cleartext http here is for
+     * local/emulator DEBUG traffic only — production must configure an https
+     * URL via configure(); see AuthPolicy + network_security_config.xml.
+     */
+    private var baseUrl: String = AuthPolicy.DEFAULT_BASE_URL
 
     private val gson = GsonBuilder()
         .setLenient()
@@ -33,8 +38,74 @@ object ApiClient {
     private var prefs: PreferencesManager? = null
     fun initPrefs(p: PreferencesManager) { prefs = p }
 
+    // Bare client for the refresh call itself: no auth header, no logging of
+    // bodies (the refresh response carries tokens).
+    private val refreshHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    private fun refreshAccessToken(): String? {
+        val refreshToken = prefs?.refreshToken?.takeIf { it.isNotBlank() } ?: return null
+        return try {
+            val refreshRetrofit = Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .client(refreshHttpClient)
+                .addConverterFactory(GsonConverterFactory.create(gson))
+                .build()
+            val svc = refreshRetrofit.create(ApiService::class.java)
+            // Authenticator runs on a background thread; blocking is allowed.
+            val resp = kotlinx.coroutines.runBlocking {
+                svc.refreshToken(RefreshRequest(token = refreshToken))
+            }
+            if (resp.isSuccessful && resp.body() != null) {
+                val tokens = resp.body()!!
+                prefs?.accessToken = tokens.accessToken
+                if (tokens.refreshToken.isNotBlank()) prefs?.refreshToken = tokens.refreshToken
+                tokens.accessToken
+            } else {
+                // Refresh rejected: drop tokens so the UI falls back to login.
+                if (resp.code() == 401) {
+                    prefs?.accessToken = null
+                    prefs?.refreshToken = null
+                }
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private val authAuthenticator = okhttp3.Authenticator { _, response ->
+        val priorRetries = generateSequence(response) { it.priorResponse }.count() - 1
+        val path = try { response.request.url.encodedPath } catch (e: Exception) { "" }
+        val canRetry = AuthPolicy.shouldRefreshAndRetry(
+            responseCode = response.code,
+            priorAuthRetries = priorRetries,
+            requestPath = path,
+            hasRefreshToken = !prefs?.refreshToken.isNullOrBlank()
+        )
+        if (!canRetry) return@Authenticator null
+        // Single-flight best effort: refresh, then retry once with the new token.
+        val fresh = synchronized(this) {
+            // Another thread may have refreshed already; reuse the current token.
+            val current = prefs?.accessToken
+            val sent = response.request.header(AuthPolicy.AUTHORIZATION_HEADER)
+                ?.removePrefix("Bearer ")?.trim()
+            if (!current.isNullOrBlank() && current != sent) current else refreshAccessToken()
+        } ?: return@Authenticator null
+        response.request.newBuilder()
+            .header(AuthPolicy.AUTHORIZATION_HEADER, "Bearer $fresh")
+            .build()
+    }
+
     private val okHttpClient = OkHttpClient.Builder()
-        .addInterceptor(HttpLoggingInterceptor().apply { level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE })
+        // DEBUG body logging redacts Authorization (tokens never hit logcat),
+        // but login/refresh bodies still carry secrets: DEBUG-only by design.
+        .addInterceptor(HttpLoggingInterceptor().apply {
+            level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
+            redactHeader(AuthPolicy.AUTHORIZATION_HEADER)
+        })
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -42,9 +113,12 @@ object ApiClient {
             val builder = chain.request().newBuilder()
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "application/json")
-            prefs?.accessToken?.let { token -> builder.addHeader("Authorization", "Bearer $token") }
+            AuthPolicy.bearerHeader(prefs?.accessToken)?.let { header ->
+                builder.header(AuthPolicy.AUTHORIZATION_HEADER, header)
+            }
             chain.proceed(builder.build())
         }
+        .authenticator(authAuthenticator)
         .build()
 
     private var retrofit: Retrofit = Retrofit.Builder()
@@ -76,6 +150,9 @@ interface ApiService {
 
     @POST("v1/auth/register")
     suspend fun register(@Body request: RegisterRequest): retrofit2.Response<RegisterResponse>
+
+    @POST("v1/auth/refresh")
+    suspend fun refreshToken(@Body request: RefreshRequest): retrofit2.Response<LoginResponse>
 
     // Projects
     @GET("v1/projects")

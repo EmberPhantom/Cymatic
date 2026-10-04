@@ -3,18 +3,28 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.cymatic.client">
 
-    <!-- Permissions -->
+    <!-- Permissions.
+         Static manifests cannot be gated on feature flags, so each runtime-gated
+         permission is annotated below with its owning feature; code must check
+         the flag / request at runtime before use (see notes). The corresponding
+         hardware features stay android:required="false" (optional per AGENTS.md). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Optional: hand tracking / UVC camera only. Gate: PreferencesManager.isHandTrackingEnabled. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Voice PTT only. Gate: RECORD_AUDIO runtime check in RenderVoiceHelper.startTalk. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Optional: legacy Unity streaming foreground service only. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- VR session keep-awake only (VRActivity FLAG_KEEP_SCREEN_ON). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Optional: Bluetooth VR controller only. Gate: BLUETOOTH_CONNECT runtime
+         check in ControllerManager.scanForControllers; name allowlist in ControllerIdentity. -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />

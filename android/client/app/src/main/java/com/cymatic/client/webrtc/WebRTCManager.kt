@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import org.webrtc.*
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class WebRTCManager(private val context: Context, private val eglBase: EglBase) {
 
@@ -42,8 +43,41 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     private val statsExecutor = Executors.newSingleThreadScheduledExecutor()
     private var statsJob: java.util.concurrent.ScheduledFuture<*>? = null
 
-    // Input channel — bounded to avoid backpressure on low-end
+    // Reconnect state for signaling drops.
+    private var lastSignalingUrl: String? = null
+    private var lastAuthToken: String? = null
+    private var manualDisconnect = false
+    private var reconnectAttempts = 0
+    private val maxReconnectAttempts = 3
+
+    // Input channel — bounded to avoid backpressure on low-end.
+    // Full-channel policy: drop oldest + count, logged at most every 2 s.
     private val inputChannel = Channel<InputPacket>(10)
+    private var inputDropped = 0
+    private var lastInputDropLogMs = 0L
+
+    /**
+     * Offer an input packet to the send queue. Never suspends: when the
+     * channel is full the oldest packet is dropped (controller/head-pose
+     * state is superseded by the next update anyway) and the drop is logged
+     * with a counter. Returns false when the packet was dropped in favor of
+     * draining (i.e. a drop occurred).
+     */
+    fun offerInput(input: InputPacket): Boolean {
+        val res = inputChannel.trySend(input)
+        if (res.isSuccess) return true
+        // Drain one stale packet to make room, then re-offer.
+        inputChannel.tryReceive().getOrNull()
+        val retry = inputChannel.trySend(input)
+        inputDropped++
+        val now = System.currentTimeMillis()
+        if (now - lastInputDropLogMs > 2000) {
+            Log.w("WebRTC", "inputChannel full: dropped=$inputDropped (drop-oldest policy)")
+            lastInputDropLogMs = now
+            inputDropped = 0
+        }
+        return retry.isSuccess
+    }
 
     init {
         // Initialize WebRTC — tracer disabled for perf
@@ -77,6 +111,9 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
 
     fun connect(signalingUrl: String, sessionId: String, authToken: String? = null) {
         currentSessionId = sessionId
+        lastSignalingUrl = signalingUrl
+        lastAuthToken = authToken
+        manualDisconnect = false
         lastBytesReceived = -1L
         lastBitrateCalcTimeMs = 0L
         lastBitrateKbps = 0
@@ -103,18 +140,20 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 handleIceCandidate(candidate, sdpMid, sdpMLineIndex)
             },
             onInput = { input ->
-                inputChannel.trySend(input)
+                offerInput(input)
             },
             onEndSession = {
                 disconnect()
             },
             onConnected = { sid ->
+                reconnectAttempts = 0
                 onConnected?.invoke(sid)
             },
             onDisconnected = { reason ->
                 onDisconnected?.invoke(reason)
             }
         )
+        signalingClient?.onConnectionFailure = { scheduleReconnect() }
 
         signalingClient?.connect()
     }
@@ -288,7 +327,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     }
 
     fun sendInput(input: InputPacket) {
-        inputChannel.trySend(input)
+        offerInput(input)
     }
 
     fun resume() {
@@ -302,12 +341,43 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
     }
 
     fun disconnect() {
+        manualDisconnect = true
+        reconnectAttempts = 0
         stopStatsCollection()
         signalingClient?.disconnect()
         try { peerConnection?.close() } catch (_: Exception) {}
         peerConnection = null
         currentSessionId = null
         audioTrack?.setEnabled(false)
+    }
+
+    /** Reconnect path for signaling drops (backoff, bounded attempts). */
+    private fun scheduleReconnect() {
+        if (manualDisconnect) return
+        if (reconnectAttempts >= maxReconnectAttempts) {
+            Log.w("WebRTC", "signaling reconnect budget exhausted ($maxReconnectAttempts)")
+            try { onDisconnected?.invoke("signaling failed, reconnect exhausted") } catch (_: Exception) {}
+            return
+        }
+        val url = lastSignalingUrl ?: return
+        val sid = currentSessionId ?: return
+        reconnectAttempts++
+        val delaySec = (1L shl reconnectAttempts.coerceAtMost(4)) // 2,4,8,16 s
+        Log.i("WebRTC", "scheduling signaling reconnect #$reconnectAttempts in ${delaySec}s")
+        try {
+            statsExecutor.schedule({
+                if (manualDisconnect) return@schedule
+                try {
+                    try { signalingClient?.disconnect() } catch (_: Exception) {}
+                    signalingClient = null
+                    connect(url, sid, lastAuthToken)
+                } catch (e: Exception) {
+                    Log.e("WebRTC", "reconnect attempt failed", e)
+                }
+            }, delaySec, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            Log.e("WebRTC", "failed to schedule reconnect", e)
+        }
     }
 
     fun reduceQuality() {
@@ -466,6 +536,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         var onConnected: ((String) -> Unit)? = null
         var onDisconnected: ((String) -> Unit)? = null
         var onError: ((String) -> Unit)? = errorHandler
+        var onConnectionFailure: (() -> Unit)? = null
 
         fun connect() {
             val builder = okhttp3.Request.Builder().url(url)
@@ -489,6 +560,7 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
                 override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
                     Log.e("Signaling", "WebSocket error", t)
                     onError?.invoke("WebSocket error: ${t.message}")
+                    try { onConnectionFailure?.invoke() } catch (_: Exception) {}
                 }
 
                 override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
@@ -501,37 +573,76 @@ class WebRTCManager(private val context: Context, private val eglBase: EglBase) 
         }
 
         private fun parseAndHandleMessage(text: String) {
-            try {
-                val json = com.google.gson.Gson().fromJson(text, com.google.gson.JsonObject::class.java)
-                val type = json.get("type").asString
-                val payload = json.get("payload").asJsonObject
+            val json = try {
+                com.google.gson.Gson().fromJson(text, com.google.gson.JsonObject::class.java)
+            } catch (e: Exception) {
+                Log.w("Signaling", "ignoring non-JSON frame (${text.length} chars)")
+                return
+            }
+            if (json == null || !json.isJsonObject) {
+                Log.w("Signaling", "ignoring non-object frame")
+                return
+            }
+            // Null-safe field access: malformed frames must never NPE the socket.
+            val type = json.get("type")?.takeIf { it.isJsonPrimitive }
+                ?.asJsonPrimitive?.takeIf { it.isString }?.asString
+            if (type.isNullOrBlank()) {
+                Log.w("Signaling", "ignoring frame without type")
+                return
+            }
+            val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject
 
-                when (type) {
-                    "offer" -> {
-                        val sdp = payload.get("sdp").asString
-                        onOffer?.invoke(sdp)
+            when (type) {
+                "offer" -> {
+                    val sdp = payload?.get("sdp")?.takeIf { it.isJsonPrimitive }
+                        ?.asJsonPrimitive?.takeIf { it.isString }?.asString
+                    if (sdp.isNullOrBlank()) {
+                        Log.w("Signaling", "ignoring offer without sdp")
+                        return
                     }
-                    "answer" -> {
-                        val sdp = payload.get("sdp").asString
-                        onAnswer?.invoke(sdp)
+                    onOffer?.invoke(sdp)
+                }
+                "answer" -> {
+                    val sdp = payload?.get("sdp")?.takeIf { it.isJsonPrimitive }
+                        ?.asJsonPrimitive?.takeIf { it.isString }?.asString
+                    if (sdp.isNullOrBlank()) {
+                        Log.w("Signaling", "ignoring answer without sdp")
+                        return
                     }
-                    "candidate" -> {
-                        val candidate = payload.get("candidate").asString
-                        val sdpMid = payload.get("sdp_mid").asString
-                        val sdpMLineIndex = payload.get("sdp_mline_index").asInt
-                        onCandidate?.invoke(candidate, sdpMid, sdpMLineIndex)
+                    onAnswer?.invoke(sdp)
+                }
+                "candidate" -> {
+                    val candidate = payload?.get("candidate")?.takeIf { it.isJsonPrimitive }
+                        ?.asJsonPrimitive?.takeIf { it.isString }?.asString
+                    val sdpMid = payload?.get("sdp_mid")?.takeIf { it.isJsonPrimitive }
+                        ?.asJsonPrimitive?.takeIf { it.isString }?.asString
+                    val sdpMLineIndex = payload?.get("sdp_mline_index")?.takeIf { it.isJsonPrimitive }
+                        ?.asJsonPrimitive?.takeIf { it.isNumber }?.asInt
+                    if (candidate.isNullOrBlank() || sdpMid == null || sdpMLineIndex == null) {
+                        Log.w("Signaling", "ignoring candidate with missing fields")
+                        return
                     }
-                    "input" -> {
+                    onCandidate?.invoke(candidate, sdpMid, sdpMLineIndex)
+                }
+                "input" -> {
+                    if (payload == null) {
+                        Log.w("Signaling", "ignoring input without payload")
+                        return
+                    }
+                    try {
                         val gson = com.google.gson.Gson()
                         val input = gson.fromJson(payload, com.cymatic.client.network.model.InputPacket::class.java)
-                        onInput?.invoke(input)
-                    }
-                    "end_session" -> {
-                        onEndSession?.invoke()
+                        if (input != null) onInput?.invoke(input)
+                    } catch (e: Exception) {
+                        Log.w("Signaling", "ignoring unparsable input payload: ${e.message}")
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("Signaling", "Failed to parse message: $text", e)
+                "end_session" -> {
+                    onEndSession?.invoke()
+                }
+                else -> {
+                    Log.d("Signaling", "ignoring unknown frame type: $type")
+                }
             }
         }
 

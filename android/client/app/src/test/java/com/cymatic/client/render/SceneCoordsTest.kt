@@ -18,11 +18,19 @@ class SceneCoordsTest {
     }
 
     @Test
-    fun `euler degrees become radians with negated Z`() {
+    fun `euler degrees become radians with negated Y and Z`() {
         val out = SceneCoords.eulerToRadians(listOf(0.0, 90.0, 180.0))
         assertEquals(0f, out[0], 1e-5f)
-        assertEquals(Math.PI.toFloat() / 2, out[1], 1e-5f)
+        assertEquals(-Math.PI.toFloat() / 2, out[1], 1e-5f)
         assertEquals(-Math.PI.toFloat(), out[2], 1e-5f)
+    }
+
+    @Test
+    fun `pitch passes through unnegated`() {
+        val out = SceneCoords.eulerToRadians(listOf(45.0, 0.0, 0.0))
+        assertEquals(Math.PI.toFloat() / 4, out[0], 1e-5f)
+        assertEquals(0f, out[1], 1e-5f)
+        assertEquals(0f, out[2], 1e-5f)
     }
 
     @Test

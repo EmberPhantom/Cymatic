@@ -13,6 +13,10 @@ data class LoginResponse(
     @SerializedName("token_type") val tokenType: String = "bearer"
 )
 
+data class RefreshRequest(
+    @SerializedName("token") val token: String
+)
+
 data class RegisterRequest(
     @SerializedName("email") val email: String,
     @SerializedName("password") val password: String,

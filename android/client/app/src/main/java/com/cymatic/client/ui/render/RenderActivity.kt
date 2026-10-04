@@ -3,6 +3,8 @@ package com.cymatic.client.ui.render
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -19,13 +21,15 @@ import com.cymatic.client.render.RenderCommand
 import com.cymatic.client.render.RenderQuality
 import com.cymatic.client.render.RenderSessionManager
 import com.cymatic.client.render.RenderVoiceHelper
+import com.cymatic.client.render.ThermalPolicy
 import com.cymatic.client.render.TourGuide
 import com.cymatic.client.sensor.SensorFusion
 import com.cymatic.client.util.PreferencesManager
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
@@ -62,6 +66,17 @@ class RenderActivity : AppCompatActivity() {
     private var eyePos = floatArrayOf(0f, 1.6f, 0f)
     private var lastHeadQuat = floatArrayOf(0f, 0f, 0f, 1f)
     private var lastSelectPressed = false
+    private var lastGazeMs = 0L
+
+    // Thermal step-down (mirrors VRActivity): PowerManager status -> quality.
+    private var powerManager: PowerManager? = null
+    private val thermalHandler = Handler(Looper.getMainLooper())
+    private var thermalRunnable: Runnable? = null
+    private var thermalMonitoring = false
+
+    // Session end must outlive onDestroy: lifecycleScope is cancelled in
+    // onDestroy, so ending the session there would never run.
+    private val endScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,9 +123,10 @@ class RenderActivity : AppCompatActivity() {
     private fun onSceneReady() {
         val scene = sessionManager!!.scene!!.scenePackage
         val manifestUris = EntityMapper.manifestUris(scene.assetManifest)
-        val commands = EntityMapper.mapAll(scene.entities, manifestUris)
+        val commands = EntityMapper.mapAll(scene.entities, manifestUris, scene.performanceBudget)
         val preset = LightingPresets.resolve(
-            scene.lighting.preset, scene.lighting.timeOfDay, scene.lighting.ambientIntensity
+            scene.lighting.preset, scene.lighting.timeOfDay, scene.lighting.ambientIntensity,
+            scene.lighting.sunDirection
         )
         tourLegs = TourGuide.planTour(scene.navigation.points, scene.navigation.paths)
         gazeTargets = GazeSelector.targetsFrom(commands)
@@ -131,8 +147,10 @@ class RenderActivity : AppCompatActivity() {
             binding.statusText.text = "${binding.statusText.text}\n(Preview mode: Filament unavailable)"
         }
         sensorFusion?.start()
+        powerManager = getSystemService(POWER_SERVICE) as? PowerManager
         startSensorLoop()
         startHeartbeatLoop()
+        startThermalMonitoring()
     }
 
     /**
@@ -191,10 +209,14 @@ class RenderActivity : AppCompatActivity() {
             }
         }
 
-        // Gaze dwell over POIs / nav beacons.
+        // Gaze dwell over POIs / nav beacons (measured dt, not a constant).
         if (gazeTargets.isNotEmpty()) {
+            val fwdNow = SystemClock.elapsedRealtime()
+            val dtSec = if (lastGazeMs == 0L) 0.05
+            else ((fwdNow - lastGazeMs) / 1000.0).coerceIn(0.005, 0.5)
+            lastGazeMs = fwdNow
             val forward = GazeSelector.forwardFromQuaternion(quat)
-            val update = GazeSelector.update(gazeState, gazeTargets, eyePos, forward, 0.05)
+            val update = GazeSelector.update(gazeState, gazeTargets, eyePos, forward, dtSec)
             gazeState = update.state
             update.confirmed?.let { onGazeConfirmed(it) }
         }
@@ -220,10 +242,11 @@ class RenderActivity : AppCompatActivity() {
     }
 
     private fun onControllerSelect() {
-        // Reticle-centered: confirm whatever gaze currently dwells on, else toast.
+        // Reticle-centered press: confirms ONLY a target with a separated
+        // prior dwell (confirmOnPress), never auto-confirms in one update.
         val forward = GazeSelector.forwardFromQuaternion(lastHeadQuat)
-        val update = GazeSelector.update(gazeState, gazeTargets, eyePos, forward, GazeSelector.DWELL_SECONDS)
-        update.confirmed?.let { onGazeConfirmed(it) }
+        GazeSelector.confirmOnPress(gazeState, gazeTargets, eyePos, forward)
+            ?.let { onGazeConfirmed(it) }
     }
 
     private fun onPttReleased() {
@@ -255,13 +278,58 @@ class RenderActivity : AppCompatActivity() {
 
     private fun startHeartbeatLoop() {
         heartbeatJob?.cancel()
-        heartbeatJob = lifecycleScope.launch {
-            while (isActive) {
-                delay(60_000)
-                if (sessionManager?.heartbeat() != true) {
-                    binding.statusText.text = getString(R.string.session_lost)
+        val manager = sessionManager ?: return
+        // Repeating heartbeat while the session is alive; recovery state is
+        // surfaced in the status line (OK clears it, RETRYING warns, LOST sticks).
+        heartbeatJob = manager.startHeartbeatLoop(lifecycleScope, 60_000) { health ->
+            runOnUiThread {
+                when (health) {
+                    RenderSessionManager.SessionHealth.OK -> {
+                        if (binding.statusText.text == getString(R.string.session_lost) ||
+                            binding.statusText.text == getString(R.string.session_reconnecting)
+                        ) binding.statusText.text = getString(R.string.session_recovered)
+                    }
+                    RenderSessionManager.SessionHealth.RETRYING ->
+                        binding.statusText.text = getString(R.string.session_reconnecting)
+                    RenderSessionManager.SessionHealth.LOST ->
+                        binding.statusText.text = getString(R.string.session_lost)
                 }
             }
+        }
+    }
+
+    /** Thermal step-down (mirrors VRActivity.checkThermalState). */
+    private fun startThermalMonitoring() {
+        if (thermalMonitoring) return
+        thermalMonitoring = true
+        if (thermalRunnable == null) {
+            thermalRunnable = Runnable { checkThermalState() }
+        }
+        thermalRunnable?.let {
+            thermalHandler.removeCallbacks(it)
+            thermalHandler.postDelayed(it, 5000)
+        }
+    }
+
+    private fun stopThermalMonitoring() {
+        thermalMonitoring = false
+        thermalRunnable?.let { thermalHandler.removeCallbacks(it) }
+    }
+
+    private fun checkThermalState() {
+        val pm = powerManager
+        if (pm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val status = try { pm.currentThermalStatus } catch (e: Exception) { PowerManager.THERMAL_STATUS_NONE }
+            ThermalPolicy.qualityForThermal(status)?.let { quality ->
+                if (prefs.renderQuality != quality) {
+                    prefs.renderQuality = quality
+                    sceneBuilder?.setResolutionScale(RenderQuality.resolutionScale(quality))
+                    toast(getString(R.string.thermal_stepdown, quality))
+                }
+            }
+        }
+        if (thermalMonitoring) {
+            thermalRunnable?.let { thermalHandler.postDelayed(it, 5000) }
         }
     }
 
@@ -278,14 +346,25 @@ class RenderActivity : AppCompatActivity() {
     override fun onDestroy() {
         sensorLoop?.let { sensorHandler.removeCallbacks(it) }
         sensorLoop = null
+        stopThermalMonitoring()
         sensorFusion?.stop()
         controllerManager?.dispose()
         voiceHelper?.dispose()
+        heartbeatJob?.cancel()
+        // End the session BEFORE destroying local state, in a scope that
+        // outlives onDestroy (lifecycleScope is already cancelled here, so a
+        // launch in it would never execute and the session would leak server-side).
+        val manager = sessionManager
+        sessionManager = null
+        if (manager?.session != null) {
+            endScope.launch {
+                try { manager.end() } catch (e: Exception) { }
+            }
+        }
         sceneBuilder?.destroy()
         sceneBuilder = null
-        heartbeatJob?.cancel()
-        // Best effort: the server sweeps heartbeat-silent sessions after timeout.
-        lifecycleScope.launch { sessionManager?.end() }
+        // NOTE: endScope is deliberately NOT cancelled here: it owns the single
+        // detached end() call above and dies with the activity once it finishes.
         _binding = null
         super.onDestroy()
     }
