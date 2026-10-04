@@ -27,7 +27,21 @@ async def test_health_check(client):
     response = await client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
-    assert "providers" in response.json()
+    # Public /health must not disclose per-provider/per-key detail
+    assert "providers" not in response.json()
+    assert "cloud_keys_configured" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_health_check_admin_sees_provider_detail(client):
+    response = await client.get(
+        "/health", headers={"X-Api-Key": settings.ADMIN_API_KEY}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "healthy"
+    assert "providers" in body
+    assert "cloud_keys_configured" in body
 
 
 @pytest.mark.asyncio

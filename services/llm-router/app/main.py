@@ -2,9 +2,11 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import hmac
+
 import litellm
 import structlog
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -36,7 +38,63 @@ litellm.drop_params = True
 configure_logging("llm-router", getattr(settings, "LOG_FORMAT", "json"))
 
 verify_admin_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
-verify_api_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
+
+_fallback_warned = False
+
+
+def _extract_token(
+    x_api_key: str | None, authorization: str | None
+) -> str | None:
+    if x_api_key:
+        return x_api_key.strip()
+    if authorization:
+        auth = authorization.strip()
+        return auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+    return None
+
+
+async def verify_data_plane_key(
+    request: Request,
+    x_api_key: str | None = Header(None, alias="X-Api-Key"),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> None:
+    """Data-plane auth: LLM_API_KEY, falling back to ADMIN_API_KEY.
+
+    On success marks the request authenticated (and records which key
+    plane was used) so downstream dependencies (e.g. rate limiting) can
+    prefer server-verified identity over client-controlled headers.
+    """
+    global _fallback_warned
+    data_key = settings.LLM_API_KEY or ""
+    admin_key = settings.ADMIN_API_KEY or ""
+    effective = data_key or admin_key
+    if not data_key and admin_key and not _fallback_warned:
+        logger.warning(
+            "llm_api_key_fallback",
+            detail="LLM_API_KEY unset; data-plane routes accept ADMIN_API_KEY. "
+            "Set LLM_API_KEY to separate data and admin planes.",
+        )
+        _fallback_warned = True
+    if not effective:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+    token = _extract_token(x_api_key, authorization)
+    if token is None or not hmac.compare_digest(token, effective):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    request.state.authenticated = True
+    request.state.api_key_plane = "data" if data_key else "admin-fallback"
+
+
+def _is_admin_request(request: Request) -> bool:
+    """True when the request carries a valid admin key (never raises)."""
+    admin_key = settings.ADMIN_API_KEY or ""
+    if not admin_key:
+        return False
+    token = _extract_token(
+        request.headers.get("X-Api-Key"), request.headers.get("Authorization")
+    )
+    if not token:
+        return False
+    return hmac.compare_digest(token, admin_key)
 
 
 @asynccontextmanager
@@ -65,7 +123,11 @@ app.add_middleware(
 
 
 @app.get("/health")
-async def health_check() -> dict[str, Any]:
+async def health_check(request: Request) -> dict[str, Any]:
+    # Public response carries no per-provider/per-key detail (provider
+    # enablement and cloud-key booleans are admin-only).
+    if not _is_admin_request(request):
+        return {"status": "healthy", "service": "llm-router"}
     providers = {
         name: provider.enabled for name, provider in routing_engine.providers.items()
     }
@@ -111,7 +173,7 @@ async def root() -> dict[str, str]:
 @app.post(
     "/v1/chat/completions",
     dependencies=[
-        Depends(verify_api_key),
+        Depends(verify_data_plane_key),
         Depends(rate_limit(settings.RATE_LIMIT_LLM)),
     ],
 )
@@ -143,7 +205,7 @@ async def chat_completions(request: ChatCompletionRequest) -> Any:
 @app.post(
     "/v1/embeddings",
     dependencies=[
-        Depends(verify_api_key),
+        Depends(verify_data_plane_key),
         Depends(rate_limit(settings.RATE_LIMIT_LLM)),
     ],
 )
@@ -165,7 +227,7 @@ async def embeddings(request: EmbeddingRequest) -> Any:
 @app.post(
     "/v1/audio/transcriptions",
     dependencies=[
-        Depends(verify_api_key),
+        Depends(verify_data_plane_key),
         Depends(rate_limit(settings.RATE_LIMIT_LLM)),
     ],
 )
@@ -187,7 +249,7 @@ async def transcribe(request: STTRequest) -> Any:
 @app.post(
     "/v1/audio/speech",
     dependencies=[
-        Depends(verify_api_key),
+        Depends(verify_data_plane_key),
         Depends(rate_limit(settings.RATE_LIMIT_LLM)),
     ],
 )

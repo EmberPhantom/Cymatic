@@ -131,15 +131,20 @@ def test_cache_make_key_prefix():
 @pytest.mark.asyncio
 async def test_cache_local_ttl():
     cache = LLMCache(redis_url="redis://localhost:6379/0")
-    # Use small TTL
+    # Use small TTL (tenant scope required for cache read/write)
     await cache.set(
-        "task1", "model1", "prompt1", {"data": 1}, ttl=timedelta(milliseconds=10)
+        "task1",
+        "model1",
+        "prompt1",
+        {"data": 1},
+        ttl=timedelta(milliseconds=10),
+        organization_id="org-ttl",
     )
     # Should be in local cache
     assert len(cache._local_cache) == 1
     await asyncio.sleep(0.02)
     # After expiry, get should return None and evict
-    val = await cache.get("task1", "model1", "prompt1")
+    val = await cache.get("task1", "model1", "prompt1", organization_id="org-ttl")
     assert val is None
 
 
@@ -456,10 +461,10 @@ async def test_concurrency_semaphore_exists():
 def test_verify_admin_uses_compare_digest():
     import inspect
 
-    from app.main import verify_admin_key, verify_api_key
+    from app.main import verify_admin_key, verify_data_plane_key
 
     assert "compare_digest" in inspect.getsource(verify_admin_key)
-    assert "compare_digest" in inspect.getsource(verify_api_key)
+    assert "compare_digest" in inspect.getsource(verify_data_plane_key)
 
 
 @pytest.mark.asyncio
@@ -547,12 +552,14 @@ def test_rate_limit_key_per_org_not_ip():
 
 
 def test_api_key_authorization_bearer():
-    from app.main import verify_api_key
+    from app.main import _extract_token, verify_data_plane_key
 
-    # Test that Bearer header works via inspect
+    # Test that Bearer header works via inspect (parsing lives in _extract_token)
     import inspect
 
-    src = inspect.getsource(verify_api_key)
+    src = inspect.getsource(verify_data_plane_key) + inspect.getsource(
+        _extract_token
+    )
     assert "Bearer" in src or "bearer" in src.lower()
 
 

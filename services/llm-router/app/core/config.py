@@ -58,6 +58,9 @@ class Settings(BaseSettings):
 
     # Admin API key for management endpoints
     ADMIN_API_KEY: str = ""
+    # Data-plane API key for LLM inference routes. Empty = fall back to
+    # ADMIN_API_KEY for back-compat (a warning is logged when falling back).
+    LLM_API_KEY: str = ""
 
     # Rate Limiting
     RATE_LIMIT_LLM: str = "50/minute"

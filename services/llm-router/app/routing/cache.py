@@ -107,6 +107,10 @@ class LLMCache:
         except Exception:
             return True
 
+    @staticmethod
+    def _has_tenant_scope(organization_id: str | None) -> bool:
+        return bool(organization_id and str(organization_id).strip())
+
     async def get(
         self,
         task_type: str,
@@ -118,6 +122,11 @@ class LLMCache:
         organization_id: str | None = None,
     ) -> Any | None:
         """Get cached response."""
+        # Without a non-empty organization_id the key cannot isolate tenants,
+        # so skip the cache read entirely (fail-closed against cross-tenant
+        # collisions) rather than sharing one global entry.
+        if not self._has_tenant_scope(organization_id):
+            return None
         key = self._make_key(
             task_type, model, prompt, params, sensitivity, provider, organization_id
         )
@@ -167,6 +176,10 @@ class LLMCache:
     ) -> None:
         """Cache response."""
         # Do not cache sensitive tenant data with overly broad TTL? Still isolate via key.
+        # Skip writes without tenant scope (mirrors get()): unscoped entries
+        # would be readable across tenants.
+        if not self._has_tenant_scope(organization_id):
+            return
         key = self._make_key(
             task_type, model, prompt, params, sensitivity, provider, organization_id
         )

@@ -60,6 +60,13 @@ def _resolve_identifier(request: Request) -> str:
         user = getattr(state, "user_id", None)
         if user:
             return f"user:{user}"
+        if getattr(state, "authenticated", False):
+            # Server-verified caller with no per-principal identity (e.g. a
+            # shared data-plane API key). Client-controlled headers and
+            # X-Forwarded-For are spoofable, so they must not mint a fresh
+            # bucket here — fall back to the TCP peer address instead.
+            host = request.client.host if request.client else "unknown"
+            return f"ip:{host}"
     # Check headers
     for header in ("x-organization-id", "x-org-id", "x-provider-org", "x-tenant-id"):
         val = request.headers.get(header) or request.headers.get(header.title())

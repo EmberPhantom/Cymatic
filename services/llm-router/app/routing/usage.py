@@ -399,11 +399,22 @@ return current
             "nvidia_nim": 0.0,
             "openai": 0.002 if "gpt-4o-mini" in model else 0.01,
             "sarvam": 0.001,
+            "apinex": 0.0,  # Free-tier gateway models
+            "local": 0.0,  # On-box Ollama inference
         }
         return costs.get(provider, 0.001)
 
     async def check_quota(self, provider: str, estimated_tokens: int = 1000) -> bool:
         """Check if request would exceed quota (Redis first, fallback local). Returns True if allowed."""
+        # Fail-closed for unknown providers: no quota row means no budget was
+        # ever approved, so deny rather than allowing unbounded usage.
+        try:
+            from app.schemas.providers import ProviderName as _ProviderName
+
+            _ProviderName(provider)
+        except ValueError:
+            logger.warning("quota_unknown_provider", provider=provider)
+            return False
         quota_limits = self._get_provider_limits(provider)
         now = datetime.now(timezone.utc)
         minute_bucket = now.strftime("%Y-%m-%d-%H-%M")
@@ -459,7 +470,8 @@ return current
         # Fallback local (also covers no Redis)
         quota = self._local_quotas.get(provider)
         if not quota:
-            return True
+            # Unknown provider with no quota row: deny (fail-closed).
+            return False
         # Update limits from live config
         quota = self._get_provider_limits(provider)
 

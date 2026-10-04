@@ -158,6 +158,40 @@ class LiteLLMClient:
             return self._local_semaphore
         return self._semaphore
 
+    def _resolve_audio_route(
+        self,
+        task: TaskType,
+        sensitivity: SensitivityLevel,
+        model: str | None,
+    ) -> tuple[str, ProviderName]:
+        """Resolve STT/TTS model/provider with the same policy checks as chat.
+
+        Explicit request.model values are allowlisted against registered
+        provider models and must satisfy sensitivity support, enablement,
+        and the task policy's allowed/blocked provider lists. Without an
+        explicit model, routing goes through the policy engine (which
+        denies sensitivities such as REGULATED that have no audio policy).
+        """
+        policy = routing_engine.get_policy(task, sensitivity)
+        if model:
+            found = self._find_provider_for_model(model)
+            if not found:
+                raise ValueError(f"Model {model} not found in any provider")
+            cfg = routing_engine.providers.get(found)
+            if cfg is None or sensitivity not in cfg.supported_sensitivity:
+                raise ValueError(
+                    f"Provider {found} does not support sensitivity {sensitivity}"
+                )
+            if not cfg.enabled:
+                raise ValueError(f"Provider {found} is disabled")
+            if found in policy.blocked_providers:
+                raise ValueError(f"Provider {found} blocked for {sensitivity}")
+            if policy.allowed_providers and found not in policy.allowed_providers:
+                raise ValueError(f"Provider {found} not allowed for {task}")
+            return model, found
+        decision = routing_engine.route(task, sensitivity)
+        return decision.model, decision.provider
+
     async def chat_completion(
         self, request: ChatCompletionRequest
     ) -> ChatCompletionResponse:
@@ -235,6 +269,11 @@ class LiteLLMClient:
             raise
         except Exception as e:
             logger.warning("quota_check_failed", error=str(e))
+            # Fail-closed: an unavailable quota backend must deny, not allow.
+            raise HTTPException(
+                status_code=429,
+                detail=f"Quota check unavailable for provider {provider_str}",
+            ) from e
 
         # Check cache first (isolated via sensitivity/provider/org)
         task_value = (
@@ -509,7 +548,7 @@ class LiteLLMClient:
                         else:
                             params.pop("api_base", None)
                             params.pop("api_key", None)
-                        # Re-check quota for fallback provider
+                        # Re-check quota for fallback provider (fail-closed)
                         try:
                             allowed_fb = await self.usage_tracker.check_quota(
                                 provider_str, estimated_tokens
@@ -519,8 +558,19 @@ class LiteLLMClient:
                                     "fallback_quota_exceeded", provider=provider_str
                                 )
                                 continue
-                        except Exception:
-                            pass
+                        except HTTPException:
+                            raise
+                        except Exception as e:
+                            logger.warning(
+                                "fallback_quota_check_failed",
+                                provider=provider_str,
+                                error=str(e),
+                            )
+                            raise HTTPException(
+                                status_code=429,
+                                detail="Quota check unavailable "
+                                f"for provider {provider_str}",
+                            ) from e
                         continue
 
                 if attempt == max_retries:
@@ -747,9 +797,14 @@ class LiteLLMClient:
         if len(audio_bytes) == 0:
             raise ValueError("Empty audio")
 
-        model = request.model or "saarika:v2"
-        provider_name = ProviderName.SARVAM
-        provider_str = provider_name.value
+        model, provider_name = self._resolve_audio_route(
+            TaskType.STT, request.sensitivity, request.model
+        )
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         # Quota check – STT tokens estimated as 150 per request
         est_tokens = 150
@@ -830,9 +885,14 @@ class LiteLLMClient:
             )
         request.text = _sanitize_text(request.text, max_len=_MAX_TTS_CHARS)
 
-        model = request.model or "bulbul:v1"
-        provider_name = ProviderName.SARVAM
-        provider_str = provider_name.value
+        model, provider_name = self._resolve_audio_route(
+            TaskType.TTS, request.sensitivity, request.model
+        )
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         est_tokens = max(10, len(request.text) // 4)
         allowed = await self.usage_tracker.check_quota(provider_str, est_tokens)
