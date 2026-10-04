@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.dependencies import require_creator, require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.mobile_device import MobileDevice
 from app.models.project import Project, ProjectStatus
@@ -127,6 +128,7 @@ async def _get_owned_session(
     "/sessions",
     response_model=RenderSessionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
 )
 async def create_render_session(
     session_data: RenderSessionCreate,
@@ -278,7 +280,10 @@ async def end_render_session(
     return {"session_id": session.id, "status": session.status.value}
 
 
-@router.post("/sessions/{session_id}/voice/audio")
+@router.post(
+    "/sessions/{session_id}/voice/audio",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def render_voice_audio(
     session_id: int,
     audio: UploadFile = File(...),
@@ -300,6 +305,9 @@ async def render_voice_audio(
 
     from app.models.voice_session import VoiceSession
 
+    # STT + chat + TTS first: the VoiceSession row is only created after
+    # the downstream calls succeed. Adding before left uncommitted/dead
+    # rows when chat failed (and held the DB session across network I/O).
     try:
         client = _get_http_client()
         stt_resp = await client.post(
@@ -319,9 +327,6 @@ async def render_voice_audio(
                 },
             )
 
-        voice_session = VoiceSession(session_id=session.id, transcript=transcript)
-        db.add(voice_session)
-
         chat_resp = await client.post(
             f"{settings.LLM_ROUTER_URL}/v1/chat/completions",
             json={
@@ -336,7 +341,13 @@ async def render_voice_audio(
         response_text = (
             data.get("choices", [{}])[0].get("message", {}).get("content", "")
         )
-        voice_session.response_text = response_text
+
+        voice_session = VoiceSession(
+            session_id=session.id,
+            transcript=transcript,
+            response_text=response_text,
+        )
+        db.add(voice_session)
 
         tts_audio: Any = None
         try:

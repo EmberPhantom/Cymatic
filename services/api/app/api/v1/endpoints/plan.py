@@ -12,13 +12,17 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.dependencies import require_admin, require_creator, require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.generation_run import GenerationRun
 from app.models.planning_sheet import PlanningSheet as PlanningSheetModel, SheetStatus
 from app.models.project import Project
 from app.models.user import User
 from cymatic_shared.schemas.planning_sheet import PlanningSheet, PlanSpace
+
+settings = get_settings()
 
 router = APIRouter()
 
@@ -163,7 +167,11 @@ def _sheet_to_response(sheet: PlanningSheetModel) -> SheetResponse:
     )
 
 
-@router.post("/{project_id}/plan", response_model=SheetResponse)
+@router.post(
+    "/{project_id}/plan",
+    response_model=SheetResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def build_plan(
     project_id: int,
     request: PlanBuildRequest,
@@ -245,7 +253,11 @@ async def get_latest_plan(
     return _sheet_to_response(sheet)
 
 
-@router.post("/{project_id}/plan/{sheet_id}/approve", response_model=SheetResponse)
+@router.post(
+    "/{project_id}/plan/{sheet_id}/approve",
+    response_model=SheetResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def approve_plan(
     project_id: int,
     sheet_id: int,

@@ -2,7 +2,7 @@
 
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from cymatic_shared.db import Base
 
@@ -17,6 +17,16 @@ class StreamSessionStatus(str, enum.Enum):
 
 class StreamSession(Base):
     __tablename__ = "stream_sessions"
+    __table_args__ = (
+        # Heartbeat sweep in render.py filters on (user_id, status,
+        # last_heartbeat_at): composite index avoids a full-user scan.
+        Index(
+            "ix_stream_sessions_user_status_heartbeat",
+            "user_id",
+            "status",
+            "last_heartbeat_at",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)

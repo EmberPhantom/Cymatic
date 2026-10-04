@@ -12,6 +12,7 @@ import httpx
 import structlog
 from app.core.config import get_settings
 from app.core.dependencies import require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.stream_session import StreamSession
 from app.models.user import User
@@ -27,7 +28,10 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
-@router.post("/sessions/{session_id}/agent/message")
+@router.post(
+    "/sessions/{session_id}/agent/message",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def copilot_message(
     session_id: int,
     message: CopilotMessage,
@@ -44,15 +48,11 @@ async def copilot_message(
         raise HTTPException(status_code=404, detail="Session not found")
 
     from app.models.agent_action import AgentAction
+    from datetime import datetime, timezone
 
-    agent_action = AgentAction(
-        session_id=session_id,
-        action_type="copilot_message",
-        payload_json={"message": message.message, "context": message.context},
-    )
-    db.add(agent_action)
-    await db.commit()
-
+    # LLM call FIRST: the AgentAction row is only created after the
+    # downstream chat succeeds. Committing before left dead rows on
+    # 502/503/504.
     try:
         client = _ns._get_http_client()
         resp = await client.post(
@@ -73,11 +73,6 @@ async def copilot_message(
         response_text = (
             data.get("choices", [{}])[0].get("message", {}).get("content", "")
         )
-        return {
-            "response": response_text,
-            "actions": [],
-            "provider": data.get("provider", "unknown"),
-        }
     except httpx.ConnectError:
         logger.warning(
             "copilot_llm_unavailable",
@@ -125,8 +120,26 @@ async def copilot_message(
             content={"response": "Service temporarily unavailable.", "actions": []},
         )
 
+    agent_action = AgentAction(
+        session_id=session_id,
+        action_type="copilot_message",
+        payload_json={"message": message.message, "context": message.context},
+        status="completed",
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add(agent_action)
+    await db.commit()
+    return {
+        "response": response_text,
+        "actions": [],
+        "provider": data.get("provider", "unknown"),
+    }
 
-@router.post("/sessions/{session_id}/voice/transcript")
+
+@router.post(
+    "/sessions/{session_id}/voice/transcript",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def voice_transcript(
     session_id: int,
     transcript: VoiceTranscript,
@@ -144,13 +157,9 @@ async def voice_transcript(
 
     from app.models.voice_session import VoiceSession
 
-    voice_session = VoiceSession(
-        session_id=session_id,
-        transcript=transcript.transcript,
-    )
-    db.add(voice_session)
-    await db.commit()
-
+    # LLM call FIRST: the VoiceSession row is only created after the
+    # downstream chat succeeds. Committing before left dead rows on
+    # 502/503/504.
     try:
         client = _ns._get_http_client()
         resp = await client.post(
@@ -171,9 +180,6 @@ async def voice_transcript(
         response_text = (
             data.get("choices", [{}])[0].get("message", {}).get("content", "")
         )
-        voice_session.response_text = response_text
-        await db.commit()
-        return {"response": response_text, "tts_audio_url": None}
     except httpx.ConnectError:
         logger.warning(
             "voice_llm_unavailable",
@@ -232,6 +238,15 @@ async def voice_transcript(
                 "tts_audio_url": None,
             },
         )
+
+    voice_session = VoiceSession(
+        session_id=session_id,
+        transcript=transcript.transcript,
+        response_text=response_text,
+    )
+    db.add(voice_session)
+    await db.commit()
+    return {"response": response_text, "tts_audio_url": None}
 
 
 # WebSocket signaling for WebRTC

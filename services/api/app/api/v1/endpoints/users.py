@@ -114,6 +114,12 @@ async def update_user(
     ):
         raise HTTPException(status_code=400, detail="Cannot change own role")
 
+    # Prevent self-deactivation (mirrors the self-demotion guard above):
+    # deactivating your own admin account would lock the org out and
+    # could strand the last owner/admin with no way back.
+    if user.id == current_user.id and user_update.is_active is False:
+        raise HTTPException(status_code=400, detail="Cannot deactivate own account")
+
     # Only owner can promote to owner/admin
     if user_update.role:
         try:

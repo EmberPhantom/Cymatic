@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.dependencies import require_creator, require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.project import Project, ProjectStatus
 from app.models.simulation_spec import SimulationSpec, SpecStatus
@@ -94,7 +95,11 @@ class EntityPatch(BaseModel):
         return cls._check_finite(v, info.field_name)
 
 
-@router.post("/{project_id}/specs/{spec_id}/edit", response_model=EditResponse)
+@router.post(
+    "/{project_id}/specs/{spec_id}/edit",
+    response_model=EditResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def edit_spec(
     project_id: int,
     spec_id: int,
@@ -293,7 +298,9 @@ async def edit_spec(
 
 
 @router.patch(
-    "/{project_id}/specs/{spec_id}/entities/{entity_id}", response_model=Dict[str, Any]
+    "/{project_id}/specs/{spec_id}/entities/{entity_id}",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
 )
 async def patch_entity(
     project_id: int,
@@ -365,7 +372,11 @@ async def patch_entity(
     return {"success": True, "entity": entity}
 
 
-@router.post("/{project_id}/specs/{spec_id}/validate", response_model=Dict[str, Any])
+@router.post(
+    "/{project_id}/specs/{spec_id}/validate",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def validate_spec_edits(
     project_id: int,
     spec_id: int,

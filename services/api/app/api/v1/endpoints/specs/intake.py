@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import flag_modified
+from app.core.config import get_settings
 from app.core.dependencies import require_creator
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.project import Project
 from app.models.user import User
@@ -26,10 +28,16 @@ from .schemas import (
 # (app.api.v1.endpoints.specs.process_*) so tests can monkeypatch them.
 from app.api.v1.endpoints import specs as _specs_ns
 
+settings = get_settings()
+
 router = APIRouter()
 
 
-@router.post("/{project_id}/intake", response_model=Dict[str, Any])
+@router.post(
+    "/{project_id}/intake",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def intake_prompt(
     project_id: int,
     request: SpecGenerateRequest,
@@ -138,7 +146,11 @@ async def intake_prompt(
     }
 
 
-@router.post("/{project_id}/clarify", response_model=Dict[str, Any])
+@router.post(
+    "/{project_id}/clarify",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def clarify_requirements(
     project_id: int,
     request: SpecClarifyRequest,
@@ -263,7 +275,11 @@ async def clarify_requirements(
     }
 
 
-@router.post("/{project_id}/clarify-with-state", response_model=Dict[str, Any])
+@router.post(
+    "/{project_id}/clarify-with-state",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def clarify_with_state(
     project_id: int,
     request: ClarifyWithStateRequest,

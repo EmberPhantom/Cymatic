@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 from app.core.dependencies import require_creator, require_admin, require_viewer
+from app.core.config import get_settings
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.asset import Asset, AssetType, AssetStatus
 from app.models.project import Project
@@ -21,6 +23,8 @@ from app.services.minio_client import (
 )
 
 router = APIRouter()
+
+settings = get_settings()
 
 _SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
 
@@ -89,7 +93,11 @@ class AssetUploadComplete(BaseModel):
     size: Optional[int] = Field(default=None, ge=0, le=500 * 1024 * 1024)
 
 
-@router.post("/upload/init", response_model=AssetUploadInitResponse)
+@router.post(
+    "/upload/init",
+    response_model=AssetUploadInitResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def init_upload(
     upload_data: AssetUploadInit,
     current_user: User = Depends(require_creator),

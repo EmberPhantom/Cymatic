@@ -13,6 +13,7 @@ import httpx
 import structlog
 from app.core.config import get_settings
 from app.core.dependencies import require_creator, require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.stream_session import StreamSession, StreamSessionStatus
 from app.models.project import Project, ProjectStatus
@@ -42,6 +43,7 @@ router = APIRouter()
     "/sessions",
     response_model=StreamSessionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
 )
 async def create_stream_session(
     session_data: StreamSessionCreate,
@@ -149,7 +151,10 @@ async def get_stream_session(
     return await _build_session_response(session, db)
 
 
-@router.post("/sessions/{session_id}/offer")
+@router.post(
+    "/sessions/{session_id}/offer",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def handle_offer(
     session_id: int,
     offer: WebRTCOffer,
@@ -206,7 +211,10 @@ async def handle_offer(
         raise HTTPException(status_code=500, detail="Failed to forward offer")
 
 
-@router.post("/sessions/{session_id}/answer")
+@router.post(
+    "/sessions/{session_id}/answer",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def handle_answer(
     session_id: int,
     answer: WebRTCAnswer,
@@ -273,7 +281,10 @@ async def end_stream_session(
     return session
 
 
-@router.post("/sessions/{session_id}/candidate")
+@router.post(
+    "/sessions/{session_id}/candidate",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def handle_candidate(
     session_id: int,
     candidate: ICECandidate,
@@ -328,7 +339,10 @@ async def handle_candidate(
     return {"status": "candidate_forwarded", "session_id": session_id}
 
 
-@router.post("/sessions/{session_id}/input")
+@router.post(
+    "/sessions/{session_id}/input",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def handle_input(
     session_id: int,
     input_packet: InputPacket,
@@ -344,14 +358,9 @@ async def handle_input(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    event = RuntimeEvent(
-        session_id=session_id,
-        event_type=f"input_{input_packet.input_type}",
-        payload_json=input_packet.payload,
-    )
-    db.add(event)
-    await db.commit()
-
+    # Forward FIRST: the runtime event is only persisted when the render
+    # forward succeeds. Committing before the forward left phantom
+    # input_* events in analytics/replay on 503/504.
     try:
         client = _ns._get_http_client()
         resp = await client.post(
@@ -385,5 +394,13 @@ async def handle_input(
     except OSError as e:
         logger.warning("input_forward_error", session_id=session_id, error=str(e))
         raise HTTPException(status_code=500, detail="Failed to forward input")
+
+    event = RuntimeEvent(
+        session_id=session_id,
+        event_type=f"input_{input_packet.input_type}",
+        payload_json=input_packet.payload,
+    )
+    db.add(event)
+    await db.commit()
 
     return {"status": "input_received", "session_id": session_id}
