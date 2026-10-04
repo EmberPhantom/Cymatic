@@ -17,6 +17,35 @@ import structlog
 
 logger = structlog.get_logger()
 
+# Valid LightingSpec.time_of_day literals.
+_VALID_TIMES_OF_DAY = ("morning", "noon", "evening", "night")
+
+
+def normalize_time_of_day(raw: Any) -> str:
+    """Normalize free-text time_of_day to a valid LightingSpec Literal.
+
+    Pydantic raises on values like "golden hour", so map common free text
+    before constructing LightingSpec; unknown/empty input falls back to
+    "evening" (the warm default used across templates).
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return "evening"
+    text = raw.strip().lower()
+    if text in _VALID_TIMES_OF_DAY:
+        return text
+    if any(k in text for k in ("dawn", "sunrise")):
+        return "morning"
+    if any(k in text for k in ("golden", "sunset", "dusk", "evening")):
+        return "evening"
+    if any(k in text for k in ("noon", "midday", "afternoon")):
+        return "noon"
+    if any(k in text for k in ("night", "midnight")):
+        return "night"
+    if "morning" in text:
+        return "morning"
+    logger.warning("time_of_day_unrecognized", raw=raw)
+    return "evening"
+
 
 class ComposerInput(BaseModel):
     entities: list[Entity]
@@ -304,7 +333,7 @@ class SceneComposerAgent:
 
         return LightingSpec(
             preset=preset,
-            time_of_day=preferences.get("time_of_day", "evening"),
+            time_of_day=normalize_time_of_day(preferences.get("time_of_day")),
             ambient_intensity=0.8,
             sun_direction=[0.5, -1, 0.3] if preset == "golden_hour" else [0, -1, 0],
         )

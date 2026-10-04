@@ -68,34 +68,43 @@ class RealEstatePipeline:
 
     def _load_stage_outputs(
         self, stage_outputs: dict[str, Any], result: "PipelineResult"
-    ):
-        """Load stage outputs into result object."""
-        if "intake" in stage_outputs:
-            from app.agents.intake_agent import IntakeResult
+    ) -> list[str]:
+        """Load stage outputs into result object.
 
+        Corrupt stage entries are logged (not swallowed) and dropped from
+        `stage_outputs` — ONLY the corrupt entry, good stages are kept — so
+        resume re-runs just that stage instead of misdiagnosing the failure.
+        Returns the list of dropped stage keys.
+        """
+        dropped: list[str] = []
+
+        def _drop(stage_key: str, exc: Exception) -> None:
+            logger.warning(
+                "checkpoint_stage_corrupt",
+                stage=stage_key,
+                error=str(exc),
+            )
+            stage_outputs.pop(stage_key, None)
+            dropped.append(stage_key)
+
+        if "intake" in stage_outputs:
             try:
                 result.intake = IntakeResult(**stage_outputs["intake"])
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("intake", exc)
         if "clarification" in stage_outputs:
-            from app.agents.clarification_agent import ClarificationResult
-
             try:
                 result.clarification = ClarificationResult(
                     **stage_outputs["clarification"]
                 )
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("clarification", exc)
         if "research" in stage_outputs:
-            from app.agents.research_agent import ResearchResult
-
             try:
                 result.research = ResearchResult(**stage_outputs["research"])
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("research", exc)
         if "architect" in stage_outputs:
-            from cymatic_shared.schemas.simulation_spec import SimulationSpec
-
             arch_data = stage_outputs["architect"]
             try:
                 # Support both shapes: {"spec": {...}, "generation_notes": [...]} and direct spec dict
@@ -110,35 +119,92 @@ class RealEstatePipeline:
                     )
                 else:
                     result.architect = ArchitectResult(spec=SimulationSpec(**arch_data))
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("architect", exc)
         if "composer" in stage_outputs:
             try:
                 result.composer = ComposerResult(**stage_outputs["composer"])
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("composer", exc)
         if "domain_expert" in stage_outputs:
             try:
                 result.domain_check = DomainCheckResult(
                     **stage_outputs["domain_expert"]
                 )
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("domain_expert", exc)
         if "asset_selection" in stage_outputs:
             try:
                 result.assets = AssetAgentResult(**stage_outputs["asset_selection"])
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("asset_selection", exc)
         if "validation" in stage_outputs:
             try:
                 result.validation = ValidationAgentResult(**stage_outputs["validation"])
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _drop("validation", exc)
         if "scene_package" in stage_outputs:
             try:
                 result.scene_package = ScenePackage(**stage_outputs["scene_package"])
+            except Exception as exc:  # noqa: BLE001
+                _drop("scene_package", exc)
+        if dropped:
+            logger.warning("checkpoint_stages_dropped", stages=dropped)
+        return dropped
+
+    def _merge_stage_result(
+        self,
+        result: "PipelineResult",
+        stage_result: "PipelineResult",
+        stage_outputs: dict[str, Any],
+    ) -> None:
+        """Merge a stage result into the accumulated result + outputs dict."""
+        if stage_result.intake:
+            result.intake = stage_result.intake
+        if stage_result.clarification:
+            result.clarification = stage_result.clarification
+        if stage_result.research:
+            result.research = stage_result.research
+        if stage_result.architect:
+            result.architect = stage_result.architect
+        if stage_result.composer:
+            result.composer = stage_result.composer
+        if stage_result.domain_check:
+            result.domain_check = stage_result.domain_check
+        if stage_result.assets:
+            result.assets = stage_result.assets
+        if stage_result.validation:
+            result.validation = stage_result.validation
+        if stage_result.scene_package:
+            result.scene_package = stage_result.scene_package
+
+        # Update checkpoint outputs - preserve all prior stage outputs (HIGH: 288 checkpoint key, 309 save logic)
+        # Store each stage result under its canonical key; do not wipe unrelated keys
+        if stage_result.intake is not None:
+            stage_outputs["intake"] = stage_result.intake.model_dump()
+        if stage_result.clarification is not None:
+            stage_outputs["clarification"] = stage_result.clarification.model_dump()
+        if stage_result.research is not None:
+            stage_outputs["research"] = stage_result.research.model_dump()
+        if stage_result.architect is not None:
+            # Store full ArchitectResult to preserve generation_notes (HIGH: 296 vs ArchitectResult)
+            # Loader handles both spec-only dict and full result dict for backward compat
+            try:
+                stage_outputs["architect"] = stage_result.architect.model_dump()
+                # For backward compat, also ensure spec dict available via spec key if loader expects spec-only
+                # Loader now checks both shapes
             except Exception:
-                pass
+                stage_outputs["architect"] = stage_result.architect.spec.model_dump()
+        if stage_result.composer is not None:
+            stage_outputs["composer"] = stage_result.composer.model_dump()
+        if stage_result.domain_check is not None:
+            stage_outputs["domain_expert"] = stage_result.domain_check.model_dump()
+        if stage_result.assets is not None:
+            stage_outputs["asset_selection"] = stage_result.assets.model_dump()
+        if stage_result.validation is not None:
+            stage_outputs["validation"] = stage_result.validation.model_dump()
+        if stage_result.scene_package is not None:
+            stage_outputs["scene_package"] = stage_result.scene_package.model_dump()
 
     async def _run_stage(  # noqa: PLR0912
         self,
@@ -400,8 +466,9 @@ class RealEstatePipeline:
             )  # copy to avoid mutation of cached dict
             start_stage_index = checkpoint.stage_index + 1
 
-            # Restore data from checkpoint
-            self._load_stage_outputs(checkpoint.stage_outputs, result)
+            # Restore data from checkpoint (load into the working copy so
+            # corrupt entries dropped by the loader stay dropped on save)
+            self._load_stage_outputs(stage_outputs, result)
         else:
             stage_outputs = {}
 
@@ -413,25 +480,8 @@ class RealEstatePipeline:
                     stage, stage_index, input_data, stage_outputs, job
                 )
 
-                # Merge stage result
-                if stage_result.intake:
-                    result.intake = stage_result.intake
-                if stage_result.clarification:
-                    result.clarification = stage_result.clarification
-                if stage_result.research:
-                    result.research = stage_result.research
-                if stage_result.architect:
-                    result.architect = stage_result.architect
-                if stage_result.composer:
-                    result.composer = stage_result.composer
-                if stage_result.domain_check:
-                    result.domain_check = stage_result.domain_check
-                if stage_result.assets:
-                    result.assets = stage_result.assets
-                if stage_result.validation:
-                    result.validation = stage_result.validation
-                if stage_result.scene_package:
-                    result.scene_package = stage_result.scene_package
+                # Merge stage result into accumulated state
+                self._merge_stage_result(result, stage_result, stage_outputs)
 
                 if stage_result.status in (
                     "awaiting_clarification",
@@ -439,43 +489,22 @@ class RealEstatePipeline:
                     "validation_failed",
                     "failed",
                 ):
+                    # Persist the checkpoint INCLUDING the failure status
+                    # before returning, or resume would misdiagnose the
+                    # failure as a fresh start with no record of what failed.
+                    self.checkpoint_manager.save_checkpoint(
+                        PipelineCheckpoint(
+                            project_id=input_data.project_id,
+                            stage=stage,
+                            stage_index=stage_index,
+                            input_data=input_data.model_dump(),
+                            stage_outputs=dict(stage_outputs),
+                            status=stage_result.status,
+                            error=stage_result.error,
+                        )
+                    )
                     return stage_result
 
-                # Update checkpoint after each stage - preserve all prior stage outputs (HIGH: 288 checkpoint key, 309 save logic)
-                # Store each stage result under its canonical key; do not wipe unrelated keys
-                if stage_result.intake is not None:
-                    stage_outputs["intake"] = stage_result.intake.model_dump()
-                if stage_result.clarification is not None:
-                    stage_outputs["clarification"] = (
-                        stage_result.clarification.model_dump()
-                    )
-                if stage_result.research is not None:
-                    stage_outputs["research"] = stage_result.research.model_dump()
-                if stage_result.architect is not None:
-                    # Store full ArchitectResult to preserve generation_notes (HIGH: 296 vs ArchitectResult)
-                    # Loader handles both spec-only dict and full result dict for backward compat
-                    try:
-                        stage_outputs["architect"] = stage_result.architect.model_dump()
-                        # For backward compat, also ensure spec dict available via spec key if loader expects spec-only
-                        # Loader now checks both shapes
-                    except Exception:
-                        stage_outputs["architect"] = (
-                            stage_result.architect.spec.model_dump()
-                        )
-                if stage_result.composer is not None:
-                    stage_outputs["composer"] = stage_result.composer.model_dump()
-                if stage_result.domain_check is not None:
-                    stage_outputs["domain_expert"] = (
-                        stage_result.domain_check.model_dump()
-                    )
-                if stage_result.assets is not None:
-                    stage_outputs["asset_selection"] = stage_result.assets.model_dump()
-                if stage_result.validation is not None:
-                    stage_outputs["validation"] = stage_result.validation.model_dump()
-                if stage_result.scene_package is not None:
-                    stage_outputs["scene_package"] = (
-                        stage_result.scene_package.model_dump()
-                    )
                 # Also ensure generic stage key points to its typed key for outer checkpoint resume logic
                 # (keeps checkpoint.stage_index mapping stable)
                 if stage not in stage_outputs:

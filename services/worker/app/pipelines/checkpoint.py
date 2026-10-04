@@ -45,6 +45,12 @@ class PipelineCheckpoint(BaseModel):
     stage_index: int
     input_data: Dict[str, Any]
     stage_outputs: Dict[str, Any]
+    # Terminal status that stopped the pipeline ("in_progress" while running;
+    # e.g. "validation_failed" after an early return). Resume logic keys off
+    # this instead of misdiagnosing a failure checkpoint as a fresh start.
+    # Optional with defaults so pre-existing checkpoint files still parse.
+    status: str = "in_progress"
+    error: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

@@ -44,7 +44,10 @@ async def process_asset_task(payload: dict) -> dict:
         )
 
         try:
-            info = get_minio_client().get_object_info(asset.storage_key)
+            # Async variant: the sync call blocks the worker event loop.
+            info = await get_minio_client().get_object_info_async(asset.storage_key)
+            if not info:
+                raise OSError(f"Object {asset.storage_key} not found")
 
             asset.metadata_json["processed"] = True
             asset.metadata_json["size"] = info.get("size")

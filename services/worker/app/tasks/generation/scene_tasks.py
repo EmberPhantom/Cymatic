@@ -56,14 +56,27 @@ async def generate_scene_task(payload: dict) -> dict:
             raise ValueError("Scene generation requires a valid specification")
 
         # Idempotency: check for existing ready package first (HIGH: 219 idempotency)
-        # Use advisory lock to avoid race where two workers both see no existing and insert duplicate
+        # Use advisory lock to avoid race where two workers both see no existing and insert duplicate.
+        # Namespaced 63-bit key ("scene:<spec_id>:<project_id>"): the old
+        # arithmetic scheme (spec_id * 100000 + project_id % 100000)
+        # collided across (spec_id, project_id) pairs and with bare
+        # project_id keys. Lock failures are logged loudly; execution then
+        # proceeds ONLY to the idempotency SELECT below, which is the safe
+        # fallback (worst case: a duplicate ready package, never corruption).
+        from cymatic_shared.db import advisory_lock_key
+
         try:
             await db.execute(
                 text("SELECT pg_advisory_xact_lock(:key)"),
-                {"key": int(spec_id) * 100000 + int(project_id) % 100000},
+                {"key": advisory_lock_key("scene", spec_id, project_id)},
             )
-        except Exception:
-            pass
+        except Exception as lock_exc:  # noqa: BLE001
+            logger.error(
+                "scene_idempotency_lock_failed",
+                project_id=project_id,
+                spec_id=spec_id,
+                error=str(lock_exc),
+            )
         existing = await db.scalar(
             select(ScenePackageModel)
             .where(
@@ -175,8 +188,9 @@ async def generate_scene_task(payload: dict) -> dict:
         # Upload to MinIO
         storage_key = f"orgs/{project.organization_id}/projects/{project_id}/scenes/spec_{spec_id}_v{spec.version}.cymatic"
 
+        # Async variants: the sync calls block the worker event loop.
         try:
-            get_minio_client().upload_data(
+            await get_minio_client().upload_data_async(
                 object_name=storage_key,
                 data=scene_json.encode("utf-8"),
                 content_type="application/json",
@@ -194,13 +208,7 @@ async def generate_scene_task(payload: dict) -> dict:
             raise
 
         # Confirm the object is readable before exposing it as ready (HIGH: 299 get_object_info missing)
-        try:
-            object_info = get_minio_client().get_object_info(storage_key)
-        except AttributeError:
-            # Fallback if client lacks method (should not happen after fix)
-            object_info = None
-            if get_minio_client().object_exists(storage_key):
-                object_info = {"size": len(scene_json.encode("utf-8"))}
+        object_info = await get_minio_client().get_object_info_async(storage_key)
         if not object_info or int(object_info.get("size", 0)) != len(
             scene_json.encode("utf-8")
         ):
@@ -300,8 +308,11 @@ async def publish_scene_task(payload: dict) -> dict:
         if not spec or spec.status not in (SpecStatus.VALID,):
             raise ValueError("Referenced spec is missing or not valid")
 
+        # Async variant: the sync call blocks the worker event loop.
         try:
-            artifact = get_minio_client().get_object_info(scene_pkg.storage_key)
+            artifact = await get_minio_client().get_object_info_async(
+                scene_pkg.storage_key
+            )
         except (S3Error, OSError) as exc:
             raise ValueError("Scene package artifact is unavailable") from exc
         if not artifact:

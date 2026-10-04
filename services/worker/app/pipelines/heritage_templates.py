@@ -152,9 +152,15 @@ class HeritageTemplateLibrary:
     }
 
     @classmethod
-    def get_template(cls, template_id: str) -> dict[str, Any]:
-        """Get template by ID"""
-        return cls.TEMPLATES.get(template_id, cls.TEMPLATES["haveli_courtyard"])
+    def get_template(cls, template_id: str) -> dict[str, Any] | None:
+        """Get template by ID.
+
+        Returns None for unknown IDs — callers must surface an explicit
+        error. Never silently substitute a default template: generating a
+        Haveli walkthrough when the user asked for something else is a
+        silent wrong-output bug.
+        """
+        return cls.TEMPLATES.get(template_id)
 
     @classmethod
     def list_templates(cls) -> list[dict[str, Any]]:
@@ -179,6 +185,12 @@ def create_heritage_spec_from_template(
 ) -> "SimulationSpec":
     """Create a SimulationSpec from a heritage template"""
     template = HeritageTemplateLibrary.get_template(template_id)
+    if template is None:
+        available = sorted(HeritageTemplateLibrary.TEMPLATES)
+        raise ValueError(
+            f"Unknown heritage template '{template_id}'. "
+            f"Available: {', '.join(available)}"
+        )
     custom = customizations or {}
 
     # Merge template defaults with customizations

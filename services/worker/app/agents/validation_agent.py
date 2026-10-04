@@ -139,10 +139,17 @@ class ValidationAgent:
             if not has_doors:
                 recommendations.append("Add doors to rooms for proper navigation")
 
+            # Canonical key is "has_window" (singular): that is what the
+            # architect writes and the domain-expert egress check reads.
+            # "has_windows" (plural) is accepted as a legacy alias only.
+            def _room_has_window(entity: dict) -> bool:
+                props = entity.get("properties", {}) or {}
+                if "has_window" in props:
+                    return bool(props.get("has_window"))
+                return bool(props.get("has_windows"))
+
             has_windows = any(
-                e.get("properties", {}).get("has_windows")
-                for e in entities
-                if e.get("type") == "room"
+                _room_has_window(e) for e in entities if e.get("type") == "room"
             )
             if not has_windows:
                 recommendations.append("Add windows to rooms for natural lighting")

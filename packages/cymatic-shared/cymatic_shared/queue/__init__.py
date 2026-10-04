@@ -44,6 +44,10 @@ class Job(BaseModel):
     error: Optional[str] = None
     retry_count: int = 0
     max_retries: int = 3
+    # Set by fail_job BEFORE the delayed-requeue sleep so a worker crash
+    # doesn't lose the retry intent; sweep_stale_retries() re-enqueues
+    # hashes stuck in RETRY whose retry_at has passed. Cleared on requeue.
+    retry_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
@@ -315,16 +319,110 @@ class JobQueue:
                     stored_queue = None
             target_queue = stored_queue or job.type
 
-            # Non-blocking delayed requeue; task is held by event loop, but retry survives restart via job:{id} status RETRY
+            # Persist retry intent BEFORE the sleep so a crash/restart during
+            # the delay window doesn't lose the retry (recovered by
+            # sweep_stale_retries at startup).
+            job.retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            await self.client.hset(
+                f"job:{job.id}",
+                mapping={
+                    "data": job.model_dump_json(),
+                    "status": job.status.value,
+                    "retry_at": job.retry_at.isoformat(),
+                    "queue": target_queue,
+                },
+            )
+
+            # Non-blocking delayed requeue.
             async def _delayed_requeue():
                 await asyncio.sleep(delay)
-                # Re-fetch latest job to avoid stale retry_count
                 try:
+                    # Skip if a startup sweep (or another path) already
+                    # requeued/completed this job — avoids double execution.
+                    try:
+                        cur = await self.client.hget(f"job:{job.id}", "status")
+                        if isinstance(cur, bytes):
+                            cur = cur.decode("utf-8")
+                    except Exception:
+                        cur = None
+                    if cur != JobStatus.RETRY.value:
+                        return
+                    job.status = JobStatus.QUEUED
+                    job.retry_at = None
                     await self.enqueue(job, target_queue)
                 except Exception as e:
                     logger.error("delayed_requeue_failed", job_id=job.id, error=str(e))
 
             asyncio.create_task(_delayed_requeue())
+
+    async def sweep_stale_retries(
+        self, queue_name: str | None = None, limit: int = 100
+    ) -> int:
+        """Re-enqueue RETRY jobs whose retry_at passed (crash recovery).
+
+        Call once at worker startup: any job left in RETRY (e.g. the process
+        died during fail_job's delayed-requeue sleep) is requeued to its
+        stored queue (delayed path) or, when no queue was stored, to a queue
+        derived from job.type (immediate/original path). Jobs without a
+        parsable past-due retry_at are left alone.
+
+        Returns the number of jobs requeued.
+        """
+        await self.connect()
+        now = datetime.now(timezone.utc)
+        requeued = 0
+        async for key in self.client.scan_iter(match="job:*", count=100):
+            if isinstance(key, bytes):
+                key = key.decode("utf-8")
+            if key.startswith("job:lock:"):
+                continue
+            try:
+                fields = await self.client.hmget(
+                    key, "data", "status", "retry_at", "queue"
+                )
+            except Exception:
+                continue
+            data_raw, status_raw, retry_at_raw, queue_raw = (
+                (list(fields) + [None] * 4)[:4] if fields else (None, None, None, None)
+            )
+            if isinstance(status_raw, bytes):
+                status_raw = status_raw.decode("utf-8")
+            if status_raw != JobStatus.RETRY.value:
+                continue
+            if isinstance(retry_at_raw, bytes):
+                retry_at_raw = retry_at_raw.decode("utf-8")
+            try:
+                retry_at = (
+                    datetime.fromisoformat(retry_at_raw) if retry_at_raw else None
+                )
+            except (ValueError, TypeError):
+                continue
+            if retry_at is None or retry_at > now:
+                continue
+            if not data_raw:
+                continue
+            if isinstance(data_raw, bytes):
+                data_raw = data_raw.decode("utf-8")
+            if isinstance(queue_raw, bytes):
+                queue_raw = queue_raw.decode("utf-8")
+            if queue_name and queue_raw and queue_raw != queue_name:
+                continue
+            try:
+                job = Job(**json.loads(data_raw))
+            except Exception:
+                continue
+            target_queue = queue_raw or job.type
+            try:
+                job.status = JobStatus.QUEUED
+                job.retry_at = None
+                await self.enqueue(job, target_queue)
+                requeued += 1
+                logger.info("stale_retry_requeued", job_id=job.id, queue=target_queue)
+            except Exception as e:
+                logger.error("stale_retry_requeue_failed", job_id=job.id, error=str(e))
+            if requeued >= limit:
+                break
+        return requeued
 
     async def get_queue_stats(self, queue_name: str = "generation") -> dict:
         await self.connect()

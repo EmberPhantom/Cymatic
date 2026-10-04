@@ -13,6 +13,11 @@ class ResearchResult(BaseModel):
     asset_candidates: list[dict[str, Any]] = []
     constraints_summary: dict[str, Any] = {}
     best_practices: list[str] = []
+    # True when the requested style was unknown and the first available
+    # style was substituted. Surfaced (not silent) so callers can tell the
+    # user or fail instead of generating for the wrong style.
+    style_defaulted: bool = False
+    requested_style: str | None = None
 
 
 class ResearchAgent:
@@ -188,11 +193,19 @@ class ResearchAgent:
 
         # Get style references
         style_refs = self.STYLE_REFERENCES.get(domain, {}).get(style, [])
+        style_defaulted = False
         if not style_refs:
-            # Fallback to first available style
+            # Unknown style: fall back to first available BUT flag it
+            # explicitly so callers see the substitution (never silent).
             available = self.STYLE_REFERENCES.get(domain, {})
             if available:
                 style_refs = list(available.values())[0]
+                style_defaulted = True
+                logger.warning(
+                    "research_style_defaulted",
+                    domain=domain,
+                    requested_style=style,
+                )
 
         # Get best practices
         practices = self.BEST_PRACTICES.get(domain, [])
@@ -210,7 +223,9 @@ class ResearchAgent:
                     }
                 )
 
-        # Constraints summary
+        # Constraints summary. Rendering targets the on-device native
+        # renderer (Filament, stereo SBS per docs/27-mobile-render-pivot.md);
+        # the legacy Unity/WebRTC path is frozen and must not be emitted.
         constraints = {
             "domain": domain,
             "style": style,
@@ -218,7 +233,7 @@ class ResearchAgent:
             "max_triangles": requirements.get("max_triangles", 100000),
             "texture_budget_mb": requirements.get("texture_budget_mb", 100),
             "platform": "mobile_vr",
-            "rendering": "stereo_webrtc",
+            "rendering": "filament_sbs",
         }
 
         result = ResearchResult(
@@ -226,6 +241,8 @@ class ResearchAgent:
             asset_candidates=asset_candidates,
             constraints_summary=constraints,
             best_practices=practices,
+            style_defaulted=style_defaulted,
+            requested_style=style,
         )
 
         logger.info(

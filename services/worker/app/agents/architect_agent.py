@@ -157,6 +157,9 @@ async def create_spec_slm(input_data: ArchitectInput) -> ArchitectResult:
                 model=LOCAL_SLM_MODEL,
                 timeout=_local_llm_timeout(),
                 use_cache=(attempt == 0),
+                # A truncation-repaired object without entities is a false
+                # success — return {} so this attempt fails and retries.
+                required_non_empty_keys=["entities"],
             )
 
             raw_entities = result.get("entities")
@@ -259,6 +262,9 @@ async def create_spec_llm(input_data: ArchitectInput) -> ArchitectResult:
             sensitivity="internal",
             temperature=0.3,
             max_tokens=8000,
+            # Repaired-but-empty parses must surface as {} so the
+            # template-fallback path below triggers (never an empty spec).
+            required_non_empty_keys=["entities"],
         )
 
         # Parse and validate

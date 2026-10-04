@@ -16,6 +16,18 @@ from app.tasks import generation as _gen
 
 logger = structlog.get_logger()
 
+# Pipeline terminal statuses -> valid RunStage values. RunStage has no
+# per-status members (only intake/clarification/spec/validation/scene/
+# artifact_verification), so raw pipeline statuses ("validation_failed",
+# "domain_validation_failed", ...) must never be written to run.stage.
+_PIPELINE_STATUS_TO_RUN_STAGE: dict[str, RunStage] = {
+    "awaiting_clarification": RunStage.CLARIFICATION,
+    "validation_failed": RunStage.VALIDATION,
+    "domain_validation_failed": RunStage.VALIDATION,
+    "failed": RunStage.SPEC,
+    "completed": RunStage.VALIDATION,
+}
+
 
 @register_job_handler("generate_spec")
 async def generate_spec_task(payload: dict) -> dict:
@@ -137,7 +149,9 @@ async def generate_spec_task(payload: dict) -> dict:
                 )
                 if run:
                     run.status = RunStatus.FAILED
-                    run.stage = pipeline_result.status or "spec"
+                    run.stage = _PIPELINE_STATUS_TO_RUN_STAGE.get(
+                        pipeline_result.status or "", RunStage.SPEC
+                    )
                     run.progress = 55
                     run.error_json = {
                         "code": f"pipeline_{pipeline_result.status}",
@@ -176,9 +190,23 @@ async def generate_spec_task(payload: dict) -> dict:
         # Previous FOR UPDATE on aggregate is invalid syntax in Postgres (cannot lock aggregate row).
         # Use pg_advisory_xact_lock keyed by project_id to serialize concurrent version increments.
         # Project row was already locked earlier, but that lock is released after commit; advisory lock holds for transaction.
-        await db.execute(
-            text("SELECT pg_advisory_xact_lock(:key)"), {"key": int(project_id)}
-        )
+        # Namespaced 63-bit advisory key: lock failures are logged loudly
+        # and execution continues to the version computation below as the
+        # safe fallback (best-effort serialization; there is no unique
+        # constraint on (project_id, version) to catch a race).
+        from cymatic_shared.db import advisory_lock_key
+
+        try:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": advisory_lock_key("spec", project_id)},
+            )
+        except Exception as lock_exc:  # noqa: BLE001
+            logger.error(
+                "spec_version_lock_failed",
+                project_id=project_id,
+                error=str(lock_exc),
+            )
         result = await db.execute(
             select(func.coalesce(func.max(SimulationSpecModel.version), 0) + 1).where(
                 SimulationSpecModel.project_id == project_id
@@ -197,6 +225,9 @@ async def generate_spec_task(payload: dict) -> dict:
             status=SpecStatus.VALID,
         )
         db.add(db_spec)
+        # Flush so db_spec.id is the real PK (not None) before it is read
+        # into run.result_json and the task return value below.
+        await db.flush()
 
         # Update project status
         project_result = await db.execute(

@@ -229,6 +229,7 @@ async def call_llm_json(
     model: Optional[str] = None,
     timeout: Optional[float] = None,
     use_cache: bool = True,
+    required_non_empty_keys: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Call LLM and parse JSON response.
 
@@ -236,6 +237,12 @@ async def call_llm_json(
     `timeout` optionally overrides the client default per request.
     `use_cache` false bypasses the router cache — REQUIRED for retries after
     truncated/error outputs, otherwise the retry replays cached garbage.
+    `required_non_empty_keys` names keys that must be present and non-empty
+    in a salvaged object — i.e. one recovered via {...}-extraction or
+    truncation repair (e.g. ["entities"] for architect results); a salvaged
+    parse that misses this completeness bar returns {} so the caller's
+    documented failure/fallback path triggers instead of a false success.
+    Clean first-try parses are unaffected (callers validate those).
 
     Robust to common LLM output faults: markdown fences (```json),
     leading prose, trailing commas, mid-object truncation (3B SLMs emit EOS
@@ -274,12 +281,24 @@ async def call_llm_json(
     if extracted is not None:
         try:
             parsed = json.loads(extracted)
-            logger.warning(
-                "llm_json_recovered_via_extraction",
-                task_type=task_type,
-                preview=content[:200],
-            )
-            return parsed if isinstance(parsed, dict) else {}
+            if isinstance(parsed, dict):
+                if required_non_empty_keys and not _meets_completeness_bar(
+                    parsed, required_non_empty_keys
+                ):
+                    logger.warning(
+                        "llm_json_extraction_incomplete",
+                        task_type=task_type,
+                        required=required_non_empty_keys,
+                        preview=content[:200],
+                    )
+                    return {}
+                logger.warning(
+                    "llm_json_recovered_via_extraction",
+                    task_type=task_type,
+                    preview=content[:200],
+                )
+                return parsed
+            return {}
         except json.JSONDecodeError:
             pass
 
@@ -289,12 +308,24 @@ async def call_llm_json(
     if repaired is not None:
         try:
             parsed = json.loads(repaired)
-            logger.warning(
-                "llm_json_recovered_via_repair",
-                task_type=task_type,
-                preview=content[:200],
-            )
-            return parsed if isinstance(parsed, dict) else {}
+            if isinstance(parsed, dict):
+                if required_non_empty_keys and not _meets_completeness_bar(
+                    parsed, required_non_empty_keys
+                ):
+                    logger.warning(
+                        "llm_json_repair_incomplete",
+                        task_type=task_type,
+                        required=required_non_empty_keys,
+                        preview=content[:200],
+                    )
+                    return {}
+                logger.warning(
+                    "llm_json_recovered_via_repair",
+                    task_type=task_type,
+                    preview=content[:200],
+                )
+                return parsed
+            return {}
         except json.JSONDecodeError:
             pass
 
@@ -375,6 +406,22 @@ def _repair_truncated_json(content: str) -> Optional[str]:
     except json.JSONDecodeError:
         pass
     return None
+
+
+def _meets_completeness_bar(parsed: Dict[str, Any], required_keys: List[str]) -> bool:
+    """Check a repaired object meets the minimum completeness bar.
+
+    Every key in `required_keys` must be present and non-empty (non-empty
+    list/dict/str, non-None scalar). Prevents truncation repair from
+    reporting success on a structurally valid but content-free object.
+    """
+    for key in required_keys:
+        value = parsed.get(key)
+        if value is None:
+            return False
+        if isinstance(value, (list, dict, str)) and len(value) == 0:
+            return False
+    return True
 
 
 def _strip_code_fences(content: str) -> str:

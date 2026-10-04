@@ -115,6 +115,15 @@ async def lifespan(app: FastAPI):
     await init_db()
     await job_queue.connect()
 
+    # Crash recovery: re-enqueue jobs left in RETRY whose retry_at passed
+    # (the process may have died during fail_job's delayed-requeue sleep).
+    try:
+        recovered = await job_queue.sweep_stale_retries()
+        if recovered:
+            logger.info("stale_retries_recovered", count=recovered)
+    except Exception as sweep_exc:  # noqa: BLE001
+        logger.error("stale_retry_sweep_failed", error=str(sweep_exc))
+
     worker_task = asyncio.create_task(worker_loop())
 
     yield
