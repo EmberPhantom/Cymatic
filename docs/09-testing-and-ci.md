@@ -16,6 +16,36 @@ cd packages/cymatic-shared
 python -m pytest tests/ -v
 ```
 
+## Host test environment
+
+Containerized suites (`.\tasks.ps1 test-api`, `make test-api`) wire
+everything themselves. Running `pytest` directly on the host against the
+already-up local infra needs the test endpoints — the defaults in
+`tests/conftest.py` (unauthenticated Redis on `:6379`, Postgres on
+`:5432`) do not match the local stack (authenticated Redis, test
+Postgres on `:5433`):
+
+```powershell
+$env:DATABASE_URL = "postgresql+asyncpg://cymatic:cymatic@localhost:5433/cymatic_test"  # worker: .../cymatic_worker_test
+$env:REDIS_URL = "redis://:cymatic_redis_pass@localhost:6379/0"
+$env:REDIS_QUEUE_URL = "redis://:cymatic_redis_pass@localhost:6379/0"
+$env:REDIS_CACHE_URL = "redis://:cymatic_redis_pass@localhost:6379/1"
+$env:REDIS_USAGE_URL = "redis://:cymatic_redis_pass@localhost:6379/2"
+$env:REDIS_RATE_URL = "redis://:cymatic_redis_pass@localhost:6379/3"
+$env:REDIS_REVOKED_URL = "redis://:cymatic_redis_pass@localhost:6379/4"
+$env:REDIS_PUBSUB_URL = "redis://:cymatic_redis_pass@localhost:6379/5"
+$env:S3_ENDPOINT = "http://localhost:9000"
+python -m pytest tests/ -q --no-cov -p no:cacheprovider
+```
+
+(`REDIS_PASSWORD` defaults to `cymatic_redis_pass` in
+`infra/docker/docker-compose.yml`; `POSTGRES_TEST_PORT` defaults to
+`5433`. `test_benchmark.py` additionally needs `pytest-benchmark`,
+which is installed in the container images but may be missing from a
+host Python.) Session teardown drops all tables including
+`alembic_version`, so repeat runs re-migrate from scratch — no manual
+DB reset needed.
+
 For the frontend:
 
 ```bash
