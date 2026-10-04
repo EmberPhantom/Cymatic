@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useId, useState } from "react"
 import { cn } from "@/lib/utils"
 import {
   Grid,
@@ -10,12 +10,22 @@ import {
   Info
 } from "lucide-react"
 
+/** Real measured stats. When absent the HUD is labelled illustrative and
+ * shows no numbers — the schematic never reports fake FPS/triangle counts. */
+export interface ViewportStats {
+  fps?: number | null
+  triangles?: number | null
+  triangleBudget?: number | null
+}
+
 export interface SceneViewportPreviewProps {
   title?: string
   domain?: "heritage" | "real_estate" | string
   isInteractive?: boolean
   className?: string
   height?: string
+  /** Real scene stats when the caller has them (builder has none at mount). */
+  stats?: ViewportStats | null
   onSelectNode?: (nodeName: string, metadata: { zone: string; triangles: number; material: string; coords: string }) => void
 }
 
@@ -25,6 +35,7 @@ export function SceneViewportPreview({
   isInteractive = true,
   className,
   height = "h-80 md:h-96",
+  stats = null,
   onSelectNode,
 }: SceneViewportPreviewProps) {
   const [showGrid, setShowGrid] = useState(true)
@@ -32,6 +43,7 @@ export function SceneViewportPreview({
   const [cameraMode, setCameraMode] = useState<"perspective" | "top" | "front">("perspective")
   const [lightingMode, setLightingMode] = useState<"daylight" | "golden" | "night">("daylight")
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const svgTitleId = useId()
 
   const isHeritage = domain === "heritage"
 
@@ -91,13 +103,13 @@ export function SceneViewportPreview({
   return (
     <div
       className={cn(
-        "relative w-full rounded-xl border border-warmgray overflow-hidden bg-charcoal text-white flex flex-col select-none shadow-2xs group",
+        "relative w-full rounded-xl border border-warmgray overflow-hidden bg-charcoal text-white flex flex-col select-none shadow-sm group",
         height,
         className
       )}
     >
       {/* Top Viewport Toolbar / Technical HUD Metrics */}
-      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 py-2 bg-charcoal/90 backdrop-blur-xs border-b border-white/10 text-xs">
+      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 py-2 bg-charcoal/90 backdrop-blur-sm border-b border-white/10 text-xs">
         <div className="flex items-center gap-2">
           <span className="flex h-2 w-2 relative">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sage opacity-75" />
@@ -118,20 +130,27 @@ export function SceneViewportPreview({
           </span>
         </div>
 
-        {/* Technical HUD Overlays */}
+        {/* Technical HUD: real stats when wired, otherwise an explicit
+            illustrative label — never fake-precise numbers. */}
         <div className="flex items-center gap-1.5 font-mono text-[10px]">
-          <span className="px-1.5 py-0.5 rounded bg-white/10 text-ivory border border-white/10 tracking-tight">
-            60 FPS
-          </span>
-          <span className="px-1.5 py-0.5 rounded bg-terracotta/20 text-terracotta-300 border border-terracotta/40 tracking-tight">
-            {isHeritage ? "74.8K / 80K" : "68.2K / 80K"}
-          </span>
-          <span className="hidden md:inline-block px-1.5 py-0.5 rounded bg-gold/20 text-gold-300 border border-gold/40 tracking-tight">
-            BAKED GI
-          </span>
-          <span className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-sage/20 text-sage-300 border border-sage/40 tracking-tight">
-            &lt;45ms
-          </span>
+          {stats?.fps != null || stats?.triangles != null ? (
+            <>
+              {stats.fps != null && (
+                <span className="px-1.5 py-0.5 rounded bg-white/10 text-ivory border border-white/10 tracking-tight">
+                  {stats.fps} FPS
+                </span>
+              )}
+              {stats.triangles != null && (
+                <span className="px-1.5 py-0.5 rounded bg-terracotta/20 text-terracotta-300 border border-terracotta/40 tracking-tight">
+                  {(stats.triangles / 1000).toFixed(1)}K{stats.triangleBudget != null ? ` / ${(stats.triangleBudget / 1000).toFixed(0)}K` : ""}
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-white/10 text-ivory border border-white/10 tracking-tight uppercase">
+              Preview (illustrative)
+            </span>
+          )}
         </div>
       </div>
 
@@ -154,12 +173,15 @@ export function SceneViewportPreview({
           />
         )}
 
-        {/* Renderable SVG Canvas */}
+        {/* Renderable SVG Canvas (decorative schematic, not measured output) */}
         <svg
           viewBox="0 0 400 240"
           className="w-full h-full max-w-lg object-contain transition-transform duration-500"
           style={getCameraStyle()}
+          role="img"
+          aria-label={`Illustrative ${isHeritage ? "heritage" : "real estate"} scene schematic for ${title}`}
         >
+          <title id={`${svgTitleId}`}>{title} — illustrative schematic</title>
           <defs>
             <linearGradient id="wallGradHeritage" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#C69A4B" stopOpacity={lightingMode === "golden" ? "0.6" : "0.35"} />
@@ -386,7 +408,7 @@ export function SceneViewportPreview({
 
         {/* Viewport Floating Interactive Controls (Compact, Polished, With Tooltips) */}
         {isInteractive && (
-          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5 bg-charcoal/90 backdrop-blur-xs p-1 rounded-lg border border-white/15 shadow-md">
+          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5 bg-charcoal/90 backdrop-blur-sm p-1 rounded-lg border border-white/15 shadow-md">
             {/* Camera Angle Selector: 3D, TOP, FRONT */}
             <div className="flex items-center bg-white/5 rounded p-0.5 border border-white/10 mr-1">
               <button
@@ -397,6 +419,7 @@ export function SceneViewportPreview({
                   cameraMode === "perspective" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="3D Perspective Camera"
+                aria-label="3D perspective camera"
                 aria-pressed={cameraMode === "perspective"}
               >
                 3D
@@ -409,6 +432,7 @@ export function SceneViewportPreview({
                   cameraMode === "top" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="TOP Floorplan View"
+                aria-label="Top floorplan view"
                 aria-pressed={cameraMode === "top"}
               >
                 TOP
@@ -421,6 +445,7 @@ export function SceneViewportPreview({
                   cameraMode === "front" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="FRONT Elevation View"
+                aria-label="Front elevation view"
                 aria-pressed={cameraMode === "front"}
               >
                 FRONT
@@ -444,6 +469,7 @@ export function SceneViewportPreview({
                   : "text-white/70 hover:text-white hover:bg-white/10"
               )}
               title={`Lighting: ${lightingMode.toUpperCase()} (Click to toggle environment)`}
+              aria-label={`Lighting: ${lightingMode}. Activate to cycle environment.`}
             >
               <Sun className="h-3 w-3" />
               <span className="hidden sm:inline">Lighting</span>
@@ -458,6 +484,8 @@ export function SceneViewportPreview({
                 showGrid ? "text-terracotta bg-white/10" : "text-white/60 hover:text-white hover:bg-white/10"
               )}
               title="Toggle Architectural Ground Grid"
+              aria-label={showGrid ? "Hide architectural ground grid" : "Show architectural ground grid"}
+              aria-pressed={showGrid}
             >
               <Grid className="h-3 w-3" />
               <span className="hidden sm:inline">Grid</span>
@@ -476,6 +504,7 @@ export function SceneViewportPreview({
                 viewMode !== "shaded" ? "text-terracotta bg-white/10" : "text-white/70 hover:text-white hover:bg-white/10"
               )}
               title={`View Mode: ${viewMode.toUpperCase()} (Click to cycle wireframe/shaded)`}
+              aria-label={`View mode: ${viewMode}. Activate to cycle wireframe modes.`}
             >
               <Box className="h-3 w-3" />
               <span className="hidden sm:inline">Wireframe</span>
@@ -501,10 +530,10 @@ export function SceneViewportPreview({
 
         {/* Status Pill Lower Left */}
         <div className="absolute bottom-3 left-3 z-20 flex items-center gap-1.5 text-[10px] font-mono text-stonegray-300">
-          <span className="px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-xs">
+          <span className="px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-sm">
             {lightingMode.toUpperCase()} LIGHTING
           </span>
-          <span className="hidden sm:inline-block px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-xs">
+          <span className="hidden sm:inline-block px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-sm">
             {viewMode.toUpperCase()}
           </span>
         </div>

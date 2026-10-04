@@ -166,7 +166,7 @@ export default function LoginPage() {
             </Label>
           </div>
 
-          <Button type="submit" variant="terracotta" className="w-full h-10 font-semibold gap-2 shadow-xs" disabled={loading}>
+          <Button type="submit" variant="terracotta" className="w-full h-10 font-semibold gap-2 shadow-sm" disabled={loading}>
             {loading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />

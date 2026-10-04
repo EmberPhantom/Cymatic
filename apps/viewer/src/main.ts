@@ -227,6 +227,14 @@ async function renderViewer(project: Project) {
   renderer.setSize(window.innerWidth, window.innerHeight);
   container.prepend(renderer.domElement);
   const canvas = renderer.domElement;
+  // A11y: the canvas is focusable with a label describing the keyboard
+  // alternative to drag-look (arrow keys below).
+  canvas.setAttribute("tabindex", "0");
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute(
+    "aria-label",
+    `Walkthrough viewport for ${project.name}. Focus and use arrow keys to look around; drag also works.`
+  );
 
   let disposed = false;
 
@@ -308,6 +316,25 @@ async function renderViewer(project: Project) {
   canvas.addEventListener("touchstart", onTouchStart);
   canvas.addEventListener("touchmove", onTouchMove, { passive: false });
   canvas.addEventListener("touchend", onDragEnd);
+  // Keyboard-look alternative to drag-look: arrow keys rotate the glance
+  // offset by a fixed step (same lookYaw/lookPitch the drag path drives).
+  const KEY_STEP = 0.12;
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      lookYaw += KEY_STEP;
+      e.preventDefault();
+    } else if (e.key === "ArrowRight") {
+      lookYaw -= KEY_STEP;
+      e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      lookPitch = THREE.MathUtils.clamp(lookPitch + KEY_STEP, -1.2, 1.2);
+      e.preventDefault();
+    } else if (e.key === "ArrowDown") {
+      lookPitch = THREE.MathUtils.clamp(lookPitch - KEY_STEP, -1.2, 1.2);
+      e.preventDefault();
+    }
+  };
+  canvas.addEventListener("keydown", onKeyDown);
 
   playBtn.onclick = () => {
     walkthrough.togglePlay();
@@ -353,6 +380,7 @@ async function renderViewer(project: Project) {
     canvas.removeEventListener("touchstart", onTouchStart);
     canvas.removeEventListener("touchmove", onTouchMove);
     canvas.removeEventListener("touchend", onDragEnd);
+    canvas.removeEventListener("keydown", onKeyDown);
     try {
       disposeSceneResources(scene);
     } finally {
