@@ -14,6 +14,23 @@ spec:
     metadata: { labels: { app: api } }
     spec:
       securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      # Ordering vs the migrate Job: plain manifests have no helm hooks or
+      # Argo sync-waves, and polling Job status via kubectl needs RBAC the
+      # pods don't have. Instead each api replica runs `alembic upgrade head`
+      # (idempotent) in an initContainer with the SAME image tag before the
+      # app starts — safe to double-run with the migrate Job and guarantees
+      # the schema is current even if the Deployment wins the race.
+      initContainers:
+        - name: migrate
+          image: cymatic/api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
       containers:
         - name: api
           # Pinned release tag (never :latest in k8s): bump per release,
@@ -58,6 +75,19 @@ spec:
     metadata: { labels: { app: worker } }
     spec:
       securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      # Same migrate-gating as api (see comment there): idempotent
+      # `alembic upgrade head` with the SAME image tag before startup.
+      initContainers:
+        - name: migrate
+          image: cymatic/worker:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
       containers:
         - name: worker
           image: cymatic/worker:0.1.0

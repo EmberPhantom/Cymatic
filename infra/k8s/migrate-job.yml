@@ -13,7 +13,12 @@ spec:
       securityContext: { runAsNonRoot: true, runAsUser: 999 }
       containers:
         - name: migrate
-          image: cymatic/api:latest
+          # Pinned release tag (never :latest in k8s): MUST match the api
+          # image tag in services.yml (0.1.0) so migrations run against the
+          # exact code being deployed. `alembic upgrade head` is idempotent,
+          # so re-runs (Job retry + api/worker initContainers) are safe.
+          image: cymatic/api:0.1.0
+          imagePullPolicy: IfNotPresent
           command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
           envFrom:
             - configMapRef: { name: cymatic-config }
