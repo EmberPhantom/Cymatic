@@ -18,7 +18,10 @@ data:
   API_PORT: "8000"
   # Internal service DNS; external URLs come from Ingress + frontend build args.
   LLM_ROUTER_URL: "http://llm-router:8001"
-  RENDER_SERVER_URL: "http://render-server:8080"
+  # RENDER_SERVER_URL (legacy Unity render path) intentionally unset: the
+  # Unity/WebRTC path is frozen (see docs/27-mobile-render-pivot.md) and the
+  # MVP renders on-device. Re-add here if that path is ever revived.
+  # RENDER_SERVER_URL: "http://render-server:8080"
   S3_BUCKET_NAME: "cymatic"
   S3_REGION: "us-east-1"
 ---

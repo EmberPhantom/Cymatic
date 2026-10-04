@@ -41,6 +41,9 @@ spec:
           envFrom:
             - configMapRef: { name: cymatic-config }
             - secretRef: { name: cymatic-secrets }
+          # Parity with compose: api mem_limit 512m / cpus 2.0. 512Mi fits the
+          # Dockerfile default of 2 uvicorn workers at ~128-150Mi/worker;
+          # raising API_WORKERS needs a matching limit bump.
           resources:
             requests: { cpu: "250m", memory: "256Mi" }
             limits: { cpu: "1000m", memory: "512Mi" }
@@ -96,6 +99,9 @@ spec:
           envFrom:
             - configMapRef: { name: cymatic-config }
             - secretRef: { name: cymatic-secrets }
+          # Parity with compose: worker mem_limit 512m / cpus 2.0. Each uvicorn
+          # worker runs a full worker_loop, so the Dockerfile default of 2
+          # bounds duplicate queue polling to ~256-300Mi; keep in sync there.
           resources:
             requests: { cpu: "250m", memory: "256Mi" }
             limits: { cpu: "1000m", memory: "512Mi" }
@@ -138,6 +144,9 @@ spec:
           envFrom:
             - configMapRef: { name: cymatic-config }
             - secretRef: { name: cymatic-secrets }
+          # Parity with compose: llm-router mem_limit 512m / cpus 1.0. Single
+          # uvicorn worker (see Dockerfile LLM_ROUTER_WORKERS default 1);
+          # scale via replicas, not workers, under this limit.
           resources:
             requests: { cpu: "250m", memory: "256Mi" }
             limits: { cpu: "1000m", memory: "512Mi" }
@@ -177,6 +186,13 @@ spec:
           image: cymatic/web:0.1.0
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 3000 }]
+          # Same envFrom as api/worker/llm-router: runtime config (LOG_LEVEL,
+          # API_INTERNAL_URL, etc.) comes from cymatic-config/cymatic-secrets.
+          # NOTE: NEXT_PUBLIC_* URLs are baked at docker build time via build
+          # args (see compose web.build.args), not read at runtime.
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
           resources:
             requests: { cpu: "100m", memory: "128Mi" }
             limits: { cpu: "500m", memory: "256Mi" }
@@ -248,15 +264,44 @@ metadata:
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: ["cymatic.example.com"]
+    # viewer host shares this secret: the serving cert must cover BOTH hosts.
+    - hosts: ["cymatic.example.com", "viewer.cymatic.example.com"]
       secretName: cymatic-tls
   rules:
     - host: cymatic.example.com
       http:
         paths:
+          # nginx sorts by path length, so these longest-prefix entries win
+          # over `/v1` below. NOTE: api and llm-router BOTH serve under /v1
+          # (api: /v1/auth|projects|stream|..., llm-router: /v1/chat|
+          # embeddings|audio|router); keep these sub-paths in sync with the
+          # services' route tables if either side adds a /v1/* route.
+          - path: /health
+            pathType: Prefix
+            backend: { service: { name: api, port: { number: 8000 } } }
+          - path: /v1/chat
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
+          - path: /v1/embeddings
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
+          - path: /v1/audio
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
+          - path: /v1/router
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
           - path: /v1
             pathType: Prefix
             backend: { service: { name: api, port: { number: 8000 } } }
           - path: /
             pathType: Prefix
             backend: { service: { name: web, port: { number: 3000 } } }
+    # Viewer is a root-served static SPA (assets at /), so it gets its own
+    # host instead of a /viewer sub-path (which would need rewrites).
+    - host: viewer.cymatic.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: viewer, port: { number: 8090 } } }

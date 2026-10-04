@@ -56,6 +56,11 @@ services:
       --requirepass ${REDIS_PASSWORD:-cymatic_redis_pass}
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-cymatic_redis_pass}
+      # redis-cli (>=6.x) reads REDISCLI_AUTH, so the healthcheck below
+      # authenticates WITHOUT a `-a <password>` flag (which would leak the
+      # password in `docker ps` / inspect output). Healthchecks inherit the
+      # service environment, so this covers the ping too.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-cymatic_redis_pass}
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -64,7 +69,9 @@ services:
     mem_limit: 512m
     logging: *default-logging
     healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
+      # Uses REDISCLI_AUTH from the service environment — no `-a` flag, so
+      # the password never appears in the container's process list.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -122,10 +129,15 @@ services:
     mem_limit: 256m
     logging: *default-logging
     profiles: ["turn"]
+    # Best-effort status only: NOTHING depends_on coturn (it is opt-in via the
+    # `turn` profile), so a failed check never blocks the stack. turnutils_*
+    # is coturn's own tool (guaranteed present, unlike nc/bash /dev/tcp
+    # probes), and `timeout` (busybox applet) caps the allocate round-trip
+    # below the healthcheck timeout so a wedged daemon can't hang the check.
     healthcheck:
-      test: ["CMD-SHELL", "turnutils_uclient -p 3478 -u $${TURN_USERNAME:-cymatic} -w $${TURN_PASSWORD:-cymatic_turn_pass} 127.0.0.1 || exit 1"]
+      test: ["CMD-SHELL", "timeout 4 turnutils_uclient -p 3478 -u $${TURN_USERNAME:-cymatic} -w $${TURN_PASSWORD:-cymatic_turn_pass} 127.0.0.1 || exit 1"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 15s
 
@@ -483,6 +495,13 @@ services:
 
   test-postgres:
     image: postgres:16-alpine
+    # NOTE on test_postgres_data staleness: this volume survives `docker
+    # compose down` (only `down -v` removes it), so files persist between
+    # runs by design. That is safe because the one-shot test-db and
+    # test-db-worker services DROP + CREATE cymatic_test /
+    # cymatic_worker_test from scratch on every run (see their commands
+    # below) before test-migrate* applies migrations — no table state leaks
+    # across runs. Prod postgres_data is untouched by all of this.
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-cymatic}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cymatic}
