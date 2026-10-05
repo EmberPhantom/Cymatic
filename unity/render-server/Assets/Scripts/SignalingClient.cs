@@ -15,15 +15,20 @@ namespace Cymatic
     public class SignalingClient : MonoBehaviour
     {
         [Header("Configuration")]
-        [SerializeField] private string _signalingUrl = "ws://localhost:8080/ws";
+        // Base backend URL, e.g. "http://localhost:8000". The signaling
+        // endpoint is session-scoped: /v1/stream/ws/{sessionId}. There is no
+        // standalone signaling host/port - it's the same API server Android
+        // connects to (see VRActivity.connectToRenderServer on the Android side).
+        [SerializeField] private string _backendUrl = "http://localhost:8000";
         [SerializeField] private float _reconnectInterval = 5f;
         [SerializeField] private float _pingInterval = 10f;
-        
+
         // WebSocket
         private WebSocket _webSocket;
         private bool _isConnected = false;
         private bool _shouldReconnect = true;
-        
+        private string _sessionId;
+
         // Message handlers
         public event Action<string, string> OnOfferReceived; // sessionId, sdp
         public event Action<string, string> OnAnswerReceived; // sessionId, sdp
@@ -32,49 +37,66 @@ namespace Cymatic
         public event Action<string> OnSessionEnded; // sessionId
         public event Action OnConnected;
         public event Action OnDisconnected;
-        
+
         // Pending requests
         private Dictionary<string, Action<string>> _pendingRequests = new Dictionary<string, Action<string>>();
         private int _requestId = 0;
-        
+
         [SerializeField] private string _authToken = "";
 
         public bool IsConnected => _isConnected;
+        public string SessionId => _sessionId;
 
-        public void Configure(string url, string authToken = null)
+        public void Configure(string backendUrl, string authToken = null)
         {
-            _signalingUrl = url;
+            _backendUrl = backendUrl;
             if (!string.IsNullOrEmpty(authToken)) _authToken = authToken;
-            // Prefer wss in production; warn on cleartext ws.
-            if (_signalingUrl.StartsWith("ws://") && !_signalingUrl.Contains("localhost") && !_signalingUrl.Contains("127.0.0.1") && !_signalingUrl.Contains("10.") && !_signalingUrl.Contains("192.168."))
-                Debug.LogWarning("[Signaling] Using cleartext ws:// outside LAN; prefer wss://");
         }
-        
-        public async UniTask Connect()
+
+        /// <summary>Connect the signaling channel for a specific stream session.
+        /// Matches the backend's per-session WebSocket relay at
+        /// /v1/stream/ws/{sessionId} (the same endpoint the Android client uses
+        /// in VRActivity.connectToRenderServer) - there is no shared/global
+        /// signaling socket.</summary>
+        public async UniTask Connect(string sessionId)
         {
-            if (_isConnected) return;
-            
+            if (_isConnected && _sessionId == sessionId) return;
+            if (_isConnected) Disconnect();
+
+            _sessionId = sessionId;
             _shouldReconnect = true;
             await ConnectWebSocket();
         }
-        
+
         private async UniTask ConnectWebSocket()
         {
             try
             {
+                if (string.IsNullOrEmpty(_authToken))
+                {
+                    Debug.LogError("[Signaling] No auth token configured; cannot connect.");
+                    return;
+                }
+                if (string.IsNullOrEmpty(_sessionId))
+                {
+                    Debug.LogError("[Signaling] No session id set; call Connect(sessionId).");
+                    return;
+                }
+
                 _webSocket = new WebSocket();
                 _webSocket.OnOpen += OnWebSocketOpen;
                 _webSocket.OnMessage += OnWebSocketMessage;
                 _webSocket.OnError += OnWebSocketError;
                 _webSocket.OnClose += OnWebSocketClose;
-                // Attach Bearer auth via query when header injection unavailable
-                // (backend prefers Authorization header; query is deprecated fallback).
-                var url = _signalingUrl;
-                if (!string.IsNullOrEmpty(_authToken) && !url.Contains("token="))
-                    url += (url.Contains("?") ? "&" : "?") + "type=render_server";
-                await _webSocket.Connect(url);
-                if (!string.IsNullOrEmpty(_authToken))
-                    Debug.Log("[Signaling] Connecting with auth token (prefer header where supported)");
+
+                var wsBase = _backendUrl.Replace("https://", "wss://").Replace("http://", "ws://");
+                var url = $"{wsBase}/v1/stream/ws/{_sessionId}?type=render_server";
+                if (url.StartsWith("ws://") && !url.Contains("localhost") && !url.Contains("127.0.0.1") && !url.Contains("10.") && !url.Contains("192.168."))
+                    Debug.LogWarning("[Signaling] Using cleartext ws:// outside LAN; prefer wss://");
+
+                // Backend prefers the Authorization header over the deprecated
+                // ?token= query param (see websocket_signaling in streaming.py).
+                await _webSocket.Connect(url, _authToken);
             }
             catch (Exception e)
             {
@@ -82,13 +104,13 @@ namespace Cymatic
                 await ScheduleReconnect();
             }
         }
-        
+
         private void OnWebSocketOpen()
         {
             _isConnected = true;
             Debug.Log("[Signaling] Connected");
             OnConnected?.Invoke();
-            
+
             // Register as render server - P0 FIX: 79 server_id should use RenderServerId not gameObject.name
             string serverId = "render-server-01";
             try
@@ -102,7 +124,7 @@ namespace Cymatic
                 }
             }
             catch {}
-            
+
             Send(new SignalingMessage
             {
                 type = "register",
@@ -112,11 +134,11 @@ namespace Cymatic
                     type = "render_server"
                 }
             });
-            
+
             // Start ping
             PingLoop().Forget();
         }
-        
+
         private void OnWebSocketMessage(string message)
         {
             try
@@ -129,7 +151,7 @@ namespace Cymatic
                 Debug.LogError($"[Signaling] Failed to parse message: {e.Message}");
             }
         }
-        
+
         private void HandleMessage(SignalingMessage msg)
         {
             if (msg == null) return;
@@ -139,37 +161,37 @@ namespace Cymatic
                     var offerPayload = JsonConvert.DeserializeObject<OfferPayload>(msg.payload.ToString());
                     OnOfferReceived?.Invoke(offerPayload.session_id, offerPayload.sdp);
                     break;
-                    
+
                 case "answer":
                     var answerPayload = JsonConvert.DeserializeObject<AnswerPayload>(msg.payload.ToString());
                     OnAnswerReceived?.Invoke(answerPayload.session_id, answerPayload.sdp);
                     break;
-                    
+
                 case "candidate":
                     var candidatePayload = JsonConvert.DeserializeObject<CandidatePayload>(msg.payload.ToString());
                     OnCandidateReceived?.Invoke(candidatePayload.session_id, candidatePayload.candidate, candidatePayload.sdp_mid, candidatePayload.sdp_mline_index);
                     break;
-                    
+
                 case "input":
                     var inputPayload = JsonConvert.DeserializeObject<InputPayload>(msg.payload.ToString());
                     OnInputReceived?.Invoke(inputPayload.session_id, inputPayload.input);
                     break;
-                    
+
                 case "end_session":
                     var endPayload = JsonConvert.DeserializeObject<EndSessionPayload>(msg.payload.ToString());
                     OnSessionEnded?.Invoke(endPayload.session_id);
                     break;
-                    
+
                 case "response":
                     HandleResponse(msg);
                     break;
-                    
+
                 case "ping":
                     Send(new SignalingMessage { type = "pong", id = msg.id });
                     break;
             }
         }
-        
+
         private void HandleResponse(SignalingMessage msg)
         {
             if (msg == null || string.IsNullOrEmpty(msg.id)) return;
@@ -179,24 +201,24 @@ namespace Cymatic
                 callback?.Invoke(msg.payload?.ToString());
             }
         }
-        
+
         private void OnWebSocketError(string error)
         {
             Debug.LogError($"[Signaling] Error: {error}");
         }
-        
+
         private void OnWebSocketClose(int code, string reason)
         {
             _isConnected = false;
             Debug.Log($"[Signaling] Disconnected: {code} - {reason}");
             OnDisconnected?.Invoke();
-            
+
             if (_shouldReconnect)
             {
                 ScheduleReconnect().Forget();
             }
         }
-        
+
         private async UniTaskVoid ScheduleReconnect()
         {
             await UniTask.Delay(TimeSpan.FromSeconds(_reconnectInterval));
@@ -205,7 +227,7 @@ namespace Cymatic
                 await ConnectWebSocket();
             }
         }
-        
+
         private async UniTaskVoid PingLoop()
         {
             while (_isConnected)
@@ -217,18 +239,18 @@ namespace Cymatic
                 }
             }
         }
-        
+
         public void Send(SignalingMessage message)
         {
             if (!_isConnected || _webSocket == null) return;
-            
+
             if (string.IsNullOrEmpty(message.id))
                 message.id = GenerateId();
-            
+
             var json = JsonConvert.SerializeObject(message);
             _webSocket.Send(json);
         }
-        
+
         public void SendOffer(string sessionId, string sdp)
         {
             Send(new SignalingMessage
@@ -237,7 +259,7 @@ namespace Cymatic
                 payload = new OfferPayload { session_id = sessionId, sdp = sdp }
             });
         }
-        
+
         public void SendAnswer(string sessionId, string sdp)
         {
             Send(new SignalingMessage
@@ -246,7 +268,7 @@ namespace Cymatic
                 payload = new AnswerPayload { session_id = sessionId, sdp = sdp }
             });
         }
-        
+
         public void SendIceCandidate(string sessionId, string candidate, string sdpMid, int sdpMLineIndex)
         {
             Send(new SignalingMessage
@@ -261,7 +283,7 @@ namespace Cymatic
                 }
             });
         }
-        
+
         public void SendInput(string sessionId, InputManager.InputPacket input)
         {
             Send(new SignalingMessage
@@ -270,7 +292,7 @@ namespace Cymatic
                 payload = new InputPayload { session_id = sessionId, input = input }
             });
         }
-        
+
         public void Disconnect()
         {
             _shouldReconnect = false;
@@ -281,18 +303,18 @@ namespace Cymatic
             }
             _isConnected = false;
         }
-        
+
         private string GenerateId()
         {
             return $"{++_requestId}_{Guid.NewGuid().ToString("N")[..8]}";
         }
-        
+
         private void OnDestroy()
         {
             Disconnect();
         }
     }
-    
+
     [System.Serializable]
     public class SignalingMessage
     {
@@ -300,28 +322,28 @@ namespace Cymatic
         public string type;
         public object payload;
     }
-    
+
     [System.Serializable]
     public class RegisterPayload
     {
         public string server_id;
         public string type;
     }
-    
+
     [System.Serializable]
     public class OfferPayload
     {
         public string session_id;
         public string sdp;
     }
-    
+
     [System.Serializable]
     public class AnswerPayload
     {
         public string session_id;
         public string sdp;
     }
-    
+
     [System.Serializable]
     public class CandidatePayload
     {
@@ -330,14 +352,14 @@ namespace Cymatic
         public string sdp_mid;
         public int sdp_mline_index;
     }
-    
+
     [System.Serializable]
     public class InputPayload
     {
         public string session_id;
         public InputManager.InputPacket input;
     }
-    
+
     [System.Serializable]
     public class EndSessionPayload
     {
@@ -352,38 +374,40 @@ public class WebSocket
     public event Action<string> OnMessage;
     public event Action<string> OnError;
     public event Action<int, string> OnClose;
-    
+
     private System.Net.WebSockets.ClientWebSocket _ws;
     private System.Threading.CancellationTokenSource _cts;
     private bool _isConnected = false;
-    
-    public async Cysharp.Threading.Tasks.UniTask Connect(string url)
+
+    public async Cysharp.Threading.Tasks.UniTask Connect(string url, string authToken = null)
     {
         _ws = new System.Net.WebSockets.ClientWebSocket();
+        if (!string.IsNullOrEmpty(authToken))
+            _ws.Options.SetRequestHeader("Authorization", $"Bearer {authToken}");
         _cts = new System.Threading.CancellationTokenSource();
-        
+
         await _ws.ConnectAsync(new Uri(url), _cts.Token);
         _isConnected = true;
-        
+
         OnOpen?.Invoke();
-        
+
         // Start receiving
         ReceiveLoop().Forget();
     }
-    
+
     private async Cysharp.Threading.Tasks.UniTaskVoid ReceiveLoop()
     {
         // P0 FIX: 347 buffer 4096 truncation -> use larger buffer and handle fragmentation via MemoryStream
         var buffer = new byte[16384];
         var messageStream = new MemoryStream();
-        
+
         while (_isConnected && _cts != null && !_cts.Token.IsCancellationRequested)
         {
             try
             {
                 var segment = new ArraySegment<byte>(buffer);
                 var result = await _ws.ReceiveAsync(segment, _cts.Token);
-                
+
                 if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
                 {
                     await CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "Closed by server");
@@ -417,17 +441,17 @@ public class WebSocket
                 break;
             }
         }
-        
+
         _isConnected = false;
         OnClose?.Invoke(0, "Disconnected");
         messageStream?.Dispose();
     }
-    
+
     public void Send(string message)
     {
         if (!_isConnected || _ws == null) return;
         if (_cts == null || _cts.Token.IsCancellationRequested) return;
-        
+
         var bytes = System.Text.Encoding.UTF8.GetBytes(message);
         var segment = new ArraySegment<byte>(bytes);
         // P0 FIX: 375 Send Forget -> avoid .Forget() on Task (no UniTask extension for Task)
@@ -450,12 +474,12 @@ public class WebSocket
             UnityEngine.Debug.LogWarning($"[WebSocket] Send failed: {e.Message}");
         }
     }
-    
+
     public async Cysharp.Threading.Tasks.UniTask CloseAsync(System.Net.WebSockets.WebSocketCloseStatus status, string reason)
     {
         _isConnected = false;
         try { _cts?.Cancel(); } catch {}
-        
+
         if (_ws != null)
         {
             try
@@ -468,7 +492,7 @@ public class WebSocket
             _ws = null;
         }
     }
-    
+
     public void Close()
     {
         // P0 FIX: use UniTask Forget properly with CloseAsync

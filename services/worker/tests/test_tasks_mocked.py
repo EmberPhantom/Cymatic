@@ -1,4 +1,5 @@
 """Mocked tests for generation tasks to boost coverage"""
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from cymatic_shared.models import SpecStatus
@@ -8,24 +9,51 @@ VALID_SPEC_DICT = {
     "domain": "real_estate",
     "metadata": {"title": "Test", "description": "Test", "version": "1.0"},
     "entities": [
-        {"id": "room1", "type": "room", "name": "Living Room", "position": [0,0,0], "properties": {"size": [15, 20, 10]}},
+        {
+            "id": "room1",
+            "type": "room",
+            "name": "Living Room",
+            "position": [0, 0, 0],
+            "properties": {"size": [15, 20, 10]},
+        },
     ],
     "navigation": {
         "points": [
-            {"id": "nav1", "name": "Living", "position": [7.5,1.6,10], "connections": ["nav2"]},
-            {"id": "nav2", "name": "Bedroom", "position": [26,1.6,6], "connections": ["nav1"]},
+            {
+                "id": "nav1",
+                "name": "Living",
+                "position": [7.5, 1.6, 10],
+                "connections": ["nav2"],
+            },
+            {
+                "id": "nav2",
+                "name": "Bedroom",
+                "position": [26, 1.6, 6],
+                "connections": ["nav1"],
+            },
         ],
         "paths": [{"from": "nav1", "to": "nav2"}],
-        "default_start_point": "nav1"
+        "default_start_point": "nav1",
     },
     "lighting": {"preset": "warm", "time_of_day": "evening", "ambient_intensity": 0.8},
-    "copilot_policy": {"enabled": True, "languages": ["en"], "default_language": "en", "personality": "helpful_guide"},
-    "performance_budget": {"target_fps": 60, "max_triangles": 100000, "max_draw_calls": 50, "texture_budget_mb": 100}
+    "copilot_policy": {
+        "enabled": True,
+        "languages": ["en"],
+        "default_language": "en",
+        "personality": "helpful_guide",
+    },
+    "performance_budget": {
+        "target_fps": 60,
+        "max_triangles": 100000,
+        "max_draw_calls": 50,
+        "texture_budget_mb": 100,
+    },
 }
 
 
 def _make_mock_session(scalar_returns=None, execute_returns=None):
     mock_session = AsyncMock()
+
     # execute mock
     async def fake_execute(*args, **kwargs):
         mock_result = MagicMock()
@@ -43,12 +71,15 @@ def _make_mock_session(scalar_returns=None, execute_returns=None):
             mock_result.scalar_one_or_none.return_value = None
         mock_result.scalars.return_value.all.return_value = []
         return mock_result
+
     mock_session.execute = fake_execute
+
     # scalar helper (for db.scalar)
     async def fake_scalar(stmt):
         if scalar_returns is not None and scalar_returns:
             return scalar_returns.pop(0)
         return None
+
     mock_session.scalar = fake_scalar
     mock_session.commit = AsyncMock()
     mock_session.add = MagicMock()
@@ -63,6 +94,7 @@ def _make_mock_session(scalar_returns=None, execute_returns=None):
 @pytest.mark.asyncio
 async def test_validate_spec_task_success():
     from app.tasks.generation import validate_spec_task
+
     mock_spec = MagicMock()
     mock_spec.id = 1
     mock_spec.payload_json = VALID_SPEC_DICT
@@ -83,6 +115,7 @@ async def test_validate_spec_task_success():
 @pytest.mark.asyncio
 async def test_validate_spec_task_not_found():
     from app.tasks.generation import validate_spec_task
+
     mock_cm, _ = _make_mock_session(scalar_returns=[None])
     with patch("app.tasks.generation.AsyncSessionLocal", return_value=mock_cm):
         try:
@@ -95,17 +128,22 @@ async def test_validate_spec_task_not_found():
 @pytest.mark.asyncio
 async def test_analytics_aggregation_empty():
     from app.tasks.generation import analytics_aggregation_task
+
     # sessions empty, events empty
-    mock_cm, mock_session = _make_mock_session(scalar_returns=[[]])  # sessions_result.scalars().all() returns []
+    mock_cm, mock_session = _make_mock_session(
+        scalar_returns=[[]]
+    )  # sessions_result.scalars().all() returns []
     # But analytics does two queries: first for sessions, second for events if session_ids
     # Our fake_execute currently handles one call; need to handle two calls
     # Simplify: mock execute to return empty for both
     mock_session = AsyncMock()
+
     async def fake_execute(*args, **kwargs):
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = []
         mock_result.scalar_one_or_none.return_value = None
         return mock_result
+
     mock_session.execute = fake_execute
     mock_session.scalar = AsyncMock(return_value=None)
     mock_session.commit = AsyncMock()
@@ -121,6 +159,7 @@ async def test_analytics_aggregation_empty():
 @pytest.mark.asyncio
 async def test_process_asset_task_not_found():
     from app.tasks.generation import process_asset_task
+
     mock_cm, _ = _make_mock_session(scalar_returns=[None])
     with patch("app.tasks.generation.AsyncSessionLocal", return_value=mock_cm):
         try:
@@ -133,6 +172,7 @@ async def test_process_asset_task_not_found():
 @pytest.mark.asyncio
 async def test_publish_scene_task_missing_ids():
     from app.tasks.generation import publish_scene_task
+
     try:
         await publish_scene_task({"project_id": None, "scene_package_id": None})
         assert False
@@ -144,6 +184,7 @@ async def test_publish_scene_task_missing_ids():
 async def test_generate_scene_task_invalid_spec_status():
     from app.tasks.generation import generate_scene_task
     from cymatic_shared.models import ProjectStatus
+
     mock_project = MagicMock()
     mock_project.id = 1
     mock_project.domain = "real_estate"
@@ -159,6 +200,7 @@ async def test_generate_scene_task_invalid_spec_status():
     # Need to mock db.execute for project and spec
     mock_session = AsyncMock()
     call_count = {"n": 0}
+
     async def fake_execute(stmt, *args, **kwargs):
         mock_result = MagicMock()
         if call_count["n"] == 0:
@@ -169,6 +211,7 @@ async def test_generate_scene_task_invalid_spec_status():
             mock_result.scalar_one_or_none.return_value = None
         call_count["n"] += 1
         return mock_result
+
     mock_session.execute = fake_execute
     mock_session.scalar = AsyncMock(return_value=None)
     mock_session.commit = AsyncMock()

@@ -60,7 +60,10 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD curl -fsS http://localhost:8001/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# Single worker by default: the router is stateless (Redis-backed cache/usage)
+# and fits the compose mem_limit 512m / k8s limit 512Mi with headroom. Scale
+# via k8s replicas or compose `--scale`, not workers, to stay under the limit.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers ${LLM_ROUTER_WORKERS:-1}"]
 
 # ── Test ───────────────────────────────────────────────────────
 FROM runtime AS test

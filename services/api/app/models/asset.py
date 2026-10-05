@@ -38,6 +38,7 @@ class Asset(Base):
     status: Mapped[AssetStatus] = mapped_column(
         Enum(AssetStatus, values_callable=lambda x: [e.value for e in x]),
         default=AssetStatus.UPLOADED,
+        server_default="uploaded",
         nullable=False,
     )
     metadata_json = Column(JSON, nullable=True)

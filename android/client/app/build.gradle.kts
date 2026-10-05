@@ -112,27 +112,23 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
-    // WebRTC
+    // WebRTC (legacy Unity streaming path, frozen)
     implementation("org.webrtc:google-webrtc:1.0.32006")
+    // Native on-device 3D renderer (Unity-free path)
+    implementation("com.google.android.filament:filament-android:1.77.1")
+    implementation("com.google.android.filament:gltfio-android:1.77.1")
     // Networking
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("com.neovisionaries:nv-websocket-client:2.14")
     // JSON
     implementation("com.google.code.gson:gson:2.10.1")
     // Media / Camera
     implementation("androidx.camera:camera-core:1.3.1")
     implementation("androidx.camera:camera-camera2:1.3.1")
     implementation("androidx.camera:camera-view:1.3.1")
-    implementation("androidx.camera:camera-video:1.3.1")
-    implementation("androidx.media3:media3-exoplayer:1.1.1")
     // Sensors
-    implementation("androidx.room:room-runtime:2.6.1")
-    kapt("androidx.room:room-compiler:2.6.1")
-    // Serialization
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.1")
     // Hand Tracking — optional, feature-flagged. Kept in base for assembleDebug compat;
     // bundle splits + isMinify/isShrinkResources strip it for base APKs; for full size savings
     // extract to :feature_handtracking dynamic-feature (on-demand) per docs.

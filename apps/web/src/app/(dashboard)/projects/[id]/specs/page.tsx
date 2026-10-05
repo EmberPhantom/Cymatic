@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation"
 import { useState, useRef, useCallback } from "react"
 import { useSpecs } from "@/hooks/use-specs"
+import { specPayloadSchema, specSection } from "@/lib/validations"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import type { BadgeProps } from "@/components/ui/badge"
@@ -198,18 +199,19 @@ export default function SpecsPage() {
       ) : specs && specs.length > 0 ? (
         <div className="space-y-6">
           {specs.map((spec) => {
-            const payload = spec.payload_json as Record<string, unknown> | null
-            const entitiesArray = (payload && Array.isArray((payload as Record<string, unknown>).entities)
-              ? ((payload as Record<string, unknown>).entities as unknown[])
-              : []) as unknown[]
+            // Narrow the free-form payload through the Zod boundary schema.
+            const payloadCheck = specPayloadSchema.safeParse(spec.payload_json)
+            const entitiesArray = payloadCheck.success && Array.isArray(payloadCheck.data.entities)
+              ? (payloadCheck.data.entities as unknown[])
+              : []
 
-            const perf = (payload?.performance_budget || {}) as Record<string, unknown>
-            const spatial = (payload?.spatial_layout || {}) as Record<string, unknown>
+            const perf = specSection(spec.payload_json, "performance_budget")
+            const spatial = specSection(spec.payload_json, "spatial_layout")
 
             return (
               <div key={spec.id} className="space-y-4">
                 {/* Spec Overview Card */}
-                <div className="p-4 rounded-xl border border-warmgray bg-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="p-4 rounded-xl border border-warmgray bg-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
                   <div className="flex items-center gap-3">
                     <div className="h-10 w-10 rounded-lg bg-gold-50 dark:bg-gold-950/30 text-gold flex items-center justify-center border border-gold-200">
                       <ShieldCheck className="h-5 w-5" />
@@ -235,7 +237,7 @@ export default function SpecsPage() {
                 </div>
 
                 {/* Section 1: Performance Budget (Technical Table) */}
-                <Card className="border-warmgray shadow-2xs overflow-hidden">
+                <Card className="border-warmgray shadow-sm overflow-hidden">
                   <CardHeader
                     className="p-4 py-3 bg-muted/20 cursor-pointer flex flex-row items-center justify-between border-b border-warmgray"
                     onClick={() => toggleSection("performance")}
@@ -286,7 +288,7 @@ export default function SpecsPage() {
                 </Card>
 
                 {/* Section 2: Spatial Architecture & Entities */}
-                <Card className="border-warmgray shadow-2xs overflow-hidden">
+                <Card className="border-warmgray shadow-sm overflow-hidden">
                   <CardHeader
                     className="p-4 py-3 bg-muted/20 cursor-pointer flex flex-row items-center justify-between border-b border-warmgray"
                     onClick={() => toggleSection("spatial")}
@@ -315,7 +317,7 @@ export default function SpecsPage() {
                 </Card>
 
                 {/* Section 3: Materials & Baked Global Illumination */}
-                <Card className="border-warmgray shadow-2xs overflow-hidden">
+                <Card className="border-warmgray shadow-sm overflow-hidden">
                   <CardHeader
                     className="p-4 py-3 bg-muted/20 cursor-pointer flex flex-row items-center justify-between border-b border-warmgray"
                     onClick={() => toggleSection("materials")}
@@ -350,7 +352,7 @@ export default function SpecsPage() {
                 </Card>
 
                 {/* Section 4: Camera & Stereoscopic VR Configuration */}
-                <Card className="border-warmgray shadow-2xs overflow-hidden">
+                <Card className="border-warmgray shadow-sm overflow-hidden">
                   <CardHeader
                     className="p-4 py-3 bg-muted/20 cursor-pointer flex flex-row items-center justify-between border-b border-warmgray"
                     onClick={() => toggleSection("camera")}
@@ -386,7 +388,7 @@ export default function SpecsPage() {
                 </Card>
 
                 {/* Section 5: Raw Specification JSON */}
-                <Card className="border-warmgray shadow-2xs overflow-hidden">
+                <Card className="border-warmgray shadow-sm overflow-hidden">
                   <CardHeader
                     className="p-4 py-3 bg-muted/20 cursor-pointer flex flex-row items-center justify-between border-b border-warmgray"
                     onClick={() => toggleSection("json")}

@@ -185,7 +185,7 @@ export default function AssetsPage() {
             size="sm"
             onClick={() => fileInputRef.current?.click()}
             disabled={upload.isPending}
-            className="gap-1.5 font-medium shadow-xs"
+            className="gap-1.5 font-medium shadow-sm"
           >
             <Plus className="h-4 w-4" />
             <span>{upload.isPending ? "Uploading…" : "+ Upload Asset"}</span>
@@ -202,11 +202,11 @@ export default function AssetsPage() {
         aria-label="Upload drop zone"
         className={`rounded-2xl border-2 border-dashed p-8 text-center transition-all ${
           isDragOver
-            ? "border-terracotta bg-terracotta-50/40 dark:bg-terracotta-950/20 shadow-xs"
+            ? "border-terracotta bg-terracotta-50/40 dark:bg-terracotta-950/20 shadow-sm"
             : "border-warmgray bg-muted/20 hover:border-foreground/40 hover:bg-muted/30"
         } ${upload.isPending ? "opacity-60 pointer-events-none" : ""}`}
       >
-        <div className="h-10 w-10 rounded-xl bg-card border border-warmgray text-terracotta mx-auto flex items-center justify-center mb-2 shadow-2xs">
+        <div className="h-10 w-10 rounded-xl bg-card border border-warmgray text-terracotta mx-auto flex items-center justify-center mb-2 shadow-sm">
           <Upload className="h-5 w-5" />
         </div>
         <p className="text-xs font-semibold text-foreground">
@@ -235,7 +235,7 @@ export default function AssetsPage() {
           type="button"
           onClick={() => setCategory("all")}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-            category === "all" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+            category === "all" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-sm" : "text-stonegray hover:text-foreground hover:bg-muted/40"
           }`}
         >
           All Assets ({assets?.length || 0})
@@ -244,7 +244,7 @@ export default function AssetsPage() {
           type="button"
           onClick={() => setCategory("models")}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-            category === "models" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+            category === "models" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-sm" : "text-stonegray hover:text-foreground hover:bg-muted/40"
           }`}
         >
           3D Models (.glb, .obj)
@@ -253,7 +253,7 @@ export default function AssetsPage() {
           type="button"
           onClick={() => setCategory("textures")}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-            category === "textures" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+            category === "textures" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-sm" : "text-stonegray hover:text-foreground hover:bg-muted/40"
           }`}
         >
           Textures &amp; Images
@@ -262,7 +262,7 @@ export default function AssetsPage() {
           type="button"
           onClick={() => setCategory("audio")}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-            category === "audio" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-xs" : "text-stonegray hover:text-foreground hover:bg-muted/40"
+            category === "audio" ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal font-semibold shadow-sm" : "text-stonegray hover:text-foreground hover:bg-muted/40"
           }`}
         >
           Audio &amp; Narration
@@ -310,7 +310,7 @@ export default function AssetsPage() {
               <Card
                 key={asset.id}
                 tabIndex={0}
-                className="border-warmgray bg-card hover:border-foreground/40 hover:shadow-xs transition-all overflow-hidden flex flex-col justify-between"
+                className="border-warmgray bg-card hover:border-foreground/40 hover:shadow-sm transition-all overflow-hidden flex flex-col justify-between"
               >
                 <CardContent className="p-3.5 space-y-3">
                   {/* Thumbnail / Graphic representation */}

@@ -31,7 +31,11 @@ class LLMCache:
 
     def __init__(self, redis_url: str | None = None) -> None:
         # DB 1 = cache (isolated from rate/quota DBs)
-        self.redis_url = redis_url or getattr(settings, "REDIS_CACHE_URL", None) or settings.REDIS_URL
+        self.redis_url = (
+            redis_url
+            or getattr(settings, "REDIS_CACHE_URL", None)
+            or settings.REDIS_URL
+        )
         self._client: redis.Redis | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self.default_ttl = timedelta(hours=1)
@@ -45,7 +49,11 @@ class LLMCache:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if self._client is not None and running is not None and self._loop is not running:
+        if (
+            self._client is not None
+            and running is not None
+            and self._loop is not running
+        ):
             self._client = None
             self._loop = None
         if not self._client:
@@ -99,6 +107,10 @@ class LLMCache:
         except Exception:
             return True
 
+    @staticmethod
+    def _has_tenant_scope(organization_id: str | None) -> bool:
+        return bool(organization_id and str(organization_id).strip())
+
     async def get(
         self,
         task_type: str,
@@ -110,7 +122,14 @@ class LLMCache:
         organization_id: str | None = None,
     ) -> Any | None:
         """Get cached response."""
-        key = self._make_key(task_type, model, prompt, params, sensitivity, provider, organization_id)
+        # Without a non-empty organization_id the key cannot isolate tenants,
+        # so skip the cache read entirely (fail-closed against cross-tenant
+        # collisions) rather than sharing one global entry.
+        if not self._has_tenant_scope(organization_id):
+            return None
+        key = self._make_key(
+            task_type, model, prompt, params, sensitivity, provider, organization_id
+        )
 
         # Check local hot cache first
         if key in self._local_cache:
@@ -157,7 +176,13 @@ class LLMCache:
     ) -> None:
         """Cache response."""
         # Do not cache sensitive tenant data with overly broad TTL? Still isolate via key.
-        key = self._make_key(task_type, model, prompt, params, sensitivity, provider, organization_id)
+        # Skip writes without tenant scope (mirrors get()): unscoped entries
+        # would be readable across tenants.
+        if not self._has_tenant_scope(organization_id):
+            return
+        key = self._make_key(
+            task_type, model, prompt, params, sensitivity, provider, organization_id
+        )
         ttl_val = ttl or self.default_ttl
         now = datetime.now(timezone.utc)
         expires_at = (now + ttl_val).isoformat()
@@ -189,23 +214,43 @@ class LLMCache:
         self._promote_to_local(key, entry)
 
     def _promote_to_local(self, key: str, entry: CacheEntry) -> None:
-        """Add entry to local hot cache with LRU eviction and TTL respect."""
-        # Evict expired first
-        expired = [k for k, v in self._local_cache.items() if self._is_local_expired(v)]
-        for k in expired:
-            self._local_cache.pop(k, None)
+        """Add entry to local hot cache with O(1)-ish eviction + TTL-lazy expiry.
+
+        Avoids the old O(n) full scan on every write: expired entries are
+        evicted lazily on read (see get()) plus a bounded random-sample
+        probe here; capacity is enforced by popping the oldest inserted key
+        (dict insertion order), which is O(1).
+        """
+        import random
+
+        # Refresh insertion order on re-set
+        if key in self._local_cache:
+            self._local_cache.pop(key, None)
+        # Bounded opportunistic expiry probe (max 5 keys, no full scan)
         if len(self._local_cache) >= self._max_local_size:
-            # Remove least recently used (oldest created_at)
-            # Filter non-expired only
             try:
-                oldest_key = min(self._local_cache.keys(), key=lambda k: self._local_cache[k].created_at)
-                del self._local_cache[oldest_key]
-            except ValueError:
+                sample_size = min(5, len(self._local_cache))
+                for k in random.sample(
+                    list(self._local_cache.keys()), sample_size
+                ):
+                    v = self._local_cache.get(k)
+                    if v is not None and self._is_local_expired(v):
+                        self._local_cache.pop(k, None)
+            except Exception:
                 pass
+        # Bound writes by popping oldest inserted (insertion order)
+        while len(self._local_cache) >= self._max_local_size:
+            try:
+                oldest = next(iter(self._local_cache))
+            except StopIteration:
+                break
+            self._local_cache.pop(oldest, None)
 
         self._local_cache[key] = entry
 
-    async def invalidate(self, task_type: str | None = None, model: str | None = None) -> int:
+    async def invalidate(
+        self, task_type: str | None = None, model: str | None = None
+    ) -> int:
         """Invalidate cache entries by pattern using SCAN."""
         await self.connect()
         if self._client is None:
@@ -231,9 +276,13 @@ class LLMCache:
             cursor: int | str = 0
             keys_to_delete: list[str] = []
             while True:
-                cursor, keys = await self._client.scan(cursor=cursor, match=pattern, count=200)
+                cursor, keys = await self._client.scan(
+                    cursor=cursor, match=pattern, count=200
+                )
                 if keys:
-                    keys_to_delete.extend([k.decode() if isinstance(k, bytes) else str(k) for k in keys])
+                    keys_to_delete.extend(
+                        [k.decode() if isinstance(k, bytes) else str(k) for k in keys]
+                    )
                 if cursor == 0 or cursor == "0":
                     break
             if keys_to_delete:
@@ -258,7 +307,9 @@ class LLMCache:
                 cursor = 0
                 extra_delete: list[str] = []
                 while True:
-                    cursor, keys = await self._client.scan(cursor=cursor, match="llm_cache:*", count=200)
+                    cursor, keys = await self._client.scan(
+                        cursor=cursor, match="llm_cache:*", count=200
+                    )
                     for k in keys:
                         k_str = k.decode() if isinstance(k, bytes) else str(k)
                         if k_str in keys_to_delete:
@@ -268,7 +319,9 @@ class LLMCache:
                             data = await self._client.get(k_str)
                             if data:
                                 ent = CacheEntry.model_validate_json(data)
-                                match_task = (not task_type) or ent.task_type == task_type
+                                match_task = (
+                                    not task_type
+                                ) or ent.task_type == task_type
                                 match_model = (not model) or ent.model == model
                                 if match_task and match_model:
                                     extra_delete.append(k_str)
@@ -283,7 +336,11 @@ class LLMCache:
                         deleted += int(deleted_batch)
                     for k in extra_delete:
                         self._local_cache.pop(k, None)
-                    logger.info("cache_invalidated_extra", pattern=pattern, count=len(extra_delete))
+                    logger.info(
+                        "cache_invalidated_extra",
+                        pattern=pattern,
+                        count=len(extra_delete),
+                    )
         except (redis.RedisError, OSError) as e:
             logger.warning("cache_invalidate_failed", pattern=pattern, error=str(e))
 
@@ -302,16 +359,24 @@ class LLMCache:
 
         local_size = len(self._local_cache)
         # Evict expired from count
-        local_hits = sum(e.hit_count for e in self._local_cache.values() if not self._is_local_expired(e))
+        local_hits = sum(
+            e.hit_count
+            for e in self._local_cache.values()
+            if not self._is_local_expired(e)
+        )
         # Count non-expired local entries
-        local_size = sum(1 for e in self._local_cache.values() if not self._is_local_expired(e))
+        local_size = sum(
+            1 for e in self._local_cache.values() if not self._is_local_expired(e)
+        )
 
         redis_keys = 0
         try:
             if self._client is not None:
                 cursor: int | str = 0
                 while True:
-                    cursor, keys = await self._client.scan(cursor=cursor, match="llm_cache:*", count=500)
+                    cursor, keys = await self._client.scan(
+                        cursor=cursor, match="llm_cache:*", count=500
+                    )
                     redis_keys += len(keys)
                     if cursor == 0 or cursor == "0":
                         break
@@ -323,25 +388,6 @@ class LLMCache:
             "local_total_hits": local_hits,
             "redis_keys": redis_keys,
         }
-
-    async def warm_cache(self, entries: list[dict[str, Any]]) -> None:
-        """Pre-warm cache with common responses."""
-        for entry in entries:
-            params_val = entry.get("params")
-            params: dict[str, Any] | None = params_val if isinstance(params_val, dict) else None
-            ttl_hours = entry.get("ttl_hours", 1)
-            ttl_val: timedelta = timedelta(hours=int(ttl_hours) if isinstance(ttl_hours, (int, float)) else 1)
-            await self.set(
-                task_type=str(entry["task_type"]),
-                model=str(entry["model"]),
-                prompt=str(entry["prompt"]),
-                response=entry["response"],
-                params=params,
-                ttl=ttl_val,
-                sensitivity=str(entry["sensitivity"]) if entry.get("sensitivity") else None,
-                provider=str(entry["provider"]) if entry.get("provider") else None,
-                organization_id=str(entry["organization_id"]) if entry.get("organization_id") else None,
-            )
 
 
 # Global cache instance
@@ -357,7 +403,9 @@ async def get_cached_response(
     provider: str | None = None,
     organization_id: str | None = None,
 ) -> Any | None:
-    return await llm_cache.get(task_type, model, prompt, params, sensitivity, provider, organization_id)
+    return await llm_cache.get(
+        task_type, model, prompt, params, sensitivity, provider, organization_id
+    )
 
 
 async def set_cached_response(
@@ -371,8 +419,20 @@ async def set_cached_response(
     provider: str | None = None,
     organization_id: str | None = None,
 ) -> None:
-    await llm_cache.set(task_type, model, prompt, response, params, ttl, sensitivity, provider, organization_id)
+    await llm_cache.set(
+        task_type,
+        model,
+        prompt,
+        response,
+        params,
+        ttl,
+        sensitivity,
+        provider,
+        organization_id,
+    )
 
 
-async def invalidate_cache(task_type: str | None = None, model: str | None = None) -> int:
+async def invalidate_cache(
+    task_type: str | None = None, model: str | None = None
+) -> int:
     return await llm_cache.invalidate(task_type, model)

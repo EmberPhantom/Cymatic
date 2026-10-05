@@ -1,4 +1,5 @@
 """Domain Expert Agent - Applies real estate/heritage rules, checks spatial plausibility"""
+
 from typing import Any
 
 from pydantic import BaseModel
@@ -22,15 +23,57 @@ class DomainExpertAgent:
     # Aliases so LLM/template outputs using common English names still satisfy
     # mandatory-element checks (e.g. "Sanctuary" == garbhagriha).
     HERITAGE_ELEMENT_ALIASES: dict[str, list[str]] = {
-        "garbhagriha": ["garbhagriha", "sanctum", "sanctuary", "sanctum sanctorum", "inner sanctum", "main shrine"],
+        "garbhagriha": [
+            "garbhagriha",
+            "sanctum",
+            "sanctuary",
+            "sanctum sanctorum",
+            "inner sanctum",
+            "main shrine",
+        ],
         "mandapa": ["mandapa", "main hall", "main_hall", "prayer hall", "hall"],
-        "pradakshina": ["pradakshina", "circumambulation", "pradakshina path", "courtyard path", "courtyard"],
-        "diwan_i_am": ["diwan i am", "diwan_i_am", "hall of public audience", "public hall"],
-        "diwan_i_khas": ["diwan i khas", "diwan_i_khas", "hall of private audience", "private hall"],
+        "pradakshina": [
+            "pradakshina",
+            "circumambulation",
+            "pradakshina path",
+            "courtyard path",
+            "courtyard",
+        ],
+        "diwan_i_am": [
+            "diwan i am",
+            "diwan_i_am",
+            "hall of public audience",
+            "public hall",
+        ],
+        "diwan_i_khas": [
+            "diwan i khas",
+            "diwan_i_khas",
+            "hall of private audience",
+            "private hall",
+        ],
         "zenana": ["zenana", "women quarters", "private quarters", "inner chambers"],
-        "main_gateway": ["main gateway", "main_gateway", "entrance gate", "gate", "darwaza"],
-        "charbagh": ["charbagh", "gardens", "garden", "reflection pools", "paradise garden"],
-        "main_chamber": ["main chamber", "main_chamber", "central chamber", "mausoleum hall", "cenotaph chamber", "tomb chamber"],
+        "main_gateway": [
+            "main gateway",
+            "main_gateway",
+            "entrance gate",
+            "gate",
+            "darwaza",
+        ],
+        "charbagh": [
+            "charbagh",
+            "gardens",
+            "garden",
+            "reflection pools",
+            "paradise garden",
+        ],
+        "main_chamber": [
+            "main chamber",
+            "main_chamber",
+            "central chamber",
+            "mausoleum hall",
+            "cenotaph chamber",
+            "tomb chamber",
+        ],
         "prayer_hall": ["prayer hall", "prayer_hall", "mosque", "masjid"],
     }
 
@@ -69,9 +112,9 @@ class DomainExpertAgent:
             "bathroom": ["toilet", "sink", "shower/tub"],
             "kitchen": ["sink", "dishwasher"],
             "laundry": ["washer", "dryer"],
-        }
+        },
     }
-    
+
     # Heritage Rules
     HERITAGE_RULES: dict[str, Any] = {
         "temple": {
@@ -84,15 +127,16 @@ class DomainExpertAgent:
             "decorum": {
                 "no_shoes_area": True,
                 "circumambulation_direction": "clockwise",
-            }
-        },        "palace": {
+            },
+        },
+        "palace": {
             "hierarchy": ["public", "semi-private", "private"],
             "courtyard_sequence": ["outer", "middle", "inner"],
             "mandatory_elements": ["diwan_i_am", "diwan_i_khas", "zenana"],
             "proportions": {
                 "courtyard_aspect_ratio": 1.0,
                 "hall_height_to_width": 0.5,
-            }
+            },
         },
         "courtyard": {
             "enclosure": "four_sided_preferred",
@@ -102,7 +146,12 @@ class DomainExpertAgent:
         },
         "mausoleum": {
             "layout": "symmetric_charbagh",
-            "mandatory_elements": ["main_gateway", "charbagh", "main_chamber", "prayer_hall"],
+            "mandatory_elements": [
+                "main_gateway",
+                "charbagh",
+                "main_chamber",
+                "prayer_hall",
+            ],
             "proportions": {
                 "dome_height_to_base": 1.0,
             },
@@ -111,24 +160,24 @@ class DomainExpertAgent:
             },
         },
     }
-    
+
     def check_spec(self, spec: SimulationSpec) -> DomainCheckResult:
         """Run domain-specific checks on specification."""
         if spec.domain == "real_estate":
             return self._check_real_estate(spec)
         elif spec.domain == "heritage":
             return self._check_heritage(spec)
-        
+
         return DomainCheckResult(valid=True)
-    
+
     def _check_real_estate(self, spec: SimulationSpec) -> DomainCheckResult:
         """Check real estate specification for compliance."""
         issues = []
         suggestions = []
         score = 1.0
-        
+
         rooms = [e for e in spec.entities if e.type == "room"]
-        
+
         # Check room dimensions
         for room in rooms:
             room_type = self._identify_room_type(room)
@@ -142,54 +191,68 @@ class DomainExpertAgent:
                     or not all(isinstance(v, (int, float)) for v in size[:3])
                 ):
                     # Missing/unparseable dimensions: flag as warning, not fatal
-                    issues.append({
-                        "entity": room.id,
-                        "field": "properties.size",
-                        "message": f"Room '{room.name}' has no measurable size (expected [width, depth, height])",
-                        "severity": "warning"
-                    })
+                    issues.append(
+                        {
+                            "entity": room.id,
+                            "field": "properties.size",
+                            "message": f"Room '{room.name}' has no measurable size (expected [width, depth, height])",
+                            "severity": "warning",
+                        }
+                    )
                     score -= 0.02
                     continue
 
                 width, depth, height = float(size[0]), float(size[1]), float(size[2])
-                
+
                 if width < min_dims["width"]:
-                    issues.append({
-                        "entity": room.id,
-                        "field": "size.width",
-                        "message": f"{room_type} width {width}m below minimum {min_dims['width']}m",
-                        "severity": "warning"
-                    })
+                    issues.append(
+                        {
+                            "entity": room.id,
+                            "field": "size.width",
+                            "message": f"{room_type} width {width}m below minimum {min_dims['width']}m",
+                            "severity": "warning",
+                        }
+                    )
                     score -= 0.05
 
                 if depth < min_dims["depth"]:
-                    issues.append({
-                        "entity": room.id,
-                        "field": "size.depth",
-                        "message": f"{room_type} depth {depth}m below minimum {min_dims['depth']}m",
-                        "severity": "warning"
-                    })
+                    issues.append(
+                        {
+                            "entity": room.id,
+                            "field": "size.depth",
+                            "message": f"{room_type} depth {depth}m below minimum {min_dims['depth']}m",
+                            "severity": "warning",
+                        }
+                    )
                     score -= 0.05
 
                 if height < self.REAL_ESTATE_RULES["ceiling_height_min"]:
-                    issues.append({
-                        "entity": room.id,
-                        "field": "size.height",
-                        "message": f"Ceiling height {height}m below minimum {self.REAL_ESTATE_RULES['ceiling_height_min']}m",
-                        "severity": "error"
-                    })
+                    issues.append(
+                        {
+                            "entity": room.id,
+                            "field": "size.height",
+                            "message": f"Ceiling height {height}m below minimum {self.REAL_ESTATE_RULES['ceiling_height_min']}m",
+                            "severity": "error",
+                        }
+                    )
                     score -= 0.1
-        
+
         # Check bathroom clearances
         bathrooms = [r for r in rooms if self._identify_room_type(r) == "bathroom"]
         for bath in bathrooms:
-            suggestions.append(f"Verify bathroom '{bath.name}' meets clearance requirements")
-        
+            suggestions.append(
+                f"Verify bathroom '{bath.name}' meets clearance requirements"
+            )
+
         # Check kitchen work triangle
-        kitchen = next((r for r in rooms if self._identify_room_type(r) == "kitchen"), None)
+        kitchen = next(
+            (r for r in rooms if self._identify_room_type(r) == "kitchen"), None
+        )
         if kitchen:
-            suggestions.append("Verify kitchen work triangle (sink-stove-fridge) under 26ft total")
-        
+            suggestions.append(
+                "Verify kitchen work triangle (sink-stove-fridge) under 26ft total"
+            )
+
         # Check window requirements - missing has_window is a warning (not fatal)
         # so SLM outputs that omit the flag don't block spec generation; the
         # architect scaffold now defaults bedrooms to has_window=True.
@@ -198,33 +261,37 @@ class DomainExpertAgent:
             has_window = bed.properties.get("has_window")
             # Treat None/missing or False as missing window; True only passes
             if has_window is not True:
-                issues.append({
-                    "entity": bed.id,
-                    "field": "properties.has_window",
-                    "message": "Bedroom should have at least one window for egress (has_window missing/false)",
-                    "severity": "warning"
-                })
+                issues.append(
+                    {
+                        "entity": bed.id,
+                        "field": "properties.has_window",
+                        "message": "Bedroom should have at least one window for egress (has_window missing/false)",
+                        "severity": "warning",
+                    }
+                )
                 score -= 0.02
-        
+
         # Check navigation flow
         nav_points = spec.navigation.points
-        room_nav_points = [p for p in nav_points if any(r.name in p.name for r in rooms)]
+        room_nav_points = [
+            p for p in nav_points if any(r.name in p.name for r in rooms)
+        ]
         if len(room_nav_points) < len(rooms):
             suggestions.append("Consider adding navigation points for all major rooms")
-        
+
         return DomainCheckResult(
             valid=len([i for i in issues if i["severity"] == "error"]) == 0,
             issues=issues,
             suggestions=suggestions,
-            compliance_score=max(0.0, score)
+            compliance_score=max(0.0, score),
         )
-    
+
     def _check_heritage(self, spec: SimulationSpec) -> DomainCheckResult:
         """Check heritage specification for compliance."""
         issues = []
         suggestions = []
         score = 1.0
-        
+
         # Identify site type from entities
         site_type = self._identify_heritage_type(spec)
         rules = self.HERITAGE_RULES.get(site_type, {})
@@ -239,19 +306,20 @@ class DomainExpertAgent:
         # an otherwise coherent run — surface as suggestions instead.
         type_cues = self._heritage_type_cues(spec)
         strict = len(type_cues) >= 2
-        
+
         # Check mandatory elements - strict word-boundary match, not raw substring.
         # Normalizes "_" and spaces, then checks token containment to avoid false positives.
         # Alias-aware: "Sanctuary" satisfies garbhagriha, "Main Hall" satisfies
         # mandapa, etc. (see HERITAGE_ELEMENT_ALIASES).
         mandatory = rules.get("mandatory_elements", [])
         # Normalized entity names: lower, "_"->" "
-        entity_names_norm = [e.name.lower().replace("_", " ").strip() for e in spec.entities]
+        entity_names_norm = [
+            e.name.lower().replace("_", " ").strip() for e in spec.entities
+        ]
         entity_tokens_list = [set(n.split()) for n in entity_names_norm]
 
         for element in mandatory:
             elem_norm = element.lower().replace("_", " ").strip()
-            elem_tokens = set(elem_norm.split())
             aliases = self.HERITAGE_ELEMENT_ALIASES.get(element, [elem_norm])
             alias_norms = [a.lower().replace("_", " ").strip() for a in aliases]
             found = False
@@ -260,7 +328,11 @@ class DomainExpertAgent:
                 candidates = [elem_norm, *alias_norms]
                 for cand in candidates:
                     cand_tokens = set(cand.split())
-                    if cand == name_norm or cand_tokens.issubset(tokens) or cand in name_norm:
+                    if (
+                        cand == name_norm
+                        or cand_tokens.issubset(tokens)
+                        or cand in name_norm
+                    ):
                         # Require word-boundary containment; skip spurious short substrings (<4 chars) that could false-match
                         if len(cand) < 4:
                             if cand == name_norm or cand in tokens:
@@ -273,37 +345,43 @@ class DomainExpertAgent:
                     break
             if not found:
                 if strict:
-                    issues.append({
-                        "entity": "spec",
-                        "field": "entities",
-                        "message": f"Missing mandatory element for {site_type}: {element}",
-                        "severity": "error"
-                    })
+                    issues.append(
+                        {
+                            "entity": "spec",
+                            "field": "entities",
+                            "message": f"Missing mandatory element for {site_type}: {element}",
+                            "severity": "error",
+                        }
+                    )
                     score -= 0.15
                 else:
                     suggestions.append(
                         f"Consider adding {element} (typical for {site_type}, weakly evidenced)"
                     )
-        
+
         # Check proportions
         proportions = rules.get("proportions", {})
         for prop_name, expected_ratio in proportions.items():
             # This would need actual measurements from entities
-            suggestions.append(f"Verify {prop_name} ratio matches {expected_ratio} for {site_type}")
-        
+            suggestions.append(
+                f"Verify {prop_name} ratio matches {expected_ratio} for {site_type}"
+            )
+
         # Check decorum rules
         decorum = rules.get("decorum", {})
         if decorum.get("no_shoes_area"):
             suggestions.append("Mark shoe removal areas at entrances")
-        
+
         if decorum.get("circumambulation_direction"):
-            suggestions.append(f"Ensure pradakshina path flows {decorum['circumambulation_direction']}")
-        
+            suggestions.append(
+                f"Ensure pradakshina path flows {decorum['circumambulation_direction']}"
+            )
+
         # Check POI navigation
         pois = [e for e in spec.entities if e.type == "poi"]
         nav_points = spec.navigation.points
         poi_nav = [p for p in nav_points if any(poi.name in p.name for poi in pois)]
-        
+
         if len(poi_nav) < len(pois):
             suggestions.append("Add navigation points for all points of interest")
 
@@ -322,20 +400,52 @@ class DomainExpertAgent:
             valid=len(errors) == 0,
             issues=issues,
             suggestions=suggestions,
-            compliance_score=max(0.0, score)
+            compliance_score=max(0.0, score),
         )
-    
+
     def _heritage_type_cues(self, spec: SimulationSpec) -> set[str]:
         """Distinct matched cues supporting the identified heritage type."""
         names = " ".join(e.name.lower() for e in spec.entities)
-        prop_types = " ".join(str(e.properties.get("site_type", "")).lower() for e in spec.entities if isinstance(e.properties, dict))
+        prop_types = " ".join(
+            str(e.properties.get("site_type", "")).lower()
+            for e in spec.entities
+            if isinstance(e.properties, dict)
+        )
         combined = f"{names} {prop_types}"
         site_type = self._identify_heritage_type(spec)
         vocab = {
-            "temple": ("temple", "garbhagriha", "mandapa", "pradakshina", "gopuram", "shikhara", "sanctum", "vimana"),
-            "palace": ("palace", "fort", "diwan", "zenana", "chhatri", "jharokha", "raj", "monument", "stupa"),
+            "temple": (
+                "temple",
+                "garbhagriha",
+                "mandapa",
+                "pradakshina",
+                "gopuram",
+                "shikhara",
+                "sanctum",
+                "vimana",
+            ),
+            "palace": (
+                "palace",
+                "fort",
+                "diwan",
+                "zenana",
+                "chhatri",
+                "jharokha",
+                "raj",
+                "monument",
+                "stupa",
+            ),
             "courtyard": ("courtyard", "haveli"),
-            "mausoleum": ("mausoleum", "mosque", "masjid", "tomb", "cenotaph", "minaret", "charbagh", "darwaza"),
+            "mausoleum": (
+                "mausoleum",
+                "mosque",
+                "masjid",
+                "tomb",
+                "cenotaph",
+                "minaret",
+                "charbagh",
+                "darwaza",
+            ),
         }
         return {tok for tok in vocab.get(site_type, ()) if tok in combined}
 
@@ -343,7 +453,7 @@ class DomainExpertAgent:
         """Identify room type from name and properties."""
         name = room.name.lower()
         props = room.properties
-        
+
         if "master" in name or props.get("is_master"):
             return "bedroom"
         if "bed" in name:
@@ -359,27 +469,56 @@ class DomainExpertAgent:
         if "office" in name or "study" in name:
             return "bedroom"  # Similar requirements
         return "bedroom"  # Default
-    
+
     def _identify_heritage_type(self, spec: SimulationSpec) -> str:
         """Identify heritage site type from entities."""
         names = " ".join(e.name.lower() for e in spec.entities)
         # Also inspect properties site_type if present
-        prop_types = " ".join(str(e.properties.get("site_type", "")).lower() for e in spec.entities if isinstance(e.properties, dict))
+        prop_types = " ".join(
+            str(e.properties.get("site_type", "")).lower()
+            for e in spec.entities
+            if isinstance(e.properties, dict)
+        )
 
         combined = f"{names} {prop_types}"
 
         if "temple" in combined:
             return "temple"
         # Token cues for temple
-        if any(tok in combined for tok in ("garbhagriha", "mandapa", "pradakshina", "gopuram", "shikhara", "sanctum", "vimana")):
+        if any(
+            tok in combined
+            for tok in (
+                "garbhagriha",
+                "mandapa",
+                "pradakshina",
+                "gopuram",
+                "shikhara",
+                "sanctum",
+                "vimana",
+            )
+        ):
             return "temple"
         # Mausoleum / tomb / mosque complexes (Taj Mahal et al.) before the
         # palace/monument catch-alls below.
-        if any(tok in combined for tok in ("mausoleum", "mosque", "masjid", "tomb", "cenotaph", "minaret", "charbagh", "darwaza")):
+        if any(
+            tok in combined
+            for tok in (
+                "mausoleum",
+                "mosque",
+                "masjid",
+                "tomb",
+                "cenotaph",
+                "minaret",
+                "charbagh",
+                "darwaza",
+            )
+        ):
             return "mausoleum"
         if "palace" in combined or "fort" in combined:
             return "palace"
-        if any(tok in combined for tok in ("diwan", "zenana", "chhatri", "jharokha", "raj")):
+        if any(
+            tok in combined for tok in ("diwan", "zenana", "chhatri", "jharokha", "raj")
+        ):
             return "palace"
         if "courtyard" in combined or "haveli" in combined:
             return "courtyard"

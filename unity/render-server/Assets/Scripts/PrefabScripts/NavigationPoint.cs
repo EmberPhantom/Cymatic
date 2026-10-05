@@ -14,32 +14,32 @@ namespace Cymatic.Prefabs
         [SerializeField] private string pointName;
         [SerializeField] private string description;
         [SerializeField] private NavPointType pointType = NavPointType.Waypoint;
-        
+
         [Header("Connections")]
         [SerializeField] private NavigationPoint[] connectedPoints;
         [SerializeField] private float[] connectionWeights;
-        
+
         [Header("Navigation")]
         [SerializeField] private float stopDistance = 1.5f;
         [SerializeField] private bool isTeleportPoint = false;
         [SerializeField] private bool isStartPoint = false;
         [SerializeField] private bool isEndPoint = false;
-        
+
         [Header("Tour")]
         [SerializeField] private bool isTourStop = false;
         [SerializeField] private float pauseDuration = 5f;
         [SerializeField] private string tourAudioClip;
-        
+
         [Header("Visual")]
         [SerializeField] private GameObject waypointMarker;
         [SerializeField] private float markerScale = 1f;
         [SerializeField] private Color markerColor = Color.cyan;
-        
+
         private SphereCollider _triggerCollider;
         private NavMeshAgent _playerAgent;
         private LineRenderer _pathLine;
         private bool _isActive = false;
-        
+
         public string PointId => string.IsNullOrEmpty(pointId) ? gameObject.name : pointId;
         public string PointName => pointName;
         public string Description => description;
@@ -51,28 +51,28 @@ namespace Cymatic.Prefabs
         public bool IsEndPoint => isEndPoint;
         public bool IsTourStop => isTourStop;
         public float PauseDuration => pauseDuration;
-        
+
         public event System.Action<NavigationPoint> OnPlayerArrived;
         public event System.Action<NavigationPoint> OnPlayerDeparted;
-        
+
         void Awake()
         {
             if (string.IsNullOrEmpty(pointId))
                 pointId = gameObject.name;
-            
+
             // Setup trigger collider
             var collider = GetComponent<SphereCollider>();
             if (collider == null)
                 collider = gameObject.AddComponent<SphereCollider>();
             collider.isTrigger = true;
             collider.radius = 2f;
-            
+
             // Find player NavMeshAgent
             var player = GameObject.FindGameObjectWithTag("Player");
             if (player != null)
                 _playerAgent = player.GetComponent<NavMeshAgent>();
         }
-        
+
         void Start()
         {
             if (waypointMarker != null)
@@ -83,29 +83,29 @@ namespace Cymatic.Prefabs
                     renderer.material.color = markerColor;
             }
         }
-        
+
         void OnTriggerEnter(Collider other)
         {
             if (!other.CompareTag("Player") && !other.CompareTag("MainCamera"))
                 return;
-            
+
             _isActive = true;
             OnPlayerArrived?.Invoke(this);
         }
-        
+
         void OnTriggerExit(Collider other)
         {
             if (!other.CompareTag("Player") && !other.CompareTag("MainCamera"))
                 return;
-            
+
             _isActive = false;
             OnPlayerDeparted?.Invoke(this);
         }
-        
+
         public Transform[] GetConnectedTransforms()
         {
             if (connectedPoints == null) return new Transform[0];
-            
+
             var transforms = new List<Transform>();
             foreach (var point in connectedPoints)
             {
@@ -114,12 +114,12 @@ namespace Cymatic.Prefabs
             }
             return transforms.ToArray();
         }
-        
+
         public float GetConnectionWeight(NavigationPoint target)
         {
             if (connectionWeights == null || connectionWeights.Length == 0)
                 return 1f;
-            
+
             for (int i = 0; i < connectedPoints.Length; i++)
             {
                 if (connectedPoints[i] == target)
@@ -127,7 +127,7 @@ namespace Cymatic.Prefabs
             }
             return 1f;
         }
-        
+
         public void NavigateToThisPoint()
         {
             if (_playerAgent != null && _playerAgent.isOnNavMesh)
@@ -136,18 +136,18 @@ namespace Cymatic.Prefabs
                 _playerAgent.stoppingDistance = 1.5f;
             }
         }
-        
+
         public bool IsPlayerHere(Collider playerCollider)
         {
             var collider = GetComponent<Collider>();
             return collider.bounds.Contains(playerCollider.bounds.center);
         }
-        
+
         private void OnDrawGizmosSelected()
         {
             Gizmos.color = Color.cyan;
             Gizmos.DrawWireSphere(transform.position, 2f);
-            
+
             if (connectedPoints != null)
             {
                 Gizmos.color = Color.green;
@@ -158,7 +158,7 @@ namespace Cymatic.Prefabs
                 }
             }
         }
-        
+
         public void SetActiveState(bool active)
         {
             _isActive = active;
@@ -166,7 +166,7 @@ namespace Cymatic.Prefabs
                 waypointMarker.SetActive(active);
         }
     }
-    
+
     public enum NavPointType
     {
         Waypoint,

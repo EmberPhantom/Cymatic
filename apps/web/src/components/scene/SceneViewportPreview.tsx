@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useId, useState } from "react"
 import { cn } from "@/lib/utils"
 import {
   Grid,
@@ -10,12 +10,22 @@ import {
   Info
 } from "lucide-react"
 
+/** Real measured stats. When absent the HUD is labelled illustrative and
+ * shows no numbers — the schematic never reports fake FPS/triangle counts. */
+export interface ViewportStats {
+  fps?: number | null
+  triangles?: number | null
+  triangleBudget?: number | null
+}
+
 export interface SceneViewportPreviewProps {
   title?: string
   domain?: "heritage" | "real_estate" | string
   isInteractive?: boolean
   className?: string
   height?: string
+  /** Real scene stats when the caller has them (builder has none at mount). */
+  stats?: ViewportStats | null
   onSelectNode?: (nodeName: string, metadata: { zone: string; triangles: number; material: string; coords: string }) => void
 }
 
@@ -25,6 +35,7 @@ export function SceneViewportPreview({
   isInteractive = true,
   className,
   height = "h-80 md:h-96",
+  stats = null,
   onSelectNode,
 }: SceneViewportPreviewProps) {
   const [showGrid, setShowGrid] = useState(true)
@@ -32,6 +43,7 @@ export function SceneViewportPreview({
   const [cameraMode, setCameraMode] = useState<"perspective" | "top" | "front">("perspective")
   const [lightingMode, setLightingMode] = useState<"daylight" | "golden" | "night">("daylight")
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const svgTitleId = useId()
 
   const isHeritage = domain === "heritage"
 
@@ -71,16 +83,33 @@ export function SceneViewportPreview({
     }
   }
 
+  // Clickable SVG nodes: pointer + keyboard (Enter/Space) activation.
+  const nodeProps = (
+    name: string,
+    meta: { zone: string; triangles: number; material: string; coords: string }
+  ) => ({
+    onClick: () => handleNodeClick(name, meta),
+    role: "button" as const,
+    tabIndex: 0,
+    "aria-label": `Select ${name}`,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault()
+        handleNodeClick(name, meta)
+      }
+    },
+  })
+
   return (
     <div
       className={cn(
-        "relative w-full rounded-xl border border-warmgray overflow-hidden bg-charcoal text-white flex flex-col select-none shadow-2xs group",
+        "relative w-full rounded-xl border border-warmgray overflow-hidden bg-charcoal text-white flex flex-col select-none shadow-sm group",
         height,
         className
       )}
     >
       {/* Top Viewport Toolbar / Technical HUD Metrics */}
-      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 py-2 bg-charcoal/90 backdrop-blur-xs border-b border-white/10 text-xs">
+      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 py-2 bg-charcoal/90 backdrop-blur-sm border-b border-white/10 text-xs">
         <div className="flex items-center gap-2">
           <span className="flex h-2 w-2 relative">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sage opacity-75" />
@@ -101,20 +130,27 @@ export function SceneViewportPreview({
           </span>
         </div>
 
-        {/* Technical HUD Overlays */}
+        {/* Technical HUD: real stats when wired, otherwise an explicit
+            illustrative label — never fake-precise numbers. */}
         <div className="flex items-center gap-1.5 font-mono text-[10px]">
-          <span className="px-1.5 py-0.5 rounded bg-white/10 text-ivory border border-white/10 tracking-tight">
-            60 FPS
-          </span>
-          <span className="px-1.5 py-0.5 rounded bg-terracotta/20 text-terracotta-300 border border-terracotta/40 tracking-tight">
-            {isHeritage ? "74.8K / 80K" : "68.2K / 80K"}
-          </span>
-          <span className="hidden md:inline-block px-1.5 py-0.5 rounded bg-gold/20 text-gold-300 border border-gold/40 tracking-tight">
-            BAKED GI
-          </span>
-          <span className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-sage/20 text-sage-300 border border-sage/40 tracking-tight">
-            &lt;45ms
-          </span>
+          {stats?.fps != null || stats?.triangles != null ? (
+            <>
+              {stats.fps != null && (
+                <span className="px-1.5 py-0.5 rounded bg-white/10 text-ivory border border-white/10 tracking-tight">
+                  {stats.fps} FPS
+                </span>
+              )}
+              {stats.triangles != null && (
+                <span className="px-1.5 py-0.5 rounded bg-terracotta/20 text-terracotta-300 border border-terracotta/40 tracking-tight">
+                  {(stats.triangles / 1000).toFixed(1)}K{stats.triangleBudget != null ? ` / ${(stats.triangleBudget / 1000).toFixed(0)}K` : ""}
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-white/10 text-ivory border border-white/10 tracking-tight uppercase">
+              Preview (illustrative)
+            </span>
+          )}
         </div>
       </div>
 
@@ -137,12 +173,15 @@ export function SceneViewportPreview({
           />
         )}
 
-        {/* Renderable SVG Canvas */}
+        {/* Renderable SVG Canvas (decorative schematic, not measured output) */}
         <svg
           viewBox="0 0 400 240"
           className="w-full h-full max-w-lg object-contain transition-transform duration-500"
           style={getCameraStyle()}
+          role="img"
+          aria-label={`Illustrative ${isHeritage ? "heritage" : "real estate"} scene schematic for ${title}`}
         >
+          <title id={`${svgTitleId}`}>{title} — illustrative schematic</title>
           <defs>
             <linearGradient id="wallGradHeritage" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#C69A4B" stopOpacity={lightingMode === "golden" ? "0.6" : "0.35"} />
@@ -186,14 +225,12 @@ export function SceneViewportPreview({
                 stroke={selectedNode === "Sanctum Platform" ? "#FFFFFF" : "#B85C38"}
                 strokeWidth={selectedNode === "Sanctum Platform" ? "2.5" : "1.5"}
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Sanctum Platform", {
-                    zone: "Central Sanctum",
-                    triangles: 14200,
-                    material: "Carved Sandstone (PBR)",
-                    coords: "[0.0, 0.4, 0.0]",
-                  })
-                }
+                {...nodeProps("Sanctum Platform", {
+                  zone: "Central Sanctum",
+                  triangles: 14200,
+                  material: "Carved Sandstone (PBR)",
+                  coords: "[0.0, 0.4, 0.0]",
+                })}
               />
 
               <line x1="120" y1="182" x2="120" y2="115" stroke="url(#columnGrad)" strokeWidth="3.5" strokeLinecap="round" />
@@ -213,28 +250,24 @@ export function SceneViewportPreview({
                 stroke="#C69A4B"
                 strokeWidth="1.2"
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Tiered Shikhara", {
-                    zone: "Roof Superstructure",
-                    triangles: 28400,
-                    material: "Granite Masonry",
-                    coords: "[0.0, 4.2, 0.0]",
-                  })
-                }
+                {...nodeProps("Tiered Shikhara", {
+                  zone: "Roof Superstructure",
+                  triangles: 28400,
+                  material: "Granite Masonry",
+                  coords: "[0.0, 4.2, 0.0]",
+                })}
               />
               <line x1="200" y1="76" x2="200" y2="38" stroke="#C69A4B" strokeWidth="2.5" />
               <circle cx="200" cy="38" r="4" fill="#C69A4B" />
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Entry Mandapa", {
-                    zone: "East Gateway",
-                    triangles: 8200,
-                    material: "Basalt Flagstone",
-                    coords: "[-2.5, 0.0, 4.0]",
-                  })
-                }
+                {...nodeProps("Entry Mandapa", {
+                  zone: "East Gateway",
+                  triangles: 8200,
+                  material: "Basalt Flagstone",
+                  coords: "[-2.5, 0.0, 4.0]",
+                })}
               >
                 <circle cx="155" cy="195" r="4.5" fill="#B85C38" className="animate-pulse" />
                 <circle cx="155" cy="195" r="9" fill="none" stroke="#B85C38" strokeWidth="0.8" opacity="0.6" />
@@ -245,14 +278,12 @@ export function SceneViewportPreview({
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Inner Sanctum", {
-                    zone: "Garbhagriha",
-                    triangles: 24000,
-                    material: "Aged Sandstone",
-                    coords: "[0.0, 0.5, 0.0]",
-                  })
-                }
+                {...nodeProps("Inner Sanctum", {
+                  zone: "Garbhagriha",
+                  triangles: 24000,
+                  material: "Aged Sandstone",
+                  coords: "[0.0, 0.5, 0.0]",
+                })}
               >
                 <circle cx="245" cy="195" r="4.5" fill="#667B62" className="animate-pulse" />
                 <circle cx="245" cy="195" r="9" fill="none" stroke="#667B62" strokeWidth="0.8" opacity="0.6" />
@@ -278,14 +309,12 @@ export function SceneViewportPreview({
                 stroke={selectedNode === "Main Pavilion" ? "#FFFFFF" : "#667B62"}
                 strokeWidth={selectedNode === "Main Pavilion" ? "2.5" : "1.5"}
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Main Pavilion", {
-                    zone: "Living & Dining Room",
-                    triangles: 18500,
-                    material: "Polished Concrete & Teak",
-                    coords: "[0.0, 0.0, 1.2]",
-                  })
-                }
+                {...nodeProps("Main Pavilion", {
+                  zone: "Living & Dining Room",
+                  triangles: 18500,
+                  material: "Polished Concrete & Teak",
+                  coords: "[0.0, 0.0, 1.2]",
+                })}
               />
 
               <line x1="80" y1="180" x2="80" y2="120" stroke="#DDD9D0" strokeWidth="3" strokeLinecap="round" />
@@ -298,14 +327,12 @@ export function SceneViewportPreview({
                 stroke="#B85C38"
                 strokeWidth="1.5"
                 className="cursor-pointer hover:opacity-90"
-                onClick={() =>
-                  handleNodeClick("Cantilever Deck", {
-                    zone: "Upper Terrace",
-                    triangles: 12400,
-                    material: "Tempered Glass & Steel",
-                    coords: "[0.0, 3.2, 0.0]",
-                  })
-                }
+                {...nodeProps("Cantilever Deck", {
+                  zone: "Upper Terrace",
+                  triangles: 12400,
+                  material: "Tempered Glass & Steel",
+                  coords: "[0.0, 3.2, 0.0]",
+                })}
               />
 
               <polygon
@@ -317,14 +344,12 @@ export function SceneViewportPreview({
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Balcony Viewpoint", {
-                    zone: "Master Balcony",
-                    triangles: 9100,
-                    material: "Frameless Glass Railing",
-                    coords: "[1.8, 3.2, -0.5]",
-                  })
-                }
+                {...nodeProps("Balcony Viewpoint", {
+                  zone: "Master Balcony",
+                  material: "Frameless Glass Railing",
+                  triangles: 9100,
+                  coords: "[1.8, 3.2, -0.5]",
+                })}
               >
                 <circle cx="150" cy="140" r="4.5" fill="#C69A4B" className="animate-pulse" />
                 <circle cx="150" cy="140" r="9" fill="none" stroke="#C69A4B" strokeWidth="0.8" opacity="0.6" />
@@ -335,14 +360,12 @@ export function SceneViewportPreview({
 
               <g
                 className="cursor-pointer group"
-                onClick={() =>
-                  handleNodeClick("Foyer Entry", {
-                    zone: "Entrance Lounge",
-                    triangles: 7600,
-                    material: "Marble Flooring",
-                    coords: "[-2.0, 0.0, 3.5]",
-                  })
-                }
+                {...nodeProps("Foyer Entry", {
+                  zone: "Entrance Lounge",
+                  triangles: 7600,
+                  material: "Marble Flooring",
+                  coords: "[-2.0, 0.0, 3.5]",
+                })}
               >
                 <circle cx="230" cy="205" r="4.5" fill="#667B62" className="animate-pulse" />
                 <circle cx="230" cy="205" r="9" fill="none" stroke="#667B62" strokeWidth="0.8" opacity="0.6" />
@@ -375,7 +398,8 @@ export function SceneViewportPreview({
             <button
               type="button"
               onClick={() => setSelectedNode(null)}
-              className="text-stonegray hover:text-white text-xs ml-1"
+              aria-label="Dismiss node details"
+              className="text-stonegray hover:text-white text-xs ml-1 min-w-[24px] min-h-[24px]"
             >
               ×
             </button>
@@ -384,7 +408,7 @@ export function SceneViewportPreview({
 
         {/* Viewport Floating Interactive Controls (Compact, Polished, With Tooltips) */}
         {isInteractive && (
-          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5 bg-charcoal/90 backdrop-blur-xs p-1 rounded-lg border border-white/15 shadow-md">
+          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5 bg-charcoal/90 backdrop-blur-sm p-1 rounded-lg border border-white/15 shadow-md">
             {/* Camera Angle Selector: 3D, TOP, FRONT */}
             <div className="flex items-center bg-white/5 rounded p-0.5 border border-white/10 mr-1">
               <button
@@ -395,6 +419,8 @@ export function SceneViewportPreview({
                   cameraMode === "perspective" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="3D Perspective Camera"
+                aria-label="3D perspective camera"
+                aria-pressed={cameraMode === "perspective"}
               >
                 3D
               </button>
@@ -406,6 +432,8 @@ export function SceneViewportPreview({
                   cameraMode === "top" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="TOP Floorplan View"
+                aria-label="Top floorplan view"
+                aria-pressed={cameraMode === "top"}
               >
                 TOP
               </button>
@@ -417,6 +445,8 @@ export function SceneViewportPreview({
                   cameraMode === "front" ? "bg-terracotta text-white font-bold" : "text-white/60 hover:text-white"
                 )}
                 title="FRONT Elevation View"
+                aria-label="Front elevation view"
+                aria-pressed={cameraMode === "front"}
               >
                 FRONT
               </button>
@@ -439,6 +469,7 @@ export function SceneViewportPreview({
                   : "text-white/70 hover:text-white hover:bg-white/10"
               )}
               title={`Lighting: ${lightingMode.toUpperCase()} (Click to toggle environment)`}
+              aria-label={`Lighting: ${lightingMode}. Activate to cycle environment.`}
             >
               <Sun className="h-3 w-3" />
               <span className="hidden sm:inline">Lighting</span>
@@ -453,6 +484,8 @@ export function SceneViewportPreview({
                 showGrid ? "text-terracotta bg-white/10" : "text-white/60 hover:text-white hover:bg-white/10"
               )}
               title="Toggle Architectural Ground Grid"
+              aria-label={showGrid ? "Hide architectural ground grid" : "Show architectural ground grid"}
+              aria-pressed={showGrid}
             >
               <Grid className="h-3 w-3" />
               <span className="hidden sm:inline">Grid</span>
@@ -471,6 +504,7 @@ export function SceneViewportPreview({
                 viewMode !== "shaded" ? "text-terracotta bg-white/10" : "text-white/70 hover:text-white hover:bg-white/10"
               )}
               title={`View Mode: ${viewMode.toUpperCase()} (Click to cycle wireframe/shaded)`}
+              aria-label={`View mode: ${viewMode}. Activate to cycle wireframe modes.`}
             >
               <Box className="h-3 w-3" />
               <span className="hidden sm:inline">Wireframe</span>
@@ -485,20 +519,21 @@ export function SceneViewportPreview({
                 setViewMode("shaded")
                 setSelectedNode(null)
               }}
-              className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+              className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors min-w-[28px] min-h-[28px]"
               title="Reset Camera View to Default"
+              aria-label="Reset camera view to default"
             >
-              <RotateCcw className="h-3 w-3" />
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />
             </button>
           </div>
         )}
 
         {/* Status Pill Lower Left */}
         <div className="absolute bottom-3 left-3 z-20 flex items-center gap-1.5 text-[10px] font-mono text-stonegray-300">
-          <span className="px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-xs">
+          <span className="px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-sm">
             {lightingMode.toUpperCase()} LIGHTING
           </span>
-          <span className="hidden sm:inline-block px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-xs">
+          <span className="hidden sm:inline-block px-2 py-0.5 rounded bg-charcoal/80 border border-white/10 backdrop-blur-sm">
             {viewMode.toUpperCase()}
           </span>
         </div>

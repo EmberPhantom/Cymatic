@@ -1,9 +1,19 @@
 """Shared SQLAlchemy Base and database utilities."""
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine, AsyncSession, async_sessionmaker
+
+import hashlib
+
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    create_async_engine,
+    AsyncSession,
+    async_sessionmaker,
+)
 from sqlalchemy.orm import DeclarativeBase
+
 
 class Base(DeclarativeBase):
     pass
+
 
 # Keep total pooled connections well below Postgres max_connections (100)
 # Services: api (5+10) + worker (5+10) = 30, plus migrate/test overhead <50 safe
@@ -39,3 +49,23 @@ def create_cymatic_engine(
 
 def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+_ADVISORY_KEY_MASK = (1 << 63) - 1
+
+
+def advisory_lock_key(namespace: str, *parts: object) -> int:
+    """Derive a collision-free bigint key for pg_advisory_xact_lock.
+
+    Postgres advisory locks accept only a bigint (or an int pair) — NOT
+    strings — so a namespaced string key is impossible at the SQL layer.
+    Hashing ``"<namespace>:<part>:..."`` into 63 bits instead gives:
+    distinct namespaces (e.g. "scene" vs "spec") can never collide with
+    each other, and same-namespace collisions need a ~2^31-key birthday
+    hit on SHA-256's top 63 bits (vs. the old scheme where
+    ``spec_id * 100000 + project_id % 100000`` collided across pairs and
+    with bare ``int(project_id)`` keys). Fits in a signed bigint.
+    """
+    text = namespace + ":" + ":".join(str(p) for p in parts)
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") & _ADVISORY_KEY_MASK

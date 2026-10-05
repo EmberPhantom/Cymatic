@@ -3,6 +3,7 @@
 Regression test: with ADMIN_API_KEY configured on the router, an unauthenticated
 worker call gets 401 and generation can never succeed (found during SLM tuning).
 """
+
 import httpx
 import pytest
 

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { usePatchEntity } from "@/hooks/use-edit-spec"
 import type { EntityPatch } from "@/hooks/use-edit-spec"
+import { getErrorMessage } from "@/lib/errors"
 
 interface EntityEditorProps {
   projectId: number
@@ -25,11 +26,26 @@ const ENTITY_TYPES = [
   "poi", "audio_zone", "trigger_zone"
 ]
 
+export const WINDOW_PROP_CANONICAL = "has_window"
+const WINDOW_PROP_LEGACY = "has_windows"
+
 const COMMON_PROPERTIES = [
-  "size", "material", "color", "has_doors", "has_windows",
+  "size", "material", "color", "has_doors", WINDOW_PROP_CANONICAL,
   "is_outdoor", "furnished", "style", "has_narration",
   "has_collider", "description", "floor_material"
 ]
+
+/**
+ * Backend canonical key is `has_window` (singular); `has_windows` is a
+ * legacy alias accepted on read only. Normalize read input to the canonical
+ * key (canonical wins when both are present); callers write `has_window`.
+ */
+export function normalizeWindowProps(props: Record<string, unknown>): Record<string, unknown> {
+  if (!(WINDOW_PROP_LEGACY in props)) return props
+  const { [WINDOW_PROP_LEGACY]: _legacy, ...rest } = props
+  if (WINDOW_PROP_CANONICAL in rest) return rest
+  return { ...rest, [WINDOW_PROP_CANONICAL]: _legacy }
+}
 
 function parseNumericInput(value: string): number | null {
   const trimmed = value.trim()
@@ -67,11 +83,13 @@ export function EntityEditor({ projectId, specId, entity, onClose, onSave }: Ent
       setScale(entity.scale ? [...entity.scale] as [number, number, number] : [1, 1, 1])
       setEntityType(entity.type || "")
       setEntityName(entity.name || "")
-      setProperties(entity.properties || {})
-      const keys = Object.keys(entity.properties || {})
+      // Read both `has_window` (canonical) and legacy `has_windows`.
+      const normalized = normalizeWindowProps(entity.properties || {})
+      setProperties(normalized)
+      const keys = Object.keys(normalized)
       setPropertyKeys(keys)
       const vals: Record<string, string> = {}
-      keys.forEach(k => { vals[k] = String(entity.properties?.[k] ?? "") })
+      keys.forEach(k => { vals[k] = String(normalized?.[k] ?? "") })
       setPropertyValues(vals)
     }
   }, [entity])
@@ -167,11 +185,13 @@ export function EntityEditor({ projectId, specId, entity, onClose, onSave }: Ent
         props[key] = val
       }
     })
+    // Write the canonical key; a legacy `has_windows` edit is folded in.
+    const properties = normalizeWindowProps(props)
     return {
       position,
       rotation,
       scale,
-      properties: props,
+      properties,
     }
   }
 
@@ -183,9 +203,8 @@ export function EntityEditor({ projectId, specId, entity, onClose, onSave }: Ent
       await patchEntity.mutateAsync({ specId, entityId: entity.id, patch })
       onSave()
       onClose()
-    } catch (error: any) {
-      // Avoid blocking alert; still provide feedback but also console
-      const msg = error?.response?.data?.detail || error?.message || "Failed to save entity"
+    } catch (error: unknown) {
+      const msg = getErrorMessage(error, "Failed to save entity")
       // eslint-disable-next-line no-alert
       alert(msg)
     } finally {

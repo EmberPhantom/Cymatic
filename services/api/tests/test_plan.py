@@ -1,9 +1,12 @@
 """Planning sheet endpoints: build draft -> approve gates generation input."""
+
 import pytest
 
 
 @pytest.mark.asyncio
-async def test_plan_build_approve_flow(client, auth_headers, test_project):
+async def test_plan_build_approve_flow(
+    client, auth_headers, admin_auth_headers, test_project
+):
     # Intake (deterministic stub) creates the run the sheet is built from.
     intake = await client.post(
         f"/v1/projects/{test_project.id}/intake",
@@ -25,13 +28,15 @@ async def test_plan_build_approve_flow(client, auth_headers, test_project):
     assert body["run_id"] == run_id
     assert body["sheet"]["objective"] == "Taj Mahal walkthrough"
 
-    latest = await client.get(f"/v1/projects/{test_project.id}/plan", headers=auth_headers)
+    latest = await client.get(
+        f"/v1/projects/{test_project.id}/plan", headers=auth_headers
+    )
     assert latest.status_code == 200
     assert latest.json()["id"] == body["id"]
 
     approve = await client.post(
         f"/v1/projects/{test_project.id}/plan/{body['id']}/approve",
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert approve.status_code == 200
     assert approve.json()["status"] == "approved"
@@ -45,10 +50,12 @@ async def test_plan_build_approve_flow(client, auth_headers, test_project):
     assert build2.json()["version"] == 2
     approve2 = await client.post(
         f"/v1/projects/{test_project.id}/plan/{build2.json()['id']}/approve",
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert approve2.json()["status"] == "approved"
-    first = await client.get(f"/v1/projects/{test_project.id}/plan", headers=auth_headers)
+    first = await client.get(
+        f"/v1/projects/{test_project.id}/plan", headers=auth_headers
+    )
     assert first.json()["id"] == build2.json()["id"]
 
 
@@ -64,5 +71,7 @@ async def test_plan_unknown_run_404(client, auth_headers, test_project):
 
 @pytest.mark.asyncio
 async def test_plan_none_404(client, auth_headers, test_project):
-    resp = await client.get(f"/v1/projects/{test_project.id}/plan", headers=auth_headers)
+    resp = await client.get(
+        f"/v1/projects/{test_project.id}/plan", headers=auth_headers
+    )
     assert resp.status_code == 404

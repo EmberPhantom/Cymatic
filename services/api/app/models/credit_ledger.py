@@ -1,12 +1,22 @@
 """CreditLedger model"""
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON, Index
 from cymatic_shared.db import Base
 
 
 class CreditLedger(Base):
     __tablename__ = "credit_ledger"
+    __table_args__ = (
+        # Balance SUM (organization_id prefix) + usage filter/order
+        # (organization_id, event_type, created_at).
+        Index(
+            "ix_credit_ledger_org_event_created",
+            "organization_id",
+            "event_type",
+            "created_at",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)

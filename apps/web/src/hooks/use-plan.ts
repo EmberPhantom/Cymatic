@@ -12,18 +12,20 @@ export interface PlanSheetResponse {
   sheet: PlanningSheet
 }
 
-export function useBuildPlan(projectId: number) {
+export function useBuildPlan(projectId: number | null) {
   return useMutation<PlanSheetResponse, Error, { run_id: string }>({
     mutationFn: async ({ run_id }) => {
+      if (projectId === null || Number.isNaN(projectId)) throw new Error("Invalid project id")
       const res = await api.post(`/v1/projects/${projectId}/plan`, { run_id })
       return res.data
     },
   })
 }
 
-export function useApprovePlan(projectId: number) {
+export function useApprovePlan(projectId: number | null) {
   return useMutation<PlanSheetResponse, Error, { sheetId: number }>({
     mutationFn: async ({ sheetId }) => {
+      if (projectId === null || Number.isNaN(projectId)) throw new Error("Invalid project id")
       const res = await api.post(`/v1/projects/${projectId}/plan/${sheetId}/approve`)
       return res.data
     },

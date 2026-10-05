@@ -1,13 +1,17 @@
 """ScenePackage model"""
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON, Index
 from sqlalchemy.orm import relationship
 from cymatic_shared.db import Base
 
 
 class ScenePackage(Base):
     __tablename__ = "scene_packages"
+    __table_args__ = (
+        # get_latest_ready_scene_package() filters on (project_id, status).
+        Index("ix_scene_packages_project_status", "project_id", "status"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)

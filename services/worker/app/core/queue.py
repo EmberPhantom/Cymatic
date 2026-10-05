@@ -1,4 +1,5 @@
 """Worker queue - configured instance from shared package."""
+
 from cymatic_shared.queue import (  # noqa: F401
     Job,
     JobStatus,

@@ -3,6 +3,7 @@
 A planning sheet is the frozen, reviewable output of intake + clarification
 (+ research in Phase 3). Only APPROVED sheets feed the generation agent.
 """
+
 import copy
 from typing import Any, Dict, List, Optional
 
@@ -11,13 +12,17 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.dependencies import require_admin, require_creator, require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.generation_run import GenerationRun
 from app.models.planning_sheet import PlanningSheet as PlanningSheetModel, SheetStatus
 from app.models.project import Project
 from app.models.user import User
 from cymatic_shared.schemas.planning_sheet import PlanningSheet, PlanSpace
+
+settings = get_settings()
 
 router = APIRouter()
 
@@ -52,7 +57,11 @@ def _split_list(value: Any) -> List[str]:
     if isinstance(value, list):
         return [str(v).strip().strip(".") for v in value if str(v).strip()]
     if isinstance(value, str):
-        return [p.strip().strip(".") for p in value.replace(";", ",").split(",") if p.strip()]
+        return [
+            p.strip().strip(".")
+            for p in value.replace(";", ",").split(",")
+            if p.strip()
+        ]
     return []
 
 
@@ -78,15 +87,30 @@ def build_sheet_payload(
 
     bedrooms = entities.get("bedrooms")
     try:
-        count = int(bedrooms) if isinstance(bedrooms, (int, float, str)) and str(bedrooms).strip().isdigit() else 0
+        count = (
+            int(bedrooms)
+            if isinstance(bedrooms, (int, float, str))
+            and str(bedrooms).strip().isdigit()
+            else 0
+        )
     except (TypeError, ValueError):
         count = 0
     if domain == "real_estate" and count > 0:
         for i in range(min(count, 12)):
-            spaces.append(PlanSpace(id=f"space_room_{i + 1}", kind="room", name=f"Room {i + 1}"))
+            spaces.append(
+                PlanSpace(id=f"space_room_{i + 1}", kind="room", name=f"Room {i + 1}")
+            )
 
     style: Dict[str, str] = {}
-    for field in ("style", "historical_period", "focus", "lighting_preference", "budget", "scale", "indoor_outdoor"):
+    for field in (
+        "style",
+        "historical_period",
+        "focus",
+        "lighting_preference",
+        "budget",
+        "scale",
+        "indoor_outdoor",
+    ):
         value = entities.get(field)
         if isinstance(value, str) and value.strip():
             style[field] = value.strip()
@@ -94,7 +118,14 @@ def build_sheet_payload(
             style[field] = str(value)
 
     constraints: Dict[str, Any] = {}
-    for field in ("narration", "languages", "furnished", "square_footage", "floors", "site_type"):
+    for field in (
+        "narration",
+        "languages",
+        "furnished",
+        "square_footage",
+        "floors",
+        "site_type",
+    ):
         if field in entities:
             constraints[field] = entities[field]
 
@@ -128,13 +159,19 @@ def _sheet_to_response(sheet: PlanningSheetModel) -> SheetResponse:
         id=sheet.id,
         project_id=sheet.project_id,
         version=sheet.version,
-        status=sheet.status.value if hasattr(sheet.status, "value") else str(sheet.status),
+        status=sheet.status.value
+        if hasattr(sheet.status, "value")
+        else str(sheet.status),
         run_id=sheet.run_id,
         sheet=sheet.payload_json if isinstance(sheet.payload_json, dict) else {},
     )
 
 
-@router.post("/{project_id}/plan", response_model=SheetResponse)
+@router.post(
+    "/{project_id}/plan",
+    response_model=SheetResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+)
 async def build_plan(
     project_id: int,
     request: PlanBuildRequest,
@@ -167,10 +204,14 @@ async def build_plan(
 
     sheet = build_sheet_payload(
         objective=run.prompt,
-        domain=(intake.get("detected_domain") if isinstance(intake, dict) else None) or project.domain,
+        domain=(intake.get("detected_domain") if isinstance(intake, dict) else None)
+        or project.domain,
         entities=entities,
         missing_fields=sorted(missing),
-        analyser_mode=(intake.get("analyser_mode") if isinstance(intake, dict) else None) or "llm",
+        analyser_mode=(
+            intake.get("analyser_mode") if isinstance(intake, dict) else None
+        )
+        or "llm",
     )
 
     version = await db.scalar(
@@ -206,11 +247,17 @@ async def get_latest_plan(
         .order_by(PlanningSheetModel.version.desc())
     )
     if not sheet:
-        raise HTTPException(status_code=404, detail="No planning sheet for this project")
+        raise HTTPException(
+            status_code=404, detail="No planning sheet for this project"
+        )
     return _sheet_to_response(sheet)
 
 
-@router.post("/{project_id}/plan/{sheet_id}/approve", response_model=SheetResponse)
+@router.post(
+    "/{project_id}/plan/{sheet_id}/approve",
+    response_model=SheetResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def approve_plan(
     project_id: int,
     sheet_id: int,

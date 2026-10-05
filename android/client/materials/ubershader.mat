@@ -1,0 +1,34 @@
+// CYMATIC ubershader — single lit material for all primitive fallbacks.
+// Per-entity color/roughness come from MaterialInstance parameters
+// (see FilamentSceneBuilder.setBaseColor). Position+normal only: no UVs,
+// no textures, no normal mapping — keeps low-end vertex cost minimal.
+//
+// Build (needs `matc` from the Filament release matching
+// filament-android in app/build.gradle.kts):
+//   matc -p mobile -a opengl -o app/src/main/res/raw/ubershader.filamat \
+//       android/client/materials/ubershader.mat
+// The .filamat is git-ignored (binary, regenerable); without it the
+// RenderActivity degrades to preview mode instead of crashing.
+material {
+    name : ubershader,
+    parameters : [
+        { type : float3, name : baseColor },
+        { type : float,  name : roughness }
+    ],
+    requires : [
+        position
+    ],
+    shadingModel : lit,
+    blending : opaque,
+    culling : back,
+    doubleSided : false
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor.rgb = materialParams.baseColor;
+        material.roughness = materialParams.roughness;
+        material.metallic = 0.0;
+    }
+}

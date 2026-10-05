@@ -1,7 +1,8 @@
-import hmac
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
+
+import hmac
 
 import litellm
 import structlog
@@ -25,6 +26,7 @@ from app.providers.litellm_client import (
 from app.routing.cache import llm_cache
 from app.routing.engine import routing_engine
 from app.routing.usage import usage_tracker
+from cymatic_shared.auth import configure_logging, verify_admin_key_dependency
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -33,43 +35,66 @@ litellm.set_verbose = settings.DEBUG
 litellm.drop_params = True
 
 
-def verify_admin_key(
-    x_api_key: str | None = Header(None, alias="X-Api-Key"),
-    authorization: str | None = Header(None, alias="Authorization"),
-) -> None:
-    """Admin API key check using constant-time compare_digest."""
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Admin API key is not configured")
-    token: str | None = None
-    if x_api_key:
-        token = x_api_key.strip()
-    elif authorization:
-        if authorization.lower().startswith("bearer "):
-            token = authorization[7:].strip()
-        else:
-            token = authorization.strip()
-    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
+configure_logging("llm-router", getattr(settings, "LOG_FORMAT", "json"))
+
+verify_admin_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
+
+_fallback_warned = False
 
 
-def verify_api_key(
-    x_api_key: str | None = Header(None, alias="X-Api-Key"),
-    authorization: str | None = Header(None, alias="Authorization"),
-) -> None:
-    """Verify API key for LLM endpoints (supports X-Api-Key and Bearer)."""
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="API key not configured")
-    token: str | None = None
+def _extract_token(
+    x_api_key: str | None, authorization: str | None
+) -> str | None:
     if x_api_key:
-        token = x_api_key.strip()
-    elif authorization:
+        return x_api_key.strip()
+    if authorization:
         auth = authorization.strip()
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-        else:
-            token = auth
-    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
+        return auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+    return None
+
+
+async def verify_data_plane_key(
+    request: Request,
+    x_api_key: str | None = Header(None, alias="X-Api-Key"),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> None:
+    """Data-plane auth: LLM_API_KEY, falling back to ADMIN_API_KEY.
+
+    On success marks the request authenticated (and records which key
+    plane was used) so downstream dependencies (e.g. rate limiting) can
+    prefer server-verified identity over client-controlled headers.
+    """
+    global _fallback_warned
+    data_key = settings.LLM_API_KEY or ""
+    admin_key = settings.ADMIN_API_KEY or ""
+    effective = data_key or admin_key
+    if not data_key and admin_key and not _fallback_warned:
+        logger.warning(
+            "llm_api_key_fallback",
+            detail="LLM_API_KEY unset; data-plane routes accept ADMIN_API_KEY. "
+            "Set LLM_API_KEY to separate data and admin planes.",
+        )
+        _fallback_warned = True
+    if not effective:
+        raise HTTPException(status_code=503, detail="LLM API key not configured")
+    token = _extract_token(x_api_key, authorization)
+    if token is None or not hmac.compare_digest(token, effective):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    request.state.authenticated = True
+    request.state.api_key_plane = "data" if data_key else "admin-fallback"
+
+
+def _is_admin_request(request: Request) -> bool:
+    """True when the request carries a valid admin key (never raises)."""
+    admin_key = settings.ADMIN_API_KEY or ""
+    if not admin_key:
+        return False
+    token = _extract_token(
+        request.headers.get("X-Api-Key"), request.headers.get("Authorization")
+    )
+    if not token:
+        return False
+    return hmac.compare_digest(token, admin_key)
 
 
 @asynccontextmanager
@@ -98,8 +123,14 @@ app.add_middleware(
 
 
 @app.get("/health")
-async def health_check() -> dict[str, Any]:
-    providers = {name: provider.enabled for name, provider in routing_engine.providers.items()}
+async def health_check(request: Request) -> dict[str, Any]:
+    # Public response carries no per-provider/per-key detail (provider
+    # enablement and cloud-key booleans are admin-only).
+    if not _is_admin_request(request):
+        return {"status": "healthy", "service": "llm-router"}
+    providers = {
+        name: provider.enabled for name, provider in routing_engine.providers.items()
+    }
     cloud_keys = {
         "groq": bool(settings.GROQ_API_KEY),
         "openrouter": bool(settings.OPENROUTER_API_KEY),
@@ -130,25 +161,7 @@ async def health_check() -> dict[str, Any]:
 
 
 @app.get("/metrics")
-async def metrics(
-    request: Request,
-    x_api_key: str | None = Header(None, alias="X-Api-Key"),
-    authorization: str | None = Header(None, alias="Authorization"),
-) -> PlainTextResponse:
-    # Guard metrics with admin key (fail-closed)
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Metrics not configured")
-    token: str | None = None
-    if x_api_key:
-        token = x_api_key.strip()
-    elif authorization:
-        auth = authorization.strip()
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-        else:
-            token = auth
-    if token is None or not hmac.compare_digest(token, settings.ADMIN_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid admin API key")
+async def metrics(_admin: None = Depends(verify_admin_key)) -> PlainTextResponse:
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -159,7 +172,10 @@ async def root() -> dict[str, str]:
 
 @app.post(
     "/v1/chat/completions",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_data_plane_key),
+        Depends(rate_limit()),
+    ],
 )
 async def chat_completions(request: ChatCompletionRequest) -> Any:
     try:
@@ -173,23 +189,25 @@ async def chat_completions(request: ChatCompletionRequest) -> Any:
     except (OSError, Exception) as e:
         logger.error("chat_completion_failed", error=str(e))
         local_enabled = bool(getattr(settings, "ENABLE_LOCAL_LLM", False))
-        hint = (
-            "No LLM provider available. "
-            + (
-                "Ollama sidecar unreachable — start it with "
-                "'docker compose --profile local up -d ollama' and pull "
-                "'phi3:mini'."
-                if local_enabled
-                else "Set ENABLE_LOCAL_LLM=true with ollama profile, or set "
-                "APINEX_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY."
-            )
+        hint = "No LLM provider available. " + (
+            "Ollama sidecar unreachable — start it with "
+            "'docker compose --profile local up -d ollama' and pull "
+            "'phi3:mini'."
+            if local_enabled
+            else "Set ENABLE_LOCAL_LLM=true with ollama profile, or set "
+            "APINEX_API_KEY/GROQ_API_KEY/OPENROUTER_API_KEY."
         )
-        raise HTTPException(status_code=502, detail=f"LLM provider request failed: {hint}") from e
+        raise HTTPException(
+            status_code=502, detail=f"LLM provider request failed: {hint}"
+        ) from e
 
 
 @app.post(
     "/v1/embeddings",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_data_plane_key),
+        Depends(rate_limit()),
+    ],
 )
 async def embeddings(request: EmbeddingRequest) -> Any:
     try:
@@ -201,12 +219,17 @@ async def embeddings(request: EmbeddingRequest) -> Any:
         raise e
     except (OSError, Exception) as e:
         logger.error("embedding_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="LLM provider request failed") from e
+        raise HTTPException(
+            status_code=502, detail="LLM provider request failed"
+        ) from e
 
 
 @app.post(
     "/v1/audio/transcriptions",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_data_plane_key),
+        Depends(rate_limit()),
+    ],
 )
 async def transcribe(request: STTRequest) -> Any:
     try:
@@ -218,12 +241,17 @@ async def transcribe(request: STTRequest) -> Any:
         raise e
     except (OSError, Exception) as e:
         logger.error("stt_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="STT provider request failed") from e
+        raise HTTPException(
+            status_code=502, detail="STT provider request failed"
+        ) from e
 
 
 @app.post(
     "/v1/audio/speech",
-    dependencies=[Depends(verify_api_key), Depends(rate_limit(settings.RATE_LIMIT_LLM))],
+    dependencies=[
+        Depends(verify_data_plane_key),
+        Depends(rate_limit()),
+    ],
 )
 async def speech(request: TTSRequest) -> Any:
     try:
@@ -235,7 +263,9 @@ async def speech(request: TTSRequest) -> Any:
         raise e
     except (OSError, Exception) as e:
         logger.error("tts_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="TTS provider request failed") from e
+        raise HTTPException(
+            status_code=502, detail="TTS provider request failed"
+        ) from e
 
 
 @app.get("/v1/router/providers")
@@ -247,7 +277,9 @@ async def list_providers(_admin: None = Depends(verify_admin_key)) -> dict[str, 
                 "enabled": provider.enabled,
                 "priority": provider.priority,
                 "supported_tasks": [t.value for t in provider.supported_tasks],
-                "supported_sensitivity": [s.value for s in provider.supported_sensitivity],
+                "supported_sensitivity": [
+                    s.value for s in provider.supported_sensitivity
+                ],
                 "models": list(provider.models.keys()),
                 "status": routing_engine.status[name].model_dump(),
             }
@@ -285,7 +317,9 @@ async def get_usage_stats(
 
 
 @app.get("/v1/router/usage/quota/{provider}")
-async def get_quota(provider: str, _admin: None = Depends(verify_admin_key)) -> dict[str, Any]:
+async def get_quota(
+    provider: str, _admin: None = Depends(verify_admin_key)
+) -> dict[str, Any]:
     return await usage_tracker.get_quota_status(provider)
 
 

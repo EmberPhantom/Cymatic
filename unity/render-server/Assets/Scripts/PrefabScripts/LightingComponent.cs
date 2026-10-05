@@ -11,7 +11,7 @@ namespace Cymatic.Prefabs
         [SerializeField] private LightingPreset preset = LightingPreset.Warm;
         [SerializeField] private LightingTimeOfDay timeOfDay = LightingTimeOfDay.Evening;
         [SerializeField, Range(0f, 2f)] private float ambientIntensity = 1f;
-        
+
         [Header("Sun Light")]
         [SerializeField] private Light sunLight;
         [SerializeField] private Vector3 sunDirection = new Vector3(0.5f, -1f, 0.3f);
@@ -19,33 +19,33 @@ namespace Cymatic.Prefabs
         [SerializeField] private Color sunColor = new Color(1f, 0.95f, 0.9f);
         [SerializeField] private bool autoRotateSun = false;
         [SerializeField, Range(0f, 360f)] private float sunRotationSpeed = 1f;
-        
+
         [Header("Ambient")]
         [SerializeField] private Color ambientColor = new Color(0.3f, 0.25f, 0.2f);
         [SerializeField] private bool useSkybox = false;
-        
+
         [Header("Custom Lights")]
         [SerializeField] private CustomLightData[] customLights;
-        
+
         [Header("Shadows")]
         [SerializeField] private bool enableShadows = true;
         [SerializeField] private LightShadows shadowType = LightShadows.Soft;
         [SerializeField, Range(0f, 1f)] private float shadowStrength = 1f;
         [SerializeField] private float shadowDistance = 100f;
         [SerializeField, Range(0f, 1f)] private float shadowNearPlane = 0.1f;
-        
+
         [Header("Quality")]
         [SerializeField] private ShadowResolution shadowResolution = ShadowResolution.High;
         [SerializeField] private int shadowCascades = 4;
-        
+
         private Light _sunLight;
         private Light[] _customLights;
         private float _sunRotationAngle = 0f;
-        
+
         public LightingPreset Preset => preset;
         public LightingTimeOfDay TimeOfDay => timeOfDay;
         public float AmbientIntensity => ambientIntensity;
-        
+
         public enum LightingPreset
         {
             Warm,
@@ -55,7 +55,7 @@ namespace Cymatic.Prefabs
             BlueHour,
             Custom
         }
-        
+
         public enum LightingTimeOfDay
         {
             Morning,
@@ -63,17 +63,17 @@ namespace Cymatic.Prefabs
             Evening,
             Night
         }
-        
+
         void Awake()
         {
             InitializeLighting();
         }
-        
+
         void Start()
         {
             ApplyLighting();
         }
-        
+
         void Update()
         {
             if (autoRotateSun && sunLight != null)
@@ -83,7 +83,7 @@ namespace Cymatic.Prefabs
                 sunLight.transform.rotation = Quaternion.Euler(sunDirection.x, _sunRotationAngle, sunDirection.z);
             }
         }
-        
+
         void InitializeLighting()
         {
             // Find or create sun light
@@ -93,7 +93,7 @@ namespace Cymatic.Prefabs
                 sunLight = sunObj.AddComponent<Light>();
                 sunLight.type = LightType.Directional;
             }
-            
+
             if (sunLight != null)
             {
                 sunLight.type = LightType.Directional;
@@ -108,7 +108,7 @@ namespace Cymatic.Prefabs
                 sunLight.shadowNormalBias = 0.1f;
                 sunLight.shadowNearPlane = shadowNearPlane;
             }
-            
+
             // Create custom lights
             if (customLights != null && customLights.Length > 0)
             {
@@ -117,11 +117,11 @@ namespace Cymatic.Prefabs
                 {
                     var custom = customLights[i];
                     if (custom == null) continue;
-                    
+
                     var lightObj = new GameObject($"CustomLight_{i}");
                     var light = lightObj.AddComponent<Light>();
-                    light.type = custom.type == 0 ? LightType.Directional : 
-                                 custom.type == 1 ? LightType.Point : 
+                    light.type = custom.type == 0 ? LightType.Directional :
+                                 custom.type == 1 ? LightType.Point :
                                  custom.type == 2 ? LightType.Spot : LightType.Area;
                     light.color = new Color(custom.color[0], custom.color[1], custom.color[2]);
                     light.intensity = custom.intensity;
@@ -132,10 +132,10 @@ namespace Cymatic.Prefabs
                     light.shadows = enableShadows ? custom.shadows : LightShadows.None;
                 }
             }
-            
+
             ApplyPreset();
         }
-        
+
         public void ApplyPreset()
         {
             switch (preset)
@@ -165,35 +165,35 @@ namespace Cymatic.Prefabs
                     break;
             }
         }
-        
+
         public void ApplyLighting()
         {
             if (sunLight == null) return;
-            
+
             // Apply sun settings
             sunLight.color = sunColor;
             sunLight.intensity = sunIntensity * ambientIntensity;
             sunLight.transform.rotation = Quaternion.Euler(sunDirection);
-            
+
             // Apply shadows
             sunLight.shadows = enableShadows ? shadowType : LightShadows.None;
             sunLight.shadowStrength = shadowStrength;
             sunLight.shadowResolution = shadowResolution;
             sunLight.shadowDistance = shadowDistance;
             sunLight.shadowNearPlane = shadowNearPlane;
-            
+
             // Apply ambient
             RenderSettings.ambientLight = ambientColor * ambientIntensity;
             RenderSettings.ambientIntensity = ambientIntensity;
             RenderSettings.ambientMode = useSkybox ? AmbientMode.Skybox : AmbientMode.Flat;
-            
+
             // Apply custom lights
             if (customLights != null)
             {
                 // Custom lights are already set up in InitializeLighting
             }
         }
-        
+
         public void SetTimeOfDay(float timeOfDay)
         {
             // timeOfDay: 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
@@ -202,21 +202,21 @@ namespace Cymatic.Prefabs
             if (sunLight != null)
                 sunLight.transform.rotation = rotation;
         }
-        
+
         public void SetPreset(LightingPreset preset)
         {
             preset = preset;
             ApplyPreset();
             ApplyLighting();
         }
-        
+
         public void SetSunRotation(float angle)
         {
             if (sunLight != null)
                 sunLight.transform.rotation = Quaternion.Euler(0, angle, 0);
         }
     }
-    
+
     [System.Serializable]
     public class CustomLightData
     {

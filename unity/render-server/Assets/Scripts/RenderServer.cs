@@ -19,19 +19,19 @@ namespace Cymatic
         [Header("Configuration")]
         [SerializeField] private string backendUrl = "http://localhost:8000";
         [SerializeField] private string renderServerId = "render-server-01";
-        [SerializeField] private int signalingPort = 8080;
-        
+        [SerializeField] private float sessionPollInterval = 3f;
+
         [Header("Streaming Settings")]
         [SerializeField] private int targetFPS = 60;
         [SerializeField] private int renderWidth = 1920;
         [SerializeField] private int renderHeight = 1080;
         [SerializeField] private int ipd = 64; // mm
-        
+
         [Header("Quality Settings")]
         [SerializeField] private bool adaptiveQuality = true;
         [SerializeField] private int minBitrate = 5000000; // 5 Mbps
         [SerializeField] private int maxBitrate = 30000000; // 30 Mbps
-        
+
         // Components
         private StereoCameraRig _stereoRig;
         private WebRTCStreamer _webRTCStreamer;
@@ -40,12 +40,12 @@ namespace Cymatic
         private PerformanceManager _performanceManager;
         private EventBridge _eventBridge;
         private SignalingClient _signalingClient;
-        
+
         // State
         private bool _isStreaming = false;
         private string _currentSessionId;
         private CymaticScenePackage _currentScenePackage;
-        
+
         public static RenderServer Instance { get; private set; }
         public bool IsStreaming => _isStreaming;
         public string CurrentSessionId => _currentSessionId;
@@ -56,7 +56,7 @@ namespace Cymatic
         public PerformanceManager PerformanceManager => _performanceManager;
         public SignalingClient SignalingClient => _signalingClient;
         public EventBridge EventBridge => _eventBridge;
-        
+
         private void Awake()
         {
             if (Instance != null && Instance != this)
@@ -66,10 +66,10 @@ namespace Cymatic
             }
             Instance = this;
             DontDestroyOnLoad(gameObject);
-            
+
             InitializeComponents();
         }
-        
+
         private void InitializeComponents()
         {
             _stereoRig = GetComponentInChildren<StereoCameraRig>();
@@ -79,31 +79,31 @@ namespace Cymatic
                 rigGO.transform.SetParent(transform);
                 _stereoRig = rigGO.AddComponent<StereoCameraRig>();
             }
-            
+
             _webRTCStreamer = GetComponent<WebRTCStreamer>();
             if (_webRTCStreamer == null)
                 _webRTCStreamer = gameObject.AddComponent<WebRTCStreamer>();
-            
+
             _inputManager = GetComponent<InputManager>();
             if (_inputManager == null)
                 _inputManager = gameObject.AddComponent<InputManager>();
-            
+
             _sceneLoader = GetComponent<SceneLoader>();
             if (_sceneLoader == null)
                 _sceneLoader = gameObject.AddComponent<SceneLoader>();
-            
+
             _performanceManager = GetComponent<PerformanceManager>();
             if (_performanceManager == null)
                 _performanceManager = gameObject.AddComponent<PerformanceManager>();
-            
+
             _eventBridge = GetComponent<EventBridge>();
             if (_eventBridge == null)
                 _eventBridge = gameObject.AddComponent<EventBridge>();
-            
+
             _signalingClient = GetComponent<SignalingClient>();
             if (_signalingClient == null)
                 _signalingClient = gameObject.AddComponent<SignalingClient>();
-            
+
             // Configure components
             _stereoRig.Configure(ipd, renderWidth, renderHeight);
             _webRTCStreamer.Configure(renderWidth, renderHeight, targetFPS, minBitrate, maxBitrate);
@@ -115,28 +115,59 @@ namespace Cymatic
                 try { _webRTCStreamer.SetBitrate(br); } catch {}
             };
             _eventBridge.Configure(backendUrl, renderServerId);
-            var signalingHost = "localhost";
-            try { signalingHost = new System.Uri(backendUrl).Host; } catch {}
-            _signalingClient.Configure($"ws://{signalingHost}:{signalingPort}/ws");
         }
-        
+
         private async void Start()
         {
             Application.targetFrameRate = targetFPS;
             QualitySettings.vSyncCount = 0;
-            
-            // Register with backend
+
+            // Adopt the configured user access token (no separate render-server
+            // identity exists on the backend - see EventBridge.RegisterRenderServer).
             await _eventBridge.RegisterRenderServer();
-            
-            // Start signaling connection
+            _signalingClient.Configure(backendUrl, _eventBridge.GetAuthToken());
+
             _signalingClient.OnOfferReceived += HandleOfferReceived;
             _signalingClient.OnAnswerReceived += HandleAnswerReceived;
             _signalingClient.OnCandidateReceived += HandleCandidateReceived;
-            await _signalingClient.Connect();
-            
-            Debug.Log("[RenderServer] Started and ready for sessions");
+            _signalingClient.OnSessionEnded += HandleSessionEnded;
+
+            // There is no push notification when a new stream session is
+            // created - poll for one and connect the session-scoped signaling
+            // socket once it appears (single-user MVP: at most one at a time).
+            SessionDiscoveryLoop().Forget();
+
+            Debug.Log("[RenderServer] Started, polling for sessions to join");
         }
-        
+
+        private async UniTaskVoid SessionDiscoveryLoop()
+        {
+            while (this != null)
+            {
+                try
+                {
+                    if (!_isStreaming && !_signalingClient.IsConnected)
+                    {
+                        var active = await _eventBridge.GetActiveSession();
+                        if (active != null)
+                        {
+                            Debug.Log($"[RenderServer] Found session {active.id}, connecting signaling");
+                            await _signalingClient.Connect(active.id);
+                        }
+                    }
+                }
+                catch (System.Exception e) { Debug.LogError($"[RenderServer] Session discovery error: {e}"); }
+
+                await UniTask.Delay(TimeSpan.FromSeconds(sessionPollInterval));
+            }
+        }
+
+        private void HandleSessionEnded(string sessionId)
+        {
+            if (sessionId != _currentSessionId) return;
+            StopStreaming().Forget();
+        }
+
         private async void HandleOfferReceived(string sessionId, string sdp)
         {
             try {
@@ -154,6 +185,9 @@ namespace Cymatic
                 var sessionInfoTask = _eventBridge.GetSessionInfo(sessionId);
                 var answer = await answerTask;
                 _signalingClient.SendAnswer(sessionId, answer);
+                // Video/input/perf pipeline only actually starts here - this was
+                // previously never invoked, so no frames were ever sent after answering.
+                await StartStreaming(sessionId);
                 var sessionInfo = await sessionInfoTask;
                 if (sessionInfo != null && !string.IsNullOrEmpty(sessionInfo.scenePackageUrl))
                 {
@@ -161,58 +195,58 @@ namespace Cymatic
                 }
             } catch (System.Exception e) { Debug.LogError($"[RenderServer] HandleOffer error: {e}"); }
         }
-        
+
         private async void HandleAnswerReceived(string sessionId, string sdp)
         {
             try { await _webRTCStreamer.SetRemoteDescription(sdp); } catch (System.Exception e) { Debug.LogError($"HandleAnswer error {e}"); }
         }
-        
+
         private async void HandleCandidateReceived(string sessionId, string candidate, string sdpMid, int sdpMLineIndex)
         {
             try { await _webRTCStreamer.AddIceCandidate(candidate, sdpMid, sdpMLineIndex); } catch (System.Exception e) { Debug.LogError($"HandleCandidate error {e}"); }
         }
-        
+
         public async UniTask LoadScene(string scenePackageUrl)
         {
             Debug.Log($"[RenderServer] Loading scene from {scenePackageUrl}");
-            
+
             _currentScenePackage = await _sceneLoader.LoadFromUrl(scenePackageUrl);
             if (_currentScenePackage == null)
             {
                 Debug.LogError("[RenderServer] Failed to load scene package");
                 return;
             }
-            
+
             // Instantiate scene
             await _sceneLoader.InstantiateScene(_currentScenePackage);
-            
+
             // Configure stereo rig for scene
             _stereoRig.SetNavigationPoints(_currentScenePackage.navigation);
-            
+
             // Notify backend
             await _eventBridge.SendEvent(_currentSessionId, "scene_loaded", new { scenePackageUrl });
-            
+
             Debug.Log("[RenderServer] Scene loaded successfully");
         }
-        
+
         public async UniTask StartStreaming(string sessionId)
         {
             _currentSessionId = sessionId;
             _isStreaming = true;
-            
+
             // Start WebRTC streaming
             await _webRTCStreamer.StartStreaming(_stereoRig.LeftCamera, _stereoRig.RightCamera);
-            
+
             // Start input processing
             _inputManager.StartProcessing();
-            
+
             // Start performance monitoring
             _performanceManager.StartMonitoring();
-            
+
             await _eventBridge.SendEvent(sessionId, "stream_started", new { });
             Debug.Log($"[RenderServer] Streaming started for session {sessionId}");
         }
-        
+
         public async UniTask StopStreaming()
         {
             if (!_isStreaming) return;
@@ -223,6 +257,7 @@ namespace Cymatic
             try { _performanceManager.StopMonitoring(); } catch {}
             try { await _sceneLoader.UnloadScene(); } catch {}
             try { await _eventBridge.SendEvent(endedId, "stream_ended", new { }); } catch {}
+            try { _signalingClient?.Disconnect(); } catch {}
             _currentSessionId = null;
             Debug.Log("[RenderServer] Streaming stopped");
         }
@@ -255,11 +290,11 @@ namespace Cymatic
 #if !UNITY_WEBRTC
         // stub for compile when package not present
 #endif
-        
+
         private void Update()
         {
             if (!_isStreaming) return;
-            
+
             // Process input - coalesce to 20Hz instead of 60Hz per-frame spam; keep only latest per type
             if (Time.time - _lastInputSendTime >= InputSendInterval)
             {
@@ -284,15 +319,15 @@ namespace Cymatic
             {
                 _stereoRig.UpdateHeadPose(_inputManager.HeadPosition, _inputManager.HeadRotation);
             }
-            
+
             // Performance management is driven by PerformanceManager's own Update (MonoBehaviour auto-tick)
         }
-        
+
         private void OnDestroy()
         {
             if (_isStreaming)
                 StopStreaming().Forget();
-            
+
             _signalingClient.Disconnect();
         }
     }

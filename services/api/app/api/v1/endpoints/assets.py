@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 from app.core.dependencies import require_creator, require_admin, require_viewer
+from app.core.config import get_settings
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.asset import Asset, AssetType, AssetStatus
 from app.models.project import Project
@@ -21,6 +23,8 @@ from app.services.minio_client import (
 )
 
 router = APIRouter()
+
+settings = get_settings()
 
 _SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
 
@@ -89,7 +93,11 @@ class AssetUploadComplete(BaseModel):
     size: Optional[int] = Field(default=None, ge=0, le=500 * 1024 * 1024)
 
 
-@router.post("/upload/init", response_model=AssetUploadInitResponse)
+@router.post(
+    "/upload/init",
+    response_model=AssetUploadInitResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def init_upload(
     upload_data: AssetUploadInit,
     current_user: User = Depends(require_creator),
@@ -103,7 +111,12 @@ async def init_upload(
 
     # Block active content that could become stored XSS via presigned GET.
     ct = upload_data.content_type.split(";")[0].strip().lower()
-    blocked_prefixes = ("text/html", "application/xhtml", "text/javascript", "application/javascript")
+    blocked_prefixes = (
+        "text/html",
+        "application/xhtml",
+        "text/javascript",
+        "application/javascript",
+    )
     if ct in blocked_prefixes or ct.startswith("text/html"):
         raise HTTPException(status_code=400, detail="Unsupported content type")
     if "/" not in ct:
@@ -176,8 +189,10 @@ async def complete_upload(
     if not get_minio_client().object_exists(asset.storage_key):
         raise HTTPException(status_code=400, detail="Object not found in storage")
 
-    # Get object info
+    # Get object info (None-safe shared client: missing after exists-check = race)
     info = get_minio_client().get_object_info(asset.storage_key)
+    if not info:
+        raise HTTPException(status_code=400, detail="Object not found in storage")
     # Update metadata_json with flag_modified to ensure SQLAlchemy detects change
     if asset.metadata_json is None:
         asset.metadata_json = {}
@@ -198,7 +213,12 @@ async def complete_upload(
     await db.refresh(asset)
 
     # Queue asset processing only if needed (e.g., images/models/textures; skip OTHER)
-    if asset.type in (AssetType.MODEL_3D, AssetType.TEXTURE, AssetType.IMAGE, AssetType.AUDIO):
+    if asset.type in (
+        AssetType.MODEL_3D,
+        AssetType.TEXTURE,
+        AssetType.IMAGE,
+        AssetType.AUDIO,
+    ):
         from app.core.queue import job_queue, Job, JobPriority
 
         job = Job(
@@ -237,11 +257,32 @@ async def list_assets(
     return result.scalars().all()
 
 
+@router.post("/maintenance/sweep-uploads")
+async def sweep_uploads(
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    older_than_hours: int = Query(settings.ASSET_UPLOAD_STALE_HOURS, ge=1, le=720),
+    limit: int = Query(settings.ASSET_UPLOAD_SWEEP_LIMIT, ge=1, le=1000),
+):
+    """Delete orphan UPLOADING rows older than N hours + best-effort MinIO cleanup.
+
+    Admin-only, bounded per run. Endpoint-triggered path for the orphan-upload
+    sweeper (the other path is the startup sweep in app.main lifespan)."""
+    from app.services.asset_maintenance import sweep_stale_uploading_assets
+
+    swept = await sweep_stale_uploading_assets(
+        db, older_than_hours=older_than_hours, limit=limit
+    )
+    return {"swept": swept}
+
+
 @router.get("/projects/{project_id}", response_model=List[AssetResponse])
 async def list_project_assets(
     project_id: int,
     current_user: User = Depends(require_viewer),
     db: AsyncSession = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
 ):
     project = await db.scalar(
         select(Project).where(
@@ -258,6 +299,8 @@ async def list_project_assets(
             Asset.organization_id == current_user.organization_id,
         )
         .order_by(Asset.created_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
     return result.scalars().all()
 
@@ -298,6 +341,56 @@ async def get_download_url(
 
     url = get_asset_presigned_download_url(asset.storage_key, expires_hours)
     return {"download_url": url, "expires_hours": expires_hours}
+
+
+@router.get(
+    "/resolve/url",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
+async def resolve_asset_url(
+    uri: str = Query(min_length=1, max_length=512),
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+    project_id: Optional[int] = Query(default=None, ge=1),
+    expires_hours: int = Query(1, ge=1, le=24),
+):
+    """Resolve a scene-manifest asset URI to downloadable bytes.
+
+    Manifest URIs are catalog strings (e.g. ``assets/models/room.glb``),
+    not storage keys. Resolution order:
+    1. caller's org (and project, if given) READY asset whose filename
+       matches the URI basename -> presigned download URL;
+    2. ``assets/`` template-catalog prefix -> 404 ``template_not_baked``
+       (client renders its procedural fallback until the bake stage lands);
+    3. anything else -> 404 ``asset_not_found``.
+    """
+    if ".." in uri or uri.startswith(("http://", "https://", "/")):
+        raise HTTPException(status_code=400, detail="Invalid asset URI")
+    basename = os.path.basename(uri)
+    query = select(Asset).where(
+        Asset.filename == basename,
+        Asset.organization_id == current_user.organization_id,
+        Asset.status == AssetStatus.READY,
+    )
+    if project_id is not None:
+        query = query.where(Asset.project_id == project_id)
+    result = await db.execute(query.order_by(Asset.id.desc()).limit(1))
+    asset = result.scalar_one_or_none()
+    if asset is not None:
+        url = get_asset_presigned_download_url(asset.storage_key, expires_hours)
+        return {
+            "uri": uri,
+            "status": "ready",
+            "asset_id": asset.id,
+            "download_url": url,
+            "expires_hours": expires_hours,
+        }
+    if uri.startswith("assets/"):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "template_not_baked", "fallback": "procedural"},
+        )
+    raise HTTPException(status_code=404, detail="Asset not found")
 
 
 @router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)

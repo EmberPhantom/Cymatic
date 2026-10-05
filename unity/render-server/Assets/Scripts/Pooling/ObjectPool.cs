@@ -20,13 +20,13 @@ namespace Cymatic.Pooling
             public int maxSize = 50;
             public bool expandable = true;
         }
-        
+
         public List<PoolConfig> pools = new List<PoolConfig>();
         public Dictionary<string, Queue<GameObject>> poolDictionary = new Dictionary<string, Queue<GameObject>>();
         private Dictionary<string, int> _totalSpawned = new Dictionary<string, int>();
-        
+
         public static ObjectPool Instance { get; private set; }
-        
+
         void Awake()
         {
             if (Instance == null)
@@ -40,7 +40,7 @@ namespace Cymatic.Pooling
                 Destroy(gameObject);
             }
         }
-        
+
         void InitializePools()
         {
             foreach (var pool in pools)
@@ -48,7 +48,7 @@ namespace Cymatic.Pooling
                 var objectPool = new Queue<GameObject>();
                 var parent = new GameObject($"{pool.tag}_Pool");
                 parent.transform.SetParent(transform);
-                
+
                 // Spread 50-instantiate hitch: only instantiate min(initialSize, 10) synchronously, remainder async
                 int syncCount = Mathf.Min(pool.initialSize, 10);
                 for (int i = 0; i < syncCount; i++)
@@ -57,7 +57,7 @@ namespace Cymatic.Pooling
                     obj.SetActive(false);
                     objectPool.Enqueue(obj);
                 }
-                
+
                 poolDictionary.Add(pool.tag, objectPool);
                 _totalSpawned[pool.tag] = syncCount;
                 // Schedule remaining async to avoid frame hitch
@@ -90,7 +90,7 @@ namespace Cymatic.Pooling
             }
             _totalSpawned[tag] = spawned;
         }
-        
+
         /// <summary>
         /// Get an object from the pool.
         /// </summary>
@@ -101,9 +101,9 @@ namespace Cymatic.Pooling
                 Debug.LogWarning($"Pool with tag {tag} does not exist.");
                 return null;
             }
-            
+
             var objectPool = poolDictionary[tag];
-            
+
             GameObject objectToSpawn;
             if (objectPool.Count > 0)
             {
@@ -128,18 +128,18 @@ namespace Cymatic.Pooling
                     return null;
                 }
             }
-            
+
             objectToSpawn.SetActive(true);
             objectToSpawn.transform.position = position;
             objectToSpawn.transform.rotation = rotation;
-            
+
             // Reset object state
             var pooledObj = objectToSpawn.GetComponent<IPooledObject>();
             pooledObj?.OnSpawn();
-            
+
             return objectToSpawn;
         }
-        
+
         /// <summary>
         /// Return an object to the pool.
         /// </summary>
@@ -151,15 +151,15 @@ namespace Cymatic.Pooling
                 Destroy(objectToReturn);
                 return;
             }
-            
+
             objectToReturn.SetActive(false);
-            
+
             var pooledObj = objectToReturn.GetComponent<IPooledObject>();
             pooledObj?.OnReturnToPool();
-            
+
             poolDictionary[tag].Enqueue(objectToReturn);
         }
-        
+
         /// <summary>
         /// Pre-warm a pool to a specific size.
         /// Fixed: checks totalSpawned not queue.Count, spreads across frames to avoid hitch.
@@ -173,10 +173,10 @@ namespace Cymatic.Pooling
         public async UniTask PrewarmPoolAsync(string tag, int count)
         {
             if (!poolDictionary.ContainsKey(tag)) return;
-            
+
             var config = pools.Find(p => p.tag == tag);
             if (config == null) return;
-            
+
             var pool = poolDictionary[tag];
             var parent = transform.Find($"{tag}_Pool");
             int total = _totalSpawned.TryGetValue(tag, out var t) ? t : pool.Count;
@@ -195,7 +195,7 @@ namespace Cymatic.Pooling
                     await UniTask.Yield(PlayerLoopTiming.Update);
             }
         }
-        
+
         /// <summary>
         /// Clear a specific pool.
         /// </summary>
@@ -211,7 +211,7 @@ namespace Cymatic.Pooling
                 _totalSpawned[tag] = 0;
             }
         }
-        
+
         /// <summary>
         /// Get current pool size (queued available).
         /// </summary>
@@ -228,7 +228,7 @@ namespace Cymatic.Pooling
             return _totalSpawned.TryGetValue(tag, out var v) ? v : GetPoolSize(tag);
         }
     }
-    
+
     /// <summary>
     /// Helper component for automatically returning to pool after time.
     /// </summary>
@@ -236,17 +236,17 @@ namespace Cymatic.Pooling
     {
         public string poolTag;
         public float lifetime = 5f;
-        
+
         void OnEnable()
         {
             Invoke(nameof(ReturnToPool), lifetime);
         }
-        
+
         void OnDisable()
         {
             CancelInvoke();
         }
-        
+
         void ReturnToPool()
         {
             if (ObjectPool.Instance != null)

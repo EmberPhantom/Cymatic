@@ -19,6 +19,7 @@ from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from app.models.user import User, UserRole
 from app.models.organization import Organization
 
@@ -70,7 +71,9 @@ class OrganizationResponse(BaseModel):
 
 
 @router.post(
-    "/login", response_model=Token, dependencies=[Depends(rate_limit("100/minute"))]
+    "/login",
+    response_model=Token,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH))],
 )
 async def login(
     response: Response,
@@ -89,7 +92,7 @@ async def login(
 
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",
         )
 
@@ -134,7 +137,7 @@ def _set_auth_cookies(
     "/register",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(rate_limit("100/minute"))],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH))],
 )
 async def register(
     user_data: UserCreate,
@@ -161,7 +164,16 @@ async def register(
         is_active=True,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Concurrent same-email register won the race after the
+        # check-then-insert above: report conflict, not a 500.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        )
     await db.refresh(user)
 
     return user
@@ -174,7 +186,11 @@ async def get_current_user_info(
     return current_user
 
 
-@router.post("/refresh", response_model=Token, dependencies=[Depends(rate_limit("10/minute"))])
+@router.post(
+    "/refresh",
+    response_model=Token,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_AUTH_REFRESH))],
+)
 async def refresh_token(
     response: Response,
     http_request: Request,

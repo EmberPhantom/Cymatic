@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.dependencies import require_creator, require_viewer
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.project import Project, ProjectStatus
 from app.models.simulation_spec import SimulationSpec, SpecStatus
@@ -28,8 +29,32 @@ def _ensure_manual_editing():
         )
 
 
+async def _require_org_project(
+    db: AsyncSession, project_id: int, organization_id: int
+) -> Project:
+    """404 unless the project belongs to the caller's organization."""
+    result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.organization_id == organization_id,
+        )
+    )
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
 class EditOperation(BaseModel):
-    operation: Literal["move", "rotate", "scale", "change_material", "add_entity", "duplicate", "delete"]
+    operation: Literal[
+        "move",
+        "rotate",
+        "scale",
+        "change_material",
+        "add_entity",
+        "duplicate",
+        "delete",
+    ]
     entity_id: str = Field(min_length=1, max_length=128)
     params: Dict[str, Any] = Field(default_factory=dict, max_length=50)
 
@@ -52,10 +77,13 @@ class EntityPatch(BaseModel):
     properties: Optional[Dict[str, Any]] = Field(default=None, max_length=50)
 
     @classmethod
-    def _check_finite(cls, values: Optional[List[float]], name: str) -> Optional[List[float]]:
+    def _check_finite(
+        cls, values: Optional[List[float]], name: str
+    ) -> Optional[List[float]]:
         if values is None:
             return values
         import math
+
         for v in values:
             if not math.isfinite(v) or abs(v) > 1e6:
                 raise ValueError(f"{name} must be finite within ±1e6")
@@ -67,7 +95,11 @@ class EntityPatch(BaseModel):
         return cls._check_finite(v, info.field_name)
 
 
-@router.post("/{project_id}/specs/{spec_id}/edit", response_model=EditResponse)
+@router.post(
+    "/{project_id}/specs/{spec_id}/edit",
+    response_model=EditResponse,
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def edit_spec(
     project_id: int,
     spec_id: int,
@@ -108,9 +140,19 @@ async def edit_spec(
         # add_entity is allowed when entity_id == "new" or when not in map - handle before existence check
         if operation.operation == "add_entity":
             allowed_types = {
-                "room", "wall", "floor", "ceiling", "door", "window",
-                "furniture", "decoration", "light", "navigation_point",
-                "poi", "audio_zone", "trigger_zone",
+                "room",
+                "wall",
+                "floor",
+                "ceiling",
+                "door",
+                "window",
+                "furniture",
+                "decoration",
+                "light",
+                "navigation_point",
+                "poi",
+                "audio_zone",
+                "trigger_zone",
             }
             req_type = str(operation.params.get("type", "furniture"))
             if req_type not in allowed_types:
@@ -163,10 +205,22 @@ async def edit_spec(
                 items = nav.get(key)
                 if isinstance(items, list):
                     nav[key] = [
-                        it for it in items
+                        it
+                        for it in items
                         if it != operation.entity_id
-                        and not (isinstance(it, dict) and it.get("id") == operation.entity_id)
-                        and not (isinstance(it, dict) and operation.entity_id in (it.get("from"), it.get("to"), it.get("from_point"), it.get("to_point")))
+                        and not (
+                            isinstance(it, dict) and it.get("id") == operation.entity_id
+                        )
+                        and not (
+                            isinstance(it, dict)
+                            and operation.entity_id
+                            in (
+                                it.get("from"),
+                                it.get("to"),
+                                it.get("from_point"),
+                                it.get("to_point"),
+                            )
+                        )
                     ]
         elif operation.operation == "duplicate":
             new_entity = copy.deepcopy(entity)
@@ -186,6 +240,7 @@ async def edit_spec(
     # Async worker re-validation still runs, but invalid edits are rejected here.
     try:
         from app.services.spec_validator import validate_spec as _validate_sync
+
         _vresult = _validate_sync(payload)
         if not _vresult.valid:
             first = _vresult.errors[0].to_dict() if _vresult.errors else {}
@@ -243,7 +298,9 @@ async def edit_spec(
 
 
 @router.patch(
-    "/{project_id}/specs/{spec_id}/entities/{entity_id}", response_model=Dict[str, Any]
+    "/{project_id}/specs/{spec_id}/entities/{entity_id}",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
 )
 async def patch_entity(
     project_id: int,
@@ -255,6 +312,7 @@ async def patch_entity(
 ):
     """Patch a single entity in the spec"""
     _ensure_manual_editing()
+    await _require_org_project(db, project_id, current_user.organization_id)
 
     # Validate patch shapes before mutating stored state (spec-first:
     # never persist untrusted DRAFT without a schema check).
@@ -299,7 +357,10 @@ async def patch_entity(
     if patch.scale is not None:
         entity["scale"] = copy.deepcopy(patch.scale)
     if patch.properties is not None:
-        entity["properties"] = {**entity.get("properties", {}), **copy.deepcopy(patch.properties)}
+        entity["properties"] = {
+            **entity.get("properties", {}),
+            **copy.deepcopy(patch.properties),
+        }
 
     payload["entities"] = entities
     spec.payload_json = payload
@@ -311,7 +372,11 @@ async def patch_entity(
     return {"success": True, "entity": entity}
 
 
-@router.post("/{project_id}/specs/{spec_id}/validate", response_model=Dict[str, Any])
+@router.post(
+    "/{project_id}/specs/{spec_id}/validate",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
 async def validate_spec_edits(
     project_id: int,
     spec_id: int,
@@ -320,6 +385,7 @@ async def validate_spec_edits(
 ):
     """Validate a spec after edits"""
     _ensure_manual_editing()
+    await _require_org_project(db, project_id, current_user.organization_id)
 
     result = await db.execute(
         select(SimulationSpec).where(
@@ -355,6 +421,7 @@ async def diff_specs(
 ):
     """Compare two spec versions"""
     _ensure_manual_editing()
+    await _require_org_project(db, project_id, current_user.organization_id)
 
     result = await db.execute(
         select(SimulationSpec).where(

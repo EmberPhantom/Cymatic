@@ -3,9 +3,10 @@
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { useEffect, useRef, useState, useCallback } from "react"
-import { useCreateStreamSession, useEndStreamSession } from "@/hooks/use-stream-session"
+import { useCreateStreamSession, useEndStreamSession, endSessionBeaconUrl } from "@/hooks/use-stream-session"
 import { useProject } from "@/hooks/use-project"
 import { useAuthStore } from "@/stores/auth-store"
+import { getErrorMessage } from "@/lib/errors"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -138,7 +139,15 @@ export default function StreamPage() {
             console.warn("addIceCandidate failed", err)
           }
         } else if (msg.type === "error") {
-          setSessionError(msg.payload?.detail || msg.payload || "Stream error")
+          // payload is {session_id, error} from the render server (see
+          // RenderServer.cs's "busy" rejection) - never render it raw.
+          const payload = msg.payload
+          const text =
+            typeof payload?.detail === "string" ? payload.detail :
+            typeof payload?.error === "string" ? payload.error :
+            typeof payload === "string" ? payload :
+            "Stream error"
+          setSessionError(text)
         }
       } catch (err) {
         console.warn("signaling message error", err)
@@ -159,7 +168,7 @@ export default function StreamPage() {
       if (sid) {
         try {
           const blob = new Blob([], { type: "application/json" })
-          navigator.sendBeacon(`/v1/stream/sessions/${encodeURIComponent(sid)}/end`, blob)
+          navigator.sendBeacon(endSessionBeaconUrl(sid), blob)
         } catch {}
       }
     }
@@ -184,10 +193,7 @@ export default function StreamPage() {
         setSessionError("The render server is unavailable. Please verify it is running and retry.")
       }
     } catch (err: unknown) {
-      const anyErr = err as { response?: { data?: { detail?: unknown } } ; message?: string }
-      const detail = anyErr?.response?.data?.detail
-      const msg = typeof detail === "string" ? detail : anyErr?.message || "Unable to start stream."
-      setSessionError(Array.isArray(detail) ? detail.map((d: unknown) => typeof d === "string" ? d : (d as {msg?:string})?.msg || "").join("; ") || "Unable to start stream." : msg)
+      setSessionError(getErrorMessage(err, "Unable to start stream."))
     }
   }, [createSession, projectId])
 
@@ -195,16 +201,11 @@ export default function StreamPage() {
     const sid = sessionIdRef.current
     if (sid) {
       try {
-        const numId = Number(sid)
-        if (!Number.isNaN(numId) && String(numId) === sid) {
-          await endSession.mutateAsync({ sessionId: numId })
-        } else {
-          await endSession.mutateAsync({ sessionId: sid as unknown as number })
-        }
+        await endSession.mutateAsync({ sessionId: sid })
       } catch {
         try {
           const blob = new Blob([], { type: "application/json" })
-          navigator.sendBeacon(`/v1/stream/sessions/${encodeURIComponent(sid)}/end`, blob)
+          navigator.sendBeacon(endSessionBeaconUrl(sid), blob)
         } catch {}
       }
     }
@@ -269,7 +270,7 @@ export default function StreamPage() {
 
       {/* Telemetry Bar (CONNECTED · 60 FPS · 42 ms · 1920 × 1080) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
-        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-sm">
           <div className="text-[10px] text-stonegray uppercase">Connection</div>
           <div className="flex items-center gap-2 mt-1">
             <span className={`h-2 w-2 rounded-full ${isConnected ? "bg-sage animate-ping" : sessionId ? "bg-terracotta animate-pulse" : "bg-stonegray"}`} />
@@ -279,19 +280,19 @@ export default function StreamPage() {
           </div>
         </div>
 
-        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-sm">
           <div className="text-[10px] text-stonegray uppercase">Target Frame Rate</div>
           <div className="text-sm font-bold text-foreground mt-1">60 FPS</div>
           <div className="text-[10px] text-stonegray">Mobile VR Stereo</div>
         </div>
 
-        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
-          <div className="text-[10px] text-stonegray uppercase">LAN Latency</div>
-          <div className="text-sm font-bold text-foreground mt-1">42 ms</div>
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-sm">
+          <div className="text-[10px] text-stonegray uppercase">LAN Latency (Target)</div>
+          <div className="text-sm font-bold text-foreground mt-1">Not measured</div>
           <div className="text-[10px] text-stonegray">&lt; 50 ms Target</div>
         </div>
 
-        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-2xs">
+        <div className="p-3.5 rounded-xl border border-warmgray bg-card shadow-sm">
           <div className="text-[10px] text-stonegray uppercase">Resolution &amp; Rig</div>
           <div className="text-sm font-bold text-foreground mt-1">1920 × 1080</div>
           <div className="text-[10px] text-stonegray">Side-by-Side H.264</div>
@@ -299,7 +300,7 @@ export default function StreamPage() {
       </div>
 
       {/* Main Remote Rendering Console Preview Frame */}
-      <Card className="border-warmgray shadow-2xs overflow-hidden bg-charcoal text-white">
+      <Card className="border-warmgray shadow-sm overflow-hidden bg-charcoal text-white">
         <div className="p-3 border-b border-white/10 flex items-center justify-between text-xs font-mono text-ivory/80">
           <div className="flex items-center gap-2">
             <Radio className="h-3.5 w-3.5 text-terracotta" />
@@ -338,7 +339,7 @@ export default function StreamPage() {
                 />
                 {/* Overlay reticle / stereoscopic separator guide */}
                 <div className="absolute inset-y-0 left-1/2 w-px bg-white/10 pointer-events-none" />
-                <div className="absolute bottom-3 left-3 text-[10px] font-mono bg-black/60 px-2 py-0.5 rounded border border-white/10 backdrop-blur-xs">
+                <div className="absolute bottom-3 left-3 text-[10px] font-mono bg-black/60 px-2 py-0.5 rounded border border-white/10 backdrop-blur-sm">
                   LEFT EYE // RIGHT EYE STEREO
                 </div>
               </div>
@@ -377,7 +378,7 @@ export default function StreamPage() {
                   size="lg"
                   onClick={handleStartStream}
                   disabled={createSession.isPending || !isPublished}
-                  className="gap-2 font-medium shadow-xs"
+                  className="gap-2 font-medium shadow-sm"
                 >
                   <Play className="h-4 w-4 fill-current" />
                   <span>{createSession.isPending ? "Starting Server…" : "Launch VR Stream →"}</span>

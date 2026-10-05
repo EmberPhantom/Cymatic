@@ -30,7 +30,7 @@ class ControllerManager(private val context: Context) {
     private var cachedInputManager: AndroidInputManager? = null
     private var receiverRegistered = false
     private var hasScanned = false
-    
+
     // Controller state
     private var selectPressed = false
     private var menuPressed = false
@@ -44,22 +44,22 @@ class ControllerManager(private val context: Context) {
     private var gripValue = 0f
     private var thumbstickX = 0f
     private var thumbstickY = 0f
-    
+
     // Battery
     private var batteryLevel = 100
-    
+
     // Callbacks
     private val controllerStateChannel = Channel<ControllerState>(10)
-    
+
     // For Daydream/Cardboard style controllers
     private var virtualControllerEnabled = false
-    
+
     init {
         registerReceivers()
         // Single bonded-device scan guarded by BLUETOOTH_CONNECT permission — avoids double scan (144)
         scanForControllers()
     }
-    
+
     private fun registerReceivers() {
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
@@ -76,7 +76,7 @@ class ControllerManager(private val context: Context) {
             Log.w("ControllerManager", "Bluetooth permission not granted, skip receiver")
         }
     }
-    
+
     private val bluetoothReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action
@@ -97,7 +97,11 @@ class ControllerManager(private val context: Context) {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                     }
-                    if (device == connectedController) {
+                    // Compare by address, not instance: each intent carries a
+                    // fresh BluetoothDevice parcelable, so instance equality
+                    // is unreliable for disconnect matching.
+                    val address = try { device?.address } catch (_: SecurityException) { null }
+                    if (ControllerIdentity.sameDevice(address, connectedAddress())) {
                         onControllerDisconnected()
                     }
                 }
@@ -111,7 +115,7 @@ class ControllerManager(private val context: Context) {
             }
         }
     }
-    
+
     private fun scanForControllers() {
         if (hasScanned) return
         hasScanned = true
@@ -132,25 +136,32 @@ class ControllerManager(private val context: Context) {
             Log.w("ControllerManager", "BLUETOOTH_CONNECT denied during scan", e)
         }
     }
-    
+
     private fun isControllerDevice(device: BluetoothDevice): Boolean {
-        val name = try { device.name?.lowercase() ?: "" } catch (_: SecurityException) { "" }
-        return name.contains("controller") || name.contains("daydream") || 
-               name.contains("gear vr") || name.contains("oculus") ||
-               name.contains("vr")
+        val name = try { device.name } catch (_: SecurityException) { null }
+        val address = try { device.address } catch (_: SecurityException) { null }
+        val allowed = ControllerIdentity.isAllowedControllerName(name)
+        if (allowed) {
+            Log.i("ControllerManager", "Controller claimed: ${ControllerIdentity.claimLabel(name, address)}")
+        }
+        return allowed
     }
-    
+
+    private fun connectedAddress(): String? {
+        return try { connectedController?.address } catch (_: SecurityException) { null }
+    }
+
     private fun onControllerConnected(device: BluetoothDevice) {
         connectedController = device
         Log.d("ControllerManager", "Controller connected: ${try{device.name}catch(_:SecurityException){"unknown"}}")
     }
-    
+
     private fun onControllerDisconnected() {
         connectedController = null
         resetState()
         Log.d("ControllerManager", "Controller disconnected")
     }
-    
+
     private fun resetState() {
         selectPressed = false
         menuPressed = false
@@ -165,7 +176,7 @@ class ControllerManager(private val context: Context) {
         thumbstickX = 0f
         thumbstickY = 0f
     }
-    
+
     private fun getAndroidInputManager(): AndroidInputManager {
         if (cachedInputManager == null) {
             cachedInputManager = context.getSystemService(Context.INPUT_SERVICE) as AndroidInputManager
@@ -194,20 +205,20 @@ class ControllerManager(private val context: Context) {
             touchpadDeltaX = 0f
             touchpadDeltaY = 0f
         }
-        
+
         // Trigger / Grip / Thumbstick — distinct axes, not aliased to touchpad
         triggerValue = event.getAxisValue(MotionEvent.AXIS_BRAKE)
         gripValue = event.getAxisValue(MotionEvent.AXIS_GAS)
-        
+
         // Thumbstick on hat axes, fallback to Z/RZ if hat is zero for some controllers
         val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
         thumbstickX = if (hatX != 0f) hatX else event.getAxisValue(MotionEvent.AXIS_Z)
         thumbstickY = if (hatY != 0f) hatY else event.getAxisValue(MotionEvent.AXIS_RZ)
-        
+
         return true
     }
-    
+
     fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
@@ -229,7 +240,7 @@ class ControllerManager(private val context: Context) {
         }
         return false
     }
-    
+
     fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
@@ -251,7 +262,7 @@ class ControllerManager(private val context: Context) {
         }
         return false
     }
-    
+
     // Virtual controller for testing
     fun setVirtualController(enabled: Boolean) {
         virtualControllerEnabled = enabled
@@ -259,7 +270,7 @@ class ControllerManager(private val context: Context) {
             resetState()
         }
     }
-    
+
     fun setVirtualButton(button: VirtualButton, pressed: Boolean) {
         when (button) {
             VirtualButton.SELECT -> selectPressed = pressed
@@ -267,7 +278,7 @@ class ControllerManager(private val context: Context) {
             VirtualButton.PTT -> pttPressed = pressed
         }
     }
-    
+
     fun setVirtualTouchpad(x: Float, y: Float, touched: Boolean) {
         if (touched) {
             touchpadDeltaX = x - touchpadX
@@ -281,20 +292,20 @@ class ControllerManager(private val context: Context) {
             touchpadDeltaY = 0f
         }
     }
-    
+
     fun setVirtualThumbstick(x: Float, y: Float) {
         thumbstickX = x
         thumbstickY = y
     }
-    
+
     fun setVirtualTrigger(value: Float) {
         triggerValue = value
     }
-    
+
     fun setVirtualGrip(value: Float) {
         gripValue = value
     }
-    
+
     // Getters
     fun isSelectPressed(): Boolean = selectPressed
     fun isMenuPressed(): Boolean = menuPressed
@@ -307,7 +318,7 @@ class ControllerManager(private val context: Context) {
     fun getThumbstickPosition(): Pair<Float, Float> = thumbstickX to thumbstickY
     fun getBatteryLevel(): Int = batteryLevel
     fun isConnected(): Boolean = connectedController != null || virtualControllerEnabled
-    
+
     fun getState(): ControllerState {
         return ControllerState(
             selectPressed = selectPressed,
@@ -326,7 +337,7 @@ class ControllerManager(private val context: Context) {
             isConnected = isConnected()
         )
     }
-    
+
     fun dispose() {
         if (receiverRegistered) {
             try { context.unregisterReceiver(bluetoothReceiver) } catch (_: Exception) {}
@@ -334,11 +345,11 @@ class ControllerManager(private val context: Context) {
         }
         try { controllerStateChannel.close() } catch (_: Exception) {}
     }
-    
+
     enum class VirtualButton {
         SELECT, MENU, PTT
     }
-    
+
     data class ControllerState(
         val selectPressed: Boolean,
         val menuPressed: Boolean,

@@ -66,7 +66,15 @@ EXPOSE 8002
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s \
     CMD curl -fsS http://localhost:8002/health || exit 1
 
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8002 --workers ${WORKER_CONCURRENCY:-2}"]
+# Single uvicorn worker REQUIRED: app.main.worker_loop is a serial,
+# single-owner loop (WORKER_CONCURRENCY in app/core/config.py is
+# reserved/unused). `--workers N` would spawn N competing loops over the same
+# Redis ZPOPMAX queues — dequeue is atomic so jobs are not lost, but the
+# loops fight over polls/lock renewals and multiply LLM traffic. Scale with
+# more worker containers, not uvicorn fan-out. (The llm-router image likewise
+# runs a single uvicorn worker: its owning process holds the provider clients
+# and in-memory policy state.)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "1"]
 
 # ── Test ───────────────────────────────────────────────────────
 FROM runtime AS test

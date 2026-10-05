@@ -11,6 +11,13 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 // "timeout of 30000ms exceeded", so long LLM endpoints override per-request.
 export const LONG_REQUEST_TIMEOUT_MS = 180_000
 
+// Next.js's built-in rewrites() proxy (see next.config.js) kills the upstream
+// connection ("socket hang up" / ECONNRESET) well before a slow intake/clarify
+// LLM call finishes, returning a 500 regardless of LONG_REQUEST_TIMEOUT_MS.
+// Those two calls go straight to the API's public origin instead, bypassing
+// the proxy; CORS already allows this origin with credentials.
+export const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
 export const api = axios.create({
   baseURL: "",
   withCredentials: true,
@@ -58,8 +65,22 @@ api.interceptors.response.use(
       if (isRefreshing) {
         if (!originalRequest) return Promise.reject(error)
         const req = originalRequest
-        return new Promise((resolve, reject) => failedQueue.push({ resolve, reject }))
-          .then(() => api(req))
+        // Parked requests must re-execute with the REFRESHED token, not the
+        // stale Authorization header they were originally sent with (the
+        // request interceptor only fills in a missing header, so without this
+        // the retry would 401 again on the old token).
+        return new Promise<string | null>((resolve, reject) => failedQueue.push({ resolve, reject }))
+          .then((token) => {
+            req._retry = true
+            if (token) {
+              if (req.headers) {
+                ;(req.headers as unknown as Record<string, string>).Authorization = `Bearer ${token}`
+              } else {
+                req.headers = { Authorization: `Bearer ${token}` } as unknown as InternalAxiosRequestConfig["headers"]
+              }
+            }
+            return api(req)
+          })
           .catch((err) => Promise.reject(err))
       }
       if (!originalRequest) return Promise.reject(error)
@@ -77,10 +98,17 @@ api.interceptors.response.use(
             // SSR-safe: cookies remain primary
           }
         }
-        processQueue(null, newToken ?? "refreshed")
-        if (originalRequest.headers && newToken) {
+        processQueue(null, newToken)
+        if (originalRequest.headers) {
           const h = originalRequest.headers as unknown as Record<string, string>
-          h.Authorization = `Bearer ${newToken}`
+          if (newToken) {
+            h.Authorization = `Bearer ${newToken}`
+          } else {
+            // Cookie-only refresh: drop the stale header so the HttpOnly
+            // cookie (primary mechanism) authenticates the retry.
+            delete h.Authorization
+            delete h.authorization
+          }
         }
         return api(originalRequest as InternalAxiosRequestConfig)
       } catch (refreshError) {

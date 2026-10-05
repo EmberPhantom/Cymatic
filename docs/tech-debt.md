@@ -110,3 +110,180 @@
 **Verification on `b3cb79b`:**
 `tsc 0`, `vitest 4/4 v5`, `next build 7/7`, `ruff 0 x3`, `mypy 0 (api 44/worker 31/shared 30/llm-router 14)`, `docker compose config 0`, `gradle syntax green`.
 
+## 9. Standardization pass (2026-10-02, uncommitted)
+
+**Done:** docs index + `archive/`, `08→09` rename, 12 area READMEs,
+pivot rewrites (00/01/05/06/07/08 + README/AGENTS/CLAUDE),
+validator union in shared (api fork → shim; navigation_point-entity rule
+dropped — contradicts composer output),
+queue/MinIO/rate_limit/api-admin-key → shared (worker/admin-key 403→401),
+logging bootstrap shared, worker `/metrics` gated, viewer `npm ci`,
+benchmark outputs → `./reports/`, kv-style benchmark logs, api pytest.ini
+template, k8s api→1 replica + pinned tags + viewer resources.
+
+**Verified:** sync gate OK, ruff clean (2 pre-existing F841 left untouched),
+mypy 0 on touched files, suites 48/46/62 + shared 27, live E2E 18/18 + P1 12/12.
+
+**Still open:** llm-router keeps its own rate_limit variant (provider
+limits); `yml` vs `yaml` split kept; api pytest.ini has no `--cov` gate;
+`ValidationErrorDetail` canonical name (old lowercase alias dropped —
+no importers existed).
+
+## 10. Remaining-opens close-out (2026-10-02, uncommitted)
+
+- **E1 dead code:** ProgressStepper+test, queryKeys shim, 5 pipeline helpers,
+  save_to_file, warm_cache, get_clarification_questions, cleanup_stale_locks;
+  tenacity x6 files, date-fns (+lock), nv-websocket/camera-video/media3/room/
+  kotlinx-serialization (Android). Kept: tailwindcss-animate (used), vite
+  (vitest peer), axios, security-crypto/mediapipe (imported), bcrypt (works).
+- **E2 hardening:** security fail-closed semantics + tests, WS 4029 on limiter
+  failure, quota except-narrowing, ScenePackageUnavailable 503s (+rollback),
+  fixed cross-path started_at 500 found by fault injection. Suites 52/46/62.
+- **E3 bounds:** pagination on 3 list endpoints (+tests), analytics COUNT +
+  1000-scan/500-path caps (19ms on 2500 events), heartbeat cutoff in SQL,
+  cancel scan cap 1000.
+- **Rate limit unified:** shared `rate_limit_core.sliding_check` (both
+  admission orders preserved verbatim) + shared `parse_limit`; api/worker
+  shims, router adapter keeps `rl:sliding:` keys + provider limits.
+  Live burst proof: refresh 10/min → 429s with Retry-After.
+- **Extensions unified on `.yml`:** k8s manifests renamed, 2 doc refs fixed.
+- **API coverage gate:** measured 53%, `--cov-fail-under=50` pinned
+  (same convention as worker/router).
+- **Dead code:** `best` (llm_client) + `elem_tokens` (domain_expert) removed.
+
+**Verified:** ruff clean, mypy 0 on touched files, suites 48/46/62 +
+shared 27, live E2E re-green after rebuild. §9 fully closed.
+
+## 11. Deep-investigation E1–E4 (2026-10-02, uncommitted)
+
+- **E1 dead code:** ProgressStepper+test, queryKeys shim, 5 pipeline helpers,
+  save_to_file, warm_cache, get_clarification_questions, cleanup_stale_locks;
+  tenacity x6 files, date-fns (+lock), nv-websocket/camera-video/media3/room/
+  kotlinx-serialization (Android). Kept with evidence: tailwindcss-animate
+  (used), vite (vitest peer), axios, security-crypto/mediapipe (imported),
+  bcrypt (logins work).
+- **E2 hardening:** security fail-closed semantics + tests, WS 4029 on limiter
+  failure, quota except-narrowing, ScenePackageUnavailable 503s (+rollback),
+  fixed cross-path started_at 500 found by fault injection. Suites 52/46/62.
+- **E3 bounds:** pagination on 3 list endpoints (+tests), analytics COUNT +
+  1000-scan/500-path caps (19ms on 2500 events), heartbeat cutoff in SQL,
+  cancel scan cap 1000.
+- **E4 splits:** specs.py→specs/{schemas,intake,generate,library,scene},
+  streaming.py→streaming/{common,sessions,copilot,ws},
+  tasks/generation.py→generation/{spec,scene,ops}_tasks,
+  engine 432-line table→routing/policies.py (44×4 combos + 26 static rows
+  proven identical), sanitize→providers/sanitize.py. Monkeypatch namespaces
+  preserved (`specs.process_*`, `streaming._get_http_client`,
+  `tasks.generation.AsyncSessionLocal`).
+- **Deferred (assessed, poor ROI/risk):** pipelines base class (73%
+  fragmented similarity), heritage_templates restructure, litellm_client
+  class split, bcrypt/passlib migration (logins work).
+
+## 12. Deep-investigation E6 (2026-10-02, uncommitted)
+
+- **Tests:** middleware action/resource mapping, scene None-vs-503 helpers,
+  queue cancel semantics on real Redis (found + fixed stale-loop client in
+  shared queue; fixed audit gap where project creation never matched an
+  audit action). Suites 60/46/62 + shared 27.
+- **Web a11y:** SVG nodes keyboard-operable (role/button/Enter/Space via one
+  prop helper), dismiss/reset aria-labels, toggle aria-pressed states.
+  tsc + vitest 2/2 + next build green.
+- **Viewer:** labeled inputs, aria-live statuses, 48px buttons, debounced
+  resize, rAF-throttled drag, per-frame allocation removal, bounded label
+  cache. tsc + vite build green.
+- **Android:** render strings → resources, 48dp touch targets, logo
+  description (XML-parsed; APK compile needs SDK machine).
+
+## 13. Remaining-opens close-out, part 2 (2026-10-03, committed)
+
+- **Conftest repeat-run quirk (fixed):** `setup_db` teardown ran
+  `Base.metadata.drop_all`, which leaves `alembic_version` behind
+  (not in metadata) — the next run's `upgrade head` was then a no-op
+  on a table-less DB and every DB test errored with `UndefinedTable`.
+  Teardown now also drops `alembic_version`. Proven by back-to-back
+  `test_render.py` runs (14/14 twice). Same hardening applied to
+  worker conftest (latent there — no worker test currently requests
+  `db_session`). Host runs additionally need test-infra env:
+  `DATABASE_URL` on `:5433`, `REDIS_*_URL` with
+  `:cymatic_redis_pass@`, `S3_ENDPOINT http://localhost:9000`;
+  `test_benchmark.py` errors on host only (`pytest-benchmark` not
+  installed in host Python; present in container images).
+- **§9 opens (closed, verified rather than changed):**
+  - llm-router rate_limit "variant" is intentional layering — sliding
+    mechanics already delegate to shared `rate_limit_core`
+    (`parse_limit`/`sliding_check`); the module keeps only
+    router-specific identifier resolution + per-provider limits.
+  - `yml`/`yaml` split is tool convention: only `.hadolint.yaml` +
+    `.pre-commit-config.yaml` use `.yaml` (both filenames fixed by
+    their tools); all 18 project manifests are `.yml`.
+  - api `pytest.ini` coverage gate already pinned
+    (`--cov-fail-under=50`).
+  - `ValidationErrorDetail` canonical everywhere (shared defines,
+    api/worker shim-import it; no lowercase alias remains).
+- **bcrypt (closed):** already pinned `bcrypt==4.3.0` with
+  `passlib[bcrypt]==1.7.4` in api+worker; register/login/refresh
+  tests pass (15/15 `test_api.py`, 5/5 `test_security.py`) — no
+  migration needed.
+- **§11 splits (deferred with evidence, not implemented):**
+  - pipelines base class: `real_estate.py`/`heritage.py` measure 0.757
+    line similarity but fragmented (distinct stage logic/templates);
+    module shape is one class + one function each — an ABC would couple
+    two domain flows to save a few dozen lines.
+  - `heritage_templates.py`: `HeritageTemplateLibrary` is lines 18–172
+    (2 methods); the remaining ~340 lines are template/catalog data —
+    nothing to deduplicate by restructuring.
+  - `litellm_client.py` (990 lines): 8 small Pydantic models + 1 client
+    class + 4 thin wrappers; already cohesive, split would be pure
+    import churn.
+
+**Verified:** ruff clean on edited conftests, api suite 58 passed
+(+2 host-only benchmark-fixture errors), worker suite 46/46,
+repeat-run proof for the conftest fix.
+
+## 14. Deep-audit P0–P2 close-out (2026-10-04/05, committed)
+
+Six-area audit (~85 findings) executed in four phases; branch adds
+migration `009` (asset drift + hot-path indexes, EXPLAIN-verified).
+
+**Phase A (security):** api tenant scoping on spec/edit paths + 404
+regression tests, fail-closed revocation, register 409 race,
+org-locked credit adjust, honest `RequestIdMiddleware`, header-only WS
+auth; router audio policy checks, fail-closed quota, org-scoped cache,
+`LLM_API_KEY`/admin split, minimal public `/health`; CI SHA-pinned
+actions (+fixed nonexistent `trivy-action@0.24.0` tag), blocking
+gitleaks, working pip-audit, safe `.env.example`, test Redis DB blocks
+on live-validated `--databases 32`. Owner decision still open:
+`game-ci/unity-installer` does not exist upstream (warning inline).
+
+**Phase B (correctness):** worker spec_id flush, failure checkpoints,
+async MinIO, durable requeue + sweep, truncation bar, template 422,
+`has_window` unification, time-of-day normalization, RunStage mapping,
+namespaced advisory locks; web NaN guard, refreshed-token retries,
+dead-job reset, string session IDs, renderer teardown, in-memory viewer
+auth; Android transforms/destroy/refresh/WAV/stereo/coords/lighting
+(+JVM unit tests; `./gradlew test` + assemble need SDK machine); k8s
+migrate tag + initContainers, benchmark accounting, strict schema-sync,
+viewer `.dockerignore`, openapi hyphen fix.
+
+**Phase C (reliability):** persist-after-forward, rate-limit coverage,
+auth 403 consistency, self-deactivation guard; single uvicorn worker,
+wired `LLM_TIMEOUT`, checkpoint TTL/size/per-run, LLM budget backoff;
+router quota crash-safety, provider fail-closed, sanitizer NFKC,
+schema bounds, per-path limits; web Zod boundary, edge-auth expiry,
+illustrative preview labels; k8s web env/ingress, worker defaults,
+`REDISCLI_AUTH` healthcheck.
+
+**Phase D (hygiene):** orphan-upload sweep (startup + admin endpoint),
+asset list pagination, global stale-session sweep; `009` lint fix;
+stream latency card now "Not measured".
+
+**Intentionally unchanged (evidence in §13/plan notes):** pipelines
+ABC, heritage_templates data move, litellm_client split; minSdk 34
+(product reach decision); Ollama/Redis plaintext (LAN assumption);
+`NavigationPath(from_point=)` mypy notes are runtime-safe
+(`populate_by_name`); Unity stays frozen — the two findings
+(`SceneLoader.cs:551` names nodes `Nav_{name}` but `:580-581`
+resolves by id, so mismatched id/name silently drops paths;
+`:577` per-path `new Material` never destroyed) are recorded here
+with the one-line remedy (name nodes `Nav_{point.id}`; share the path
+material via `MaterialManager`) for a Unity-machine owner to apply.

@@ -1,14 +1,6 @@
 """Tests for API endpoints"""
-import os
-import pytest
-import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
 
-from app.main import app
-from app.core.config import get_settings
-from app.core.security import get_password_hash, create_access_token
-from app.models.user import User, UserRole
-from app.models.project import Project, ProjectStatus
+import pytest
 
 
 @pytest.mark.asyncio
@@ -29,7 +21,11 @@ async def test_root(client):
 async def test_register_user(client):
     response = await client.post(
         "/v1/auth/register",
-        json={"email": "register@example.com", "password": "testpass123", "name": "Test User"},
+        json={
+            "email": "register@example.com",
+            "password": "testpass12345",
+            "name": "Test User",
+        },
     )
     assert response.status_code == 201
     data = response.json()
@@ -42,11 +38,15 @@ async def test_register_user(client):
 async def test_login_user(client):
     await client.post(
         "/v1/auth/register",
-        json={"email": "login@example.com", "password": "testpass123", "name": "Login User"},
+        json={
+            "email": "login@example.com",
+            "password": "testpass12345",
+            "name": "Login User",
+        },
     )
     response = await client.post(
         "/v1/auth/login",
-        data={"username": "login@example.com", "password": "testpass123"},
+        data={"username": "login@example.com", "password": "testpass12345"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -59,7 +59,11 @@ async def test_login_user(client):
 async def test_create_project(client, auth_headers):
     response = await client.post(
         "/v1/projects",
-        json={"name": "My Test Project", "domain": "real_estate", "category": "apartment"},
+        json={
+            "name": "My Test Project",
+            "domain": "real_estate",
+            "category": "apartment",
+        },
         headers=auth_headers,
     )
     assert response.status_code == 201
@@ -76,6 +80,22 @@ async def test_list_projects(client, auth_headers, test_project):
     data = response.json()
     assert isinstance(data, list)
     assert len(data) >= 1
+
+
+@pytest.mark.asyncio
+async def test_list_endpoints_enforce_pagination_bounds(
+    client, auth_headers, test_project
+):
+    pid = test_project.id
+    for path in (
+        f"/v1/projects/{pid}/specs",
+        f"/v1/projects/{pid}/generation-runs",
+        f"/v1/projects/{pid}/scene-packages",
+    ):
+        ok = await client.get(f"{path}?limit=10", headers=auth_headers)
+        assert ok.status_code == 200
+        over = await client.get(f"{path}?limit=101", headers=auth_headers)
+        assert over.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -121,7 +141,9 @@ async def test_intake_prompt(client, auth_headers, test_project):
 
 
 @pytest.mark.asyncio
-async def test_intake_retry_same_prompt_returns_existing_run(client, auth_headers, test_project):
+async def test_intake_retry_same_prompt_returns_existing_run(
+    client, auth_headers, test_project
+):
     # Retry-after-timeout resubmits the same prompt+context. The unique
     # (project_id, input_hash) constraint must not surface a 500: the
     # existing run is returned instead (mirrors generate-spec dedupe).
@@ -187,13 +209,17 @@ async def test_invalid_token(client):
 async def test_unauthorized_access(client, auth_headers, test_project):
     response = await client.post(
         "/v1/auth/register",
-        json={"email": "other@example.com", "password": "pass123", "name": "Other User"},
+        json={
+            "email": "other@example.com",
+            "password": "pass12345678",
+            "name": "Other User",
+        },
     )
     assert response.status_code == 201
 
     login_response = await client.post(
         "/v1/auth/login",
-        data={"username": "other@example.com", "password": "pass123"},
+        data={"username": "other@example.com", "password": "pass12345678"},
     )
     other_token = login_response.json()["access_token"]
 

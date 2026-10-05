@@ -17,7 +17,6 @@ minio==7.2.20
 httpx==0.28.1
 python-dotenv==1.2.3
 structlog==26.1.0
-tenacity==9.1.4
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.3.0

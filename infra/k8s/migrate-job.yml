@@ -1,0 +1,28 @@
+# External data services (Postgres/Redis/MinIO) are expected to be managed
+# outside this chart in production. This job runs Alembic migrations.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: cymatic
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext: { runAsNonRoot: true, runAsUser: 999 }
+      containers:
+        - name: migrate
+          # Pinned release tag (never :latest in k8s): MUST match the api
+          # image tag in services.yml (0.1.0) so migrations run against the
+          # exact code being deployed. `alembic upgrade head` is idempotent,
+          # so re-runs (Job retry + api/worker initContainers) are safe.
+          image: cymatic/api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }

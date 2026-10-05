@@ -7,14 +7,17 @@ import android.media.MediaRecorder
 import android.util.Base64
 import android.util.Log
 import com.cymatic.client.network.ApiClient
-import com.cymatic.client.network.model.VoiceTranscript
 import com.cymatic.client.network.model.VoiceResponse
+import com.cymatic.client.render.WavUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import kotlin.math.abs
 
 class VoiceManager(private val context: Context) {
@@ -22,6 +25,12 @@ class VoiceManager(private val context: Context) {
     // Bound by VRActivity when a stream session starts. Voice transcript
     // requires a valid session id — never send with empty id.
     var sessionId: String? = null
+
+    // Render (native 3D) session id for PCM voice upload. The backend STT entry
+    // point is multipart POST /v1/render/sessions/{id}/voice/audio (field
+    // "audio", form "language"); there is no multipart endpoint on the legacy
+    // stream path, so PCM upload requires this id. Set it for render sessions.
+    var renderSessionId: Int? = null
 
     private var audioRecord: AudioRecord? = null
     @Volatile private var isRecording = false
@@ -33,7 +42,7 @@ class VoiceManager(private val context: Context) {
         channelConfig,
         audioFormat
     ).coerceAtLeast(2048) * 2
-    
+
     private var audioChannel = Channel<ByteArray>(10)
     private val scope = CoroutineScope(Dispatchers.IO)
     private var captureJob: Job? = null
@@ -53,7 +62,7 @@ class VoiceManager(private val context: Context) {
     private var onTranscript: ((String) -> Unit)? = null
     private var onResponse: ((VoiceResponse) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
-    
+
     fun setCallbacks(
         onTranscript: ((String) -> Unit)? = null,
         onResponse: ((VoiceResponse) -> Unit)? = null,
@@ -63,7 +72,7 @@ class VoiceManager(private val context: Context) {
         this.onResponse = onResponse
         this.onError = onError
     }
-    
+
     fun startRecording() {
         if (isRecording) return
         if (audioChannel.isClosedForSend) audioChannel = Channel(10)
@@ -79,13 +88,13 @@ class VoiceManager(private val context: Context) {
             audioFormat,
             bufferSize
         )
-        
+
         try { audioRecord?.startRecording() } catch (e: Exception) {
             Log.e("VoiceManager", "startRecording failed", e)
             isRecording = false
             return
         }
-        
+
         captureJob = scope.launch {
             val buffer = ByteArray(bufferSize)
             while (isRecording) {
@@ -106,7 +115,7 @@ class VoiceManager(private val context: Context) {
             }
         }
     }
-    
+
     fun stopRecording() {
         if (!isRecording) return
         isRecording = false
@@ -199,41 +208,37 @@ class VoiceManager(private val context: Context) {
         val rms = kotlin.math.sqrt(sumSq.toDouble() / samples)
         return rms >= STT_VAD_THRESHOLD_RMS
     }
-    
+
     private fun sendBatchedToStt(pcmBatch: ByteArray, nowMs: Long) {
         if (isSttInFlight) return
-        val sid = sessionId?.takeIf { it.isNotBlank() }
-        if (sid == null) {
-            Log.w("VoiceManager", "STT skipped: no active session")
+        // Multipart PCM upload to the render voice/audio endpoint (field
+        // "audio" + form "language", per backend render.py). The previous code
+        // stuffed Base64 PCM into the transcript TEXT field, which the
+        // backend forwards verbatim to the LLM as the user message.
+        val renderId = renderSessionId
+        if (renderId == null) {
+            Log.w("VoiceManager", "STT skipped: no render session for PCM upload")
+            onError?.invoke("Voice upload needs an active render session")
             return
         }
         isSttInFlight = true
         lastSttSendMs = nowMs
         scope.launch {
             try {
-                val base64Audio = Base64.encodeToString(pcmBatch, Base64.NO_WRAP)
-
-                // Backend VoiceTranscript.transcript is text; audio bytes are
-                // transported out-of-band. For MVP send transcript placeholder
-                // with language tag and let server STT handle audio via WS.
-                // TODO: switch to multipart /api/voice/transcribe with raw PCM.
-                val request = VoiceTranscript(
-                    transcript = base64Audio,
-                    language = "en",
-                    confidence = null
+                val wav = WavUtil.wrapPcmAsWav(pcmBatch)
+                val part = MultipartBody.Part.createFormData(
+                    "audio", "stt.wav", wav.toRequestBody("audio/wav".toMediaType())
                 )
+                val lang = "en".toRequestBody("text/plain".toMediaType())
+                val response = ApiClient.apiService.renderVoiceAudio(renderId, part, lang)
 
-                val response = ApiClient.apiService.voiceTranscript(
-                    sessionId = sid,
-                    request
-                )
-                
-                if (response.isSuccessful) {
-                    val voiceResponse = response.body()!!
-                    onTranscript?.invoke(voiceResponse.response)
-                    onResponse?.invoke(voiceResponse)
+                if (response.isSuccessful && response.body() != null) {
+                    val voice = response.body()!!
+                    onTranscript?.invoke(voice.transcript)
+                    onResponse?.invoke(VoiceResponse(response = voice.response, ttsAudioUrl = null))
+                    voice.audioData?.let { playTTS(it) }
                 } else {
-                    onError?.invoke("STT failed: ${response.message()}")
+                    onError?.invoke("STT failed: ${response.code()}")
                 }
             } catch (e: Exception) {
                 Log.e("VoiceManager", "STT error", e)
@@ -248,13 +253,13 @@ class VoiceManager(private val context: Context) {
     private fun sendToSTT(audioData: ByteArray) {
         enqueueForStt(audioData)
     }
-    
+
     fun playTTS(audioBase64: String) {
         scope.launch {
             var track: android.media.AudioTrack? = null
             try {
                 val audioBytes = Base64.decode(audioBase64, Base64.NO_WRAP)
-                
+
                 track = android.media.AudioTrack.Builder()
                     .setAudioAttributes(
                         android.media.AudioAttributes.Builder()
@@ -272,10 +277,10 @@ class VoiceManager(private val context: Context) {
                     .setBufferSizeInBytes(maxOf(audioBytes.size, AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)))
                     .setTransferMode(android.media.AudioTrack.MODE_STATIC)
                     .build()
-                
+
                 track.write(audioBytes, 0, audioBytes.size)
                 track.play()
-                
+
                 while (track.playState == android.media.AudioTrack.PLAYSTATE_PLAYING) {
                     delay(50)
                 }
@@ -287,19 +292,19 @@ class VoiceManager(private val context: Context) {
             }
         }
     }
-    
+
     fun setOnTranscript(listener: (String) -> Unit) {
         onTranscript = listener
     }
-    
+
     fun setOnResponse(listener: (VoiceResponse) -> Unit) {
         onResponse = listener
     }
-    
+
     fun setOnError(listener: (String) -> Unit) {
         onError = listener
     }
-    
+
     fun dispose() {
         stopRecording()
         try { if (!audioChannel.isClosedForSend) audioChannel.close() } catch (_: Exception) {}

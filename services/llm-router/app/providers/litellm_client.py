@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import re
 import time
 import uuid
 from typing import Any
@@ -10,9 +9,15 @@ from typing import Any
 import litellm
 import structlog
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import get_settings
+from app.providers.sanitize import (  # noqa: F401  (re-export for tests/callers)
+    _MAX_MESSAGE_CHARS,
+    _MAX_MESSAGES,
+    _sanitize_messages,
+    _sanitize_text,
+)
 from app.routing.cache import LLMCache, get_cached_response, set_cached_response
 from app.routing.engine import routing_engine
 from app.routing.usage import UsageTracker, log_llm_usage
@@ -27,6 +32,16 @@ litellm.drop_params = True  # Drop unsupported params
 
 # Concurrency & size caps
 _MAX_CONCURRENT_LLM = 50
+# Schema bounds (422-tested; runtime sanitizers enforce the same caps)
+_MAX_TOKENS_CAP = 32768
+_MAX_RESPONSE_FORMAT_CHARS = 10000
+_MAX_METADATA_KEYS = 50
+_MAX_METADATA_CHARS = 10000
+_MAX_EMBEDDING_BATCH = 100
+_MAX_EMBEDDING_ITEM_CHARS = 10000
+_MAX_LANGUAGE_LEN = 35
+_MAX_MODEL_LEN = 200
+_MAX_SPEAKER_LEN = 100
 # Clarification/intent are highly context-dependent (prompt-specific questions).
 # Caching them on {domain, answers} alone leaks identical questions across
 # different projects, so they bypass the cache entirely.
@@ -36,64 +51,55 @@ _MAX_CONCURRENT_LOCAL = 2
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB decoded
 _MAX_AUDIO_B64_CHARS = 35 * 1024 * 1024
 _MAX_TTS_CHARS = 5000
-_MAX_MESSAGE_CHARS = 20000
-_MAX_MESSAGES = 100
-
-_SANITIZE_PATTERNS = [
-    re.compile(r"ignore\s+previous\s+instructions", re.IGNORECASE),
-    re.compile(r"system\s*:\s*you\s+are", re.IGNORECASE),
-    re.compile(r"<\s*system\s*>", re.IGNORECASE),
-]
-
-
-def _sanitize_text(text: str, max_len: int = _MAX_MESSAGE_CHARS) -> str:
-    # Truncate
-    if len(text) > max_len:
-        text = text[:max_len]
-    # Basic prompt injection sanitization: mask common injection phrases
-    for pat in _SANITIZE_PATTERNS:
-        text = pat.sub("[filtered]", text)
-    # Strip excessive whitespace and control chars
-    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
-    return text
-
-
-def _sanitize_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
-    if len(messages) > _MAX_MESSAGES:
-        raise ValueError(f"Too many messages: {len(messages)} > {_MAX_MESSAGES}")
-    sanitized: list[dict[str, str]] = []
-    allowed_roles = {"system", "user", "assistant", "tool", "function"}
-    for m in messages:
-        role = str(m.get("role", "user")).strip().lower()
-        if role not in allowed_roles:
-            role = "user"
-        content = str(m.get("content", ""))
-        content = _sanitize_text(content)
-        # Preserve other fields like name/tool_call_id if present
-        new_m: dict[str, str] = {"role": role, "content": content}
-        # Keep optional fields sanitized
-        for k, v in m.items():
-            if k not in ("role", "content") and isinstance(v, str):
-                new_m[k] = _sanitize_text(v, max_len=5000)
-        sanitized.append(new_m)
-    return sanitized
 
 
 class ChatCompletionRequest(BaseModel):
-    messages: list[dict[str, str]]
-    model: str | None = None
+    messages: list[dict[str, str]] = Field(min_length=1, max_length=_MAX_MESSAGES)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.COPILOT_CHAT
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    temperature: float = 0.7
-    max_tokens: int | None = None
-    top_p: float = 1.0
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, gt=0, le=_MAX_TOKENS_CAP)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     stream: bool = False
     response_format: dict[str, Any] | None = None
-    user_id: str | None = None
-    organization_id: str | None = None
-    project_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
+    project_id: str | None = Field(default=None, max_length=200)
     use_cache: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("response_format")
+    @classmethod
+    def validate_response_format_size(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        if v is None:
+            return v
+        import json as _json
+
+        try:
+            size = len(_json.dumps(v))
+        except Exception:
+            raise ValueError("response_format must be JSON-serializable")
+        if size > _MAX_RESPONSE_FORMAT_CHARS:
+            raise ValueError(
+                f"response_format too large: {size} > {_MAX_RESPONSE_FORMAT_CHARS}"
+            )
+        return v
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata_size(cls, v: dict[str, Any]) -> dict[str, Any]:
+        import json as _json
+
+        if len(v) > _MAX_METADATA_KEYS:
+            raise ValueError(f"metadata too many keys: {len(v)} > {_MAX_METADATA_KEYS}")
+        try:
+            size = len(_json.dumps(v, default=str))
+        except Exception:
+            raise ValueError("metadata must be JSON-serializable")
+        if size > _MAX_METADATA_CHARS:
+            raise ValueError(f"metadata too large: {size} > {_MAX_METADATA_CHARS}")
+        return v
 
 
 class ChatCompletionResponse(BaseModel):
@@ -110,12 +116,22 @@ class ChatCompletionResponse(BaseModel):
 
 
 class EmbeddingRequest(BaseModel):
-    input: list[str]
-    model: str | None = None
+    input: list[str] = Field(min_length=1, max_length=_MAX_EMBEDDING_BATCH)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.EMBEDDING
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    user_id: str | None = None
-    organization_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("input")
+    @classmethod
+    def validate_input_lengths(cls, v: list[str]) -> list[str]:
+        for item in v:
+            if len(item) > _MAX_EMBEDDING_ITEM_CHARS:
+                raise ValueError(
+                    f"Embedding item too long: {len(item)} > {_MAX_EMBEDDING_ITEM_CHARS}"
+                )
+        return v
 
 
 class EmbeddingResponse(BaseModel):
@@ -129,12 +145,12 @@ class EmbeddingResponse(BaseModel):
 
 class STTRequest(BaseModel):
     audio_data: str  # base64 encoded
-    language: str = "en"
-    model: str | None = None
+    language: str = Field(default="en", min_length=2, max_length=_MAX_LANGUAGE_LEN, pattern=r"^[A-Za-z-]{2,35}$")
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.STT
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    user_id: str | None = None
-    organization_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
 
 
 class STTResponse(BaseModel):
@@ -148,13 +164,24 @@ class STTResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    language: str = "en"
-    speaker: str = "anushka"
-    model: str | None = None
+    language: str = Field(default="en", min_length=2, max_length=_MAX_LANGUAGE_LEN, pattern=r"^[A-Za-z-]{2,35}$")
+    speaker: str = Field(default="anushka", min_length=1, max_length=_MAX_SPEAKER_LEN)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     task_type: TaskType = TaskType.TTS
     sensitivity: SensitivityLevel = SensitivityLevel.INTERNAL
-    user_id: str | None = None
-    organization_id: str | None = None
+    user_id: str | None = Field(default=None, max_length=200)
+    organization_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("text")
+    @classmethod
+    def validate_text_len(cls, v: str) -> str:
+        # Validator (not max_length) so the 422 message keeps the legacy
+        # "too long"/"empty" wording asserted by existing tests.
+        if not v or len(v.strip()) == 0:
+            raise ValueError("TTS text empty")
+        if len(v) > _MAX_TTS_CHARS:
+            raise ValueError(f"TTS text too long: {len(v)} > {_MAX_TTS_CHARS}")
+        return v
 
 
 class TTSResponse(BaseModel):
@@ -176,7 +203,9 @@ class LiteLLMClient:
 
     @staticmethod
     def _is_local_provider(provider: ProviderName | str) -> bool:
-        return provider == ProviderName.LOCAL or str(provider) == ProviderName.LOCAL.value
+        return (
+            provider == ProviderName.LOCAL or str(provider) == ProviderName.LOCAL.value
+        )
 
     @staticmethod
     def _is_apinex_provider(provider: ProviderName | str) -> bool:
@@ -192,7 +221,43 @@ class LiteLLMClient:
             return self._local_semaphore
         return self._semaphore
 
-    async def chat_completion(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+    def _resolve_audio_route(
+        self,
+        task: TaskType,
+        sensitivity: SensitivityLevel,
+        model: str | None,
+    ) -> tuple[str, ProviderName]:
+        """Resolve STT/TTS model/provider with the same policy checks as chat.
+
+        Explicit request.model values are allowlisted against registered
+        provider models and must satisfy sensitivity support, enablement,
+        and the task policy's allowed/blocked provider lists. Without an
+        explicit model, routing goes through the policy engine (which
+        denies sensitivities such as REGULATED that have no audio policy).
+        """
+        policy = routing_engine.get_policy(task, sensitivity)
+        if model:
+            found = self._find_provider_for_model(model)
+            if not found:
+                raise ValueError(f"Model {model} not found in any provider")
+            cfg = routing_engine.providers.get(found)
+            if cfg is None or sensitivity not in cfg.supported_sensitivity:
+                raise ValueError(
+                    f"Provider {found} does not support sensitivity {sensitivity}"
+                )
+            if not cfg.enabled:
+                raise ValueError(f"Provider {found} is disabled")
+            if found in policy.blocked_providers:
+                raise ValueError(f"Provider {found} blocked for {sensitivity}")
+            if policy.allowed_providers and found not in policy.allowed_providers:
+                raise ValueError(f"Provider {found} not allowed for {task}")
+            return model, found
+        decision = routing_engine.route(task, sensitivity)
+        return decision.model, decision.provider
+
+    async def chat_completion(
+        self, request: ChatCompletionRequest
+    ) -> ChatCompletionResponse:
         """Execute chat completion with routing, caching, and fallbacks."""
         start_time = time.time()
         request_id = str(uuid.uuid4())
@@ -209,7 +274,9 @@ class LiteLLMClient:
         provider_name: ProviderName | str
         policy = routing_engine.get_policy(request.task_type, request.sensitivity)
         if not request.model:
-            routing_decision = routing_engine.route(request.task_type, request.sensitivity)
+            routing_decision = routing_engine.route(
+                request.task_type, request.sensitivity
+            )
             model = routing_decision.model
             provider_name = routing_decision.provider
         else:
@@ -228,31 +295,65 @@ class LiteLLMClient:
                 raise ValueError(f"Provider {provider_name} is disabled")
             # Check blocked providers per policy
             if provider_name in policy.blocked_providers:
-                raise ValueError(f"Provider {provider_name} blocked for {request.sensitivity}")
+                raise ValueError(
+                    f"Provider {provider_name} blocked for {request.sensitivity}"
+                )
             # Check allowed providers per policy
-            if policy.allowed_providers and provider_name not in policy.allowed_providers:
-                raise ValueError(f"Provider {provider_name} not allowed for {request.task_type}")
+            if (
+                policy.allowed_providers
+                and provider_name not in policy.allowed_providers
+            ):
+                raise ValueError(
+                    f"Provider {provider_name} not allowed for {request.task_type}"
+                )
 
-        provider_str = provider_name.value if isinstance(provider_name, ProviderName) else str(provider_name)
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         # Pre-flight quota check (Redis)
-        estimated_tokens = self._estimate_chat_tokens(request.messages, request.max_tokens)
+        estimated_tokens = self._estimate_chat_tokens(
+            request.messages, request.max_tokens
+        )
         # Fix tpm never trip for STT/TTS not applicable here, but ensure at least 100
         estimated_tokens = max(estimated_tokens, 100)
         try:
-            allowed = await self.usage_tracker.check_quota(provider_str, estimated_tokens)
+            allowed = await self.usage_tracker.check_quota(
+                provider_str, estimated_tokens
+            )
             if not allowed:
-                raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Quota exceeded for provider {provider_str}",
+                )
         except HTTPException:
             raise
         except Exception as e:
             logger.warning("quota_check_failed", error=str(e))
+            # Fail-closed: an unavailable quota backend must deny, not allow.
+            raise HTTPException(
+                status_code=429,
+                detail=f"Quota check unavailable for provider {provider_str}",
+            ) from e
 
         # Check cache first (isolated via sensitivity/provider/org)
-        task_value = request.task_type.value if hasattr(request.task_type, "value") else str(request.task_type)
-        if request.use_cache and not request.stream and task_value not in _NO_CACHE_TASKS:
+        task_value = (
+            request.task_type.value
+            if hasattr(request.task_type, "value")
+            else str(request.task_type)
+        )
+        if (
+            request.use_cache
+            and not request.stream
+            and task_value not in _NO_CACHE_TASKS
+        ):
             # Do not cache tenant-sensitive/regulated to avoid leak
-            should_cache = request.sensitivity in (SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL)
+            should_cache = request.sensitivity in (
+                SensitivityLevel.PUBLIC,
+                SensitivityLevel.INTERNAL,
+            )
             if should_cache:
                 cache_key_prompt = self._messages_to_prompt(request.messages)
                 cached = await get_cached_response(
@@ -301,7 +402,9 @@ class LiteLLMClient:
             params["api_base"] = getattr(settings, "OLLAMA_URL", "http://ollama:11434")
         elif self._is_apinex_provider(provider_name):
             # Route to APInex OpenAI-compatible multi-model gateway
-            params["api_base"] = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+            params["api_base"] = getattr(
+                settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1"
+            )
             params["api_key"] = getattr(settings, "APINEX_API_KEY", "")
 
         if request.response_format:
@@ -324,7 +427,11 @@ class LiteLLMClient:
         for attempt in range(max_retries + 1):
             try:
                 logger.info(
-                    "llm_request", request_id=request_id, model=model, provider=provider_str, attempt=attempt
+                    "llm_request",
+                    request_id=request_id,
+                    model=model,
+                    provider=provider_str,
+                    attempt=attempt,
                 )
 
                 async with self._semaphore_for(provider_name):
@@ -334,7 +441,9 @@ class LiteLLMClient:
                 usage_obj = getattr(response_any, "usage", None)
                 if usage_obj is not None:
                     prompt_tokens = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
-                    completion_tokens = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+                    completion_tokens = int(
+                        getattr(usage_obj, "completion_tokens", 0) or 0
+                    )
                     total_tokens = int(getattr(usage_obj, "total_tokens", 0) or 0)
                 else:
                     prompt_tokens = 0
@@ -364,13 +473,18 @@ class LiteLLMClient:
                 )
 
                 # Record success for circuit breaker
-                routing_engine.record_provider_result(provider_str, True, float(latency_ms))
+                routing_engine.record_provider_result(
+                    provider_str, True, float(latency_ms)
+                )
 
                 # Cache successful response – tenant isolation via sensitivity/provider/org
                 # Skip context-sensitive planning tasks (see _NO_CACHE_TASKS).
                 if request.use_cache and task_value not in _NO_CACHE_TASKS:
                     # Only cache for non-sensitive to prevent leak
-                    if request.sensitivity in (SensitivityLevel.PUBLIC, SensitivityLevel.INTERNAL):
+                    if request.sensitivity in (
+                        SensitivityLevel.PUBLIC,
+                        SensitivityLevel.INTERNAL,
+                    ):
                         cache_key_prompt = self._messages_to_prompt(request.messages)
                         choices_raw: Any = getattr(response_any, "choices", [])
                         choices_list: list[dict[str, Any]] = []
@@ -463,36 +577,63 @@ class LiteLLMClient:
                     project_id=request.project_id,
                 )
 
-                routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+                routing_engine.record_provider_result(
+                    provider_str, False, float(latency_ms)
+                )
 
                 if attempt < max_retries:
-                    routing_decision = routing_engine.route(request.task_type, request.sensitivity)
+                    routing_decision = routing_engine.route(
+                        request.task_type, request.sensitivity
+                    )
                     # Fallback should not reuse same provider; ensure we rotate
                     candidate = routing_decision.fallback or routing_decision.provider
                     if candidate != provider_name:
                         provider_name = candidate
                         provider_str = (
-                            provider_name.value if isinstance(provider_name, ProviderName) else str(provider_name)
+                            provider_name.value
+                            if isinstance(provider_name, ProviderName)
+                            else str(provider_name)
                         )
                         model = routing_decision.model
                         params["model"] = self._to_litellm_model(provider_name, model)
                         if self._is_local_provider(provider_name):
-                            params["api_base"] = getattr(settings, "OLLAMA_URL", "http://ollama:11434")
+                            params["api_base"] = getattr(
+                                settings, "OLLAMA_URL", "http://ollama:11434"
+                            )
                             params.pop("api_key", None)
                         elif self._is_apinex_provider(provider_name):
-                            params["api_base"] = getattr(settings, "APINEX_BASE_URL", "https://api.apinex.bond/v1")
+                            params["api_base"] = getattr(
+                                settings,
+                                "APINEX_BASE_URL",
+                                "https://api.apinex.bond/v1",
+                            )
                             params["api_key"] = getattr(settings, "APINEX_API_KEY", "")
                         else:
                             params.pop("api_base", None)
                             params.pop("api_key", None)
-                        # Re-check quota for fallback provider
+                        # Re-check quota for fallback provider (fail-closed)
                         try:
-                            allowed_fb = await self.usage_tracker.check_quota(provider_str, estimated_tokens)
+                            allowed_fb = await self.usage_tracker.check_quota(
+                                provider_str, estimated_tokens
+                            )
                             if not allowed_fb:
-                                logger.warning("fallback_quota_exceeded", provider=provider_str)
+                                logger.warning(
+                                    "fallback_quota_exceeded", provider=provider_str
+                                )
                                 continue
-                        except Exception:
-                            pass
+                        except HTTPException:
+                            raise
+                        except Exception as e:
+                            logger.warning(
+                                "fallback_quota_check_failed",
+                                provider=provider_str,
+                                error=str(e),
+                            )
+                            raise HTTPException(
+                                status_code=429,
+                                detail="Quota check unavailable "
+                                f"for provider {provider_str}",
+                            ) from e
                         continue
 
                 if attempt == max_retries:
@@ -510,7 +651,11 @@ class LiteLLMClient:
         start_time = time.time()
 
         collected_choices: list[dict[str, Any]] = []
-        total_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        total_usage: dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
         try:
             # Ensure stream flag
@@ -531,19 +676,27 @@ class LiteLLMClient:
                             {
                                 "index": getattr(choice_delta, "index", 0),
                                 "delta": delta_dict,
-                                "finish_reason": getattr(choice_delta, "finish_reason", None),
+                                "finish_reason": getattr(
+                                    choice_delta, "finish_reason", None
+                                ),
                             }
                         )
                 usage_obj = getattr(chunk_any, "usage", None)
                 if usage_obj:
-                    total_usage["prompt_tokens"] = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
-                    total_usage["completion_tokens"] = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+                    total_usage["prompt_tokens"] = int(
+                        getattr(usage_obj, "prompt_tokens", 0) or 0
+                    )
+                    total_usage["completion_tokens"] = int(
+                        getattr(usage_obj, "completion_tokens", 0) or 0
+                    )
                     total_usage["total_tokens"] = (
                         total_usage["prompt_tokens"] + total_usage["completion_tokens"]
                     )
         except Exception as e:
             if isinstance(e, HTTPException):
-                raise HTTPException(status_code=502, detail=f"Streaming failed: {e}") from e
+                raise HTTPException(
+                    status_code=502, detail=f"Streaming failed: {e}"
+                ) from e
             logger.warning("stream_completion_chunk_error", error=str(e))
             raise HTTPException(status_code=502, detail=f"Streaming failed: {e}") from e
 
@@ -578,7 +731,9 @@ class LiteLLMClient:
         provider_name: ProviderName | str | None
         policy = routing_engine.get_policy(TaskType.EMBEDDING, request.sensitivity)
         if not request.model:
-            routing_decision = routing_engine.route(TaskType.EMBEDDING, request.sensitivity)
+            routing_decision = routing_engine.route(
+                TaskType.EMBEDDING, request.sensitivity
+            )
             model = routing_decision.model
             provider_name = routing_decision.provider
         else:
@@ -588,18 +743,30 @@ class LiteLLMClient:
                 raise ValueError(f"Model {model} not found in any provider")
             cfg = routing_engine.providers.get(provider_name)
             if cfg is None or request.sensitivity not in cfg.supported_sensitivity:
-                raise ValueError(f"Provider {provider_name} does not support sensitivity {request.sensitivity}")
+                raise ValueError(
+                    f"Provider {provider_name} does not support sensitivity {request.sensitivity}"
+                )
             if provider_name in policy.blocked_providers:
-                raise ValueError(f"Provider {provider_name} blocked for {request.sensitivity}")
+                raise ValueError(
+                    f"Provider {provider_name} blocked for {request.sensitivity}"
+                )
 
         assert provider_name is not None
-        provider_str = provider_name.value if isinstance(provider_name, ProviderName) else str(provider_name)
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         # Pre-flight quota (estimate tokens as sum len//4)
         est_tokens = sum(len(t) // 4 for t in request.input) + 10
-        allowed = await self.usage_tracker.check_quota(provider_str, max(est_tokens, 100))
+        allowed = await self.usage_tracker.check_quota(
+            provider_str, max(est_tokens, 100)
+        )
         if not allowed:
-            raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+            raise HTTPException(
+                status_code=429, detail=f"Quota exceeded for provider {provider_str}"
+            )
 
         try:
             async with self._semaphore:
@@ -670,7 +837,9 @@ class LiteLLMClient:
                 user_id=request.user_id,
                 organization_id=request.organization_id,
             )
-            routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+            routing_engine.record_provider_result(
+                provider_str, False, float(latency_ms)
+            )
             raise
 
     async def stt(self, request: STTRequest) -> STTResponse:
@@ -685,19 +854,28 @@ class LiteLLMClient:
         except Exception as e:
             raise ValueError("Invalid base64 audio_data") from e
         if len(audio_bytes) > _MAX_AUDIO_BYTES:
-            raise ValueError(f"Decoded audio too large: {len(audio_bytes)} > {_MAX_AUDIO_BYTES}")
+            raise ValueError(
+                f"Decoded audio too large: {len(audio_bytes)} > {_MAX_AUDIO_BYTES}"
+            )
         if len(audio_bytes) == 0:
             raise ValueError("Empty audio")
 
-        model = request.model or "saarika:v2"
-        provider_name = ProviderName.SARVAM
-        provider_str = provider_name.value
+        model, provider_name = self._resolve_audio_route(
+            TaskType.STT, request.sensitivity, request.model
+        )
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         # Quota check – STT tokens estimated as 150 per request
         est_tokens = 150
         allowed = await self.usage_tracker.check_quota(provider_str, est_tokens)
         if not allowed:
-            raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+            raise HTTPException(
+                status_code=429, detail=f"Quota exceeded for provider {provider_str}"
+            )
 
         try:
             async with self._semaphore:
@@ -752,7 +930,9 @@ class LiteLLMClient:
                 user_id=request.user_id,
                 organization_id=request.organization_id,
             )
-            routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+            routing_engine.record_provider_result(
+                provider_str, False, float(latency_ms)
+            )
             raise
 
     async def tts(self, request: TTSRequest) -> TTSResponse:
@@ -763,17 +943,26 @@ class LiteLLMClient:
         if not request.text or len(request.text.strip()) == 0:
             raise ValueError("TTS text empty")
         if len(request.text) > _MAX_TTS_CHARS:
-            raise ValueError(f"TTS text too long: {len(request.text)} > {_MAX_TTS_CHARS}")
+            raise ValueError(
+                f"TTS text too long: {len(request.text)} > {_MAX_TTS_CHARS}"
+            )
         request.text = _sanitize_text(request.text, max_len=_MAX_TTS_CHARS)
 
-        model = request.model or "bulbul:v1"
-        provider_name = ProviderName.SARVAM
-        provider_str = provider_name.value
+        model, provider_name = self._resolve_audio_route(
+            TaskType.TTS, request.sensitivity, request.model
+        )
+        provider_str = (
+            provider_name.value
+            if isinstance(provider_name, ProviderName)
+            else str(provider_name)
+        )
 
         est_tokens = max(10, len(request.text) // 4)
         allowed = await self.usage_tracker.check_quota(provider_str, est_tokens)
         if not allowed:
-            raise HTTPException(status_code=429, detail=f"Quota exceeded for provider {provider_str}")
+            raise HTTPException(
+                status_code=429, detail=f"Quota exceeded for provider {provider_str}"
+            )
 
         try:
             async with self._semaphore:
@@ -835,10 +1024,14 @@ class LiteLLMClient:
                 user_id=request.user_id,
                 organization_id=request.organization_id,
             )
-            routing_engine.record_provider_result(provider_str, False, float(latency_ms))
+            routing_engine.record_provider_result(
+                provider_str, False, float(latency_ms)
+            )
             raise
 
-    def _estimate_chat_tokens(self, messages: list[dict[str, str]], max_tokens: int | None) -> int:
+    def _estimate_chat_tokens(
+        self, messages: list[dict[str, str]], max_tokens: int | None
+    ) -> int:
         chars = sum(len(str(m.get("content", ""))) for m in messages)
         prompt_est = max(10, chars // 4)
         if max_tokens:
@@ -864,7 +1057,9 @@ class LiteLLMClient:
         """
         if provider is None:
             return model
-        provider_val = provider.value if isinstance(provider, ProviderName) else str(provider)
+        provider_val = (
+            provider.value if isinstance(provider, ProviderName) else str(provider)
+        )
         if provider_val == ProviderName.LOCAL.value:
             ollama_model = model
             try:
@@ -881,7 +1076,7 @@ class LiteLLMClient:
         if provider_val == ProviderName.APINEX.value or provider_val == "apinex":
             clean_model = model
             if clean_model.startswith("apinex/"):
-                clean_model = clean_model[len("apinex/"):]
+                clean_model = clean_model[len("apinex/") :]
             if clean_model.startswith("openai/"):
                 return clean_model
             return f"openai/{clean_model}"

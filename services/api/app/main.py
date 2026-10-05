@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from cymatic_shared.auth import verify_admin_key_dependency
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from app.core.config import get_settings
 from app.core.middleware import (
-    TenantScopingMiddleware,
+    RequestIdMiddleware,
     AuditLoggingMiddleware,
     RequestContextMiddleware,
     CorrelationIdMiddleware,
@@ -46,6 +47,21 @@ async def lifespan(app: FastAPI):
     ):
         raise RuntimeError("DATABASE_URL must be configured for production")
     await init_db()
+    # Best-effort startup sweep of orphan UPLOADING assets (clients that
+    # fetched a presigned PUT URL but never completed). Never fail startup.
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.services.asset_maintenance import sweep_stale_uploading_assets
+
+        async with AsyncSessionLocal() as session:
+            swept = await sweep_stale_uploading_assets(
+                session,
+                older_than_hours=settings.ASSET_UPLOAD_STALE_HOURS,
+                limit=settings.ASSET_UPLOAD_SWEEP_LIMIT,
+            )
+        structlog.get_logger().info("startup_asset_sweep", swept=swept)
+    except Exception as e:
+        structlog.get_logger().warning("startup_asset_sweep_failed", error=str(e))
     yield
     await close_db()
 
@@ -62,7 +78,7 @@ app = FastAPI(
 # Add middleware (order matters - first added is outermost)
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
-app.add_middleware(TenantScopingMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(AuditLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -134,7 +150,10 @@ async def health_check():
         from sqlalchemy import text
 
         async with AsyncSessionLocal() as db:
-            await asyncio.wait_for(db.execute(text("SELECT 1")), timeout=2.0)
+            await asyncio.wait_for(
+                db.execute(text("SELECT 1")),
+                timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS,
+            )
         checks["db"] = "healthy"
     except Exception:
         checks["db"] = "unhealthy"
@@ -146,7 +165,9 @@ async def health_check():
 
         r = _get_redis()
         if r is not None:
-            await asyncio.wait_for(r.ping(), timeout=2.0)
+            await asyncio.wait_for(
+                r.ping(), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS
+            )
             checks["redis"] = "healthy"
         else:
             checks["redis"] = "unknown"
@@ -156,13 +177,11 @@ async def health_check():
     return checks
 
 
+verify_admin_key = verify_admin_key_dependency(lambda: settings.ADMIN_API_KEY or "")
+
+
 @app.get("/metrics")
-async def metrics(x_api_key: str = Header(None)):
-    # Fail-closed: require ADMIN_API_KEY in all envs, especially prod
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Metrics not configured")
-    if x_api_key != settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid admin API key")
+async def metrics(_admin: None = Depends(verify_admin_key)):
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

@@ -1,4 +1,5 @@
 """Clarification Agent - Asks targeted follow-up questions using LLM"""
+
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 import httpx
@@ -76,31 +77,203 @@ Heritage required fields: site_type, historical_period, key_pois, narration, sca
 # Question templates (fallback)
 DOMAIN_QUESTIONS = {
     "real_estate": [
-        ClarificationQuestion(field="style", question="What architectural style do you prefer?", type="choice", options=["Modern", "Traditional", "Contemporary", "Minimalist", "Luxury", "Rustic", "Mediterranean", "Colonial", "Victorian", "Other"], required=True),
-        ClarificationQuestion(field="bedrooms", question="How many bedrooms do you need?", type="number", required=True, unit="count", min_value=1, max_value=20),
-        ClarificationQuestion(field="bathrooms", question="How many bathrooms?", type="number", required=True, unit="count", min_value=1, max_value=20),
-        ClarificationQuestion(field="square_footage", question="What's the approximate square footage?", type="number", required=True, unit="sqft", min_value=100, max_value=100000),
-        ClarificationQuestion(field="floors", question="How many floors/levels?", type="number", required=False, unit="count", min_value=1, max_value=10),
-        ClarificationQuestion(field="budget", question="What's your budget range?", type="choice", options=["Under $500K", "$500K-$1M", "$1M-$2M", "$2M-$5M", "$5M+", "Not specified"], required=False),
-        ClarificationQuestion(field="furnished", question="Should the walkthrough show furnished or unfurnished spaces?", type="choice", options=["Furnished", "Unfurnished", "Partially furnished"], required=True),
-        ClarificationQuestion(field="outdoor_spaces", question="Which outdoor spaces should be included?", type="choice", options=["Garden", "Balcony", "Terrace", "Pool", "Patio", "Deck", "None"], required=False, multi=True),
-        ClarificationQuestion(field="special_rooms", question="Any special rooms needed?", type="text", required=False),
-        ClarificationQuestion(field="lighting_preference", question="What lighting mood do you prefer?", type="choice", options=["Warm/Cozy", "Bright/Natural", "Cool/Modern", "Golden Hour", "Evening/Ambient"], required=False),
+        ClarificationQuestion(
+            field="style",
+            question="What architectural style do you prefer?",
+            type="choice",
+            options=[
+                "Modern",
+                "Traditional",
+                "Contemporary",
+                "Minimalist",
+                "Luxury",
+                "Rustic",
+                "Mediterranean",
+                "Colonial",
+                "Victorian",
+                "Other",
+            ],
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="bedrooms",
+            question="How many bedrooms do you need?",
+            type="number",
+            required=True,
+            unit="count",
+            min_value=1,
+            max_value=20,
+        ),
+        ClarificationQuestion(
+            field="bathrooms",
+            question="How many bathrooms?",
+            type="number",
+            required=True,
+            unit="count",
+            min_value=1,
+            max_value=20,
+        ),
+        ClarificationQuestion(
+            field="square_footage",
+            question="What's the approximate square footage?",
+            type="number",
+            required=True,
+            unit="sqft",
+            min_value=100,
+            max_value=100000,
+        ),
+        ClarificationQuestion(
+            field="floors",
+            question="How many floors/levels?",
+            type="number",
+            required=False,
+            unit="count",
+            min_value=1,
+            max_value=10,
+        ),
+        ClarificationQuestion(
+            field="budget",
+            question="What's your budget range?",
+            type="choice",
+            options=[
+                "Under $500K",
+                "$500K-$1M",
+                "$1M-$2M",
+                "$2M-$5M",
+                "$5M+",
+                "Not specified",
+            ],
+            required=False,
+        ),
+        ClarificationQuestion(
+            field="furnished",
+            question="Should the walkthrough show furnished or unfurnished spaces?",
+            type="choice",
+            options=["Furnished", "Unfurnished", "Partially furnished"],
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="outdoor_spaces",
+            question="Which outdoor spaces should be included?",
+            type="choice",
+            options=["Garden", "Balcony", "Terrace", "Pool", "Patio", "Deck", "None"],
+            required=False,
+            multi=True,
+        ),
+        ClarificationQuestion(
+            field="special_rooms",
+            question="Any special rooms needed?",
+            type="text",
+            required=False,
+        ),
+        ClarificationQuestion(
+            field="lighting_preference",
+            question="What lighting mood do you prefer?",
+            type="choice",
+            options=[
+                "Warm/Cozy",
+                "Bright/Natural",
+                "Cool/Modern",
+                "Golden Hour",
+                "Evening/Ambient",
+            ],
+            required=False,
+        ),
     ],
     "heritage": [
-        ClarificationQuestion(field="site_type", question="What type of heritage site?", type="choice", options=["Temple", "Palace", "Courtyard", "Monument", "Mausoleum", "Historic Building", "Archaeological Site", "Museum", "Cultural Landscape"], required=True),
-        ClarificationQuestion(field="historical_period", question="What historical period or culture?", type="text", required=True),
-        ClarificationQuestion(field="key_pois", question="What are the key points of interest to highlight?", type="text", required=True),
-        ClarificationQuestion(field="narration", question="Do you need guided narration?", type="boolean", required=True),
-        ClarificationQuestion(field="languages", question="What languages for narration?", type="choice", options=["English", "Telugu", "Hindi", "Spanish", "French", "German", "Japanese", "Chinese", "Arabic"], required=False, depends_on="narration", multi=True),
-        ClarificationQuestion(field="scale", question="What's the approximate scale/area?", type="choice", options=["Small (single structure)", "Medium (complex)", "Large (site/multiple buildings)", "Not sure"], required=True),
-        ClarificationQuestion(field="focus", question="What's the primary focus?", type="choice", options=["Educational/Historical", "Architectural Detail", "Cultural Experience", "Spiritual/Religious", "Tourism/Exploration"], required=True),
-        ClarificationQuestion(field="indoor_outdoor", question="Is the experience indoor, outdoor, or mixed?", type="choice", options=["Indoor", "Outdoor", "Mixed"], required=True),
-    ]
+        ClarificationQuestion(
+            field="site_type",
+            question="What type of heritage site?",
+            type="choice",
+            options=[
+                "Temple",
+                "Palace",
+                "Courtyard",
+                "Monument",
+                "Mausoleum",
+                "Historic Building",
+                "Archaeological Site",
+                "Museum",
+                "Cultural Landscape",
+            ],
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="historical_period",
+            question="What historical period or culture?",
+            type="text",
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="key_pois",
+            question="What are the key points of interest to highlight?",
+            type="text",
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="narration",
+            question="Do you need guided narration?",
+            type="boolean",
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="languages",
+            question="What languages for narration?",
+            type="choice",
+            options=[
+                "English",
+                "Telugu",
+                "Hindi",
+                "Spanish",
+                "French",
+                "German",
+                "Japanese",
+                "Chinese",
+                "Arabic",
+            ],
+            required=False,
+            depends_on="narration",
+            multi=True,
+        ),
+        ClarificationQuestion(
+            field="scale",
+            question="What's the approximate scale/area?",
+            type="choice",
+            options=[
+                "Small (single structure)",
+                "Medium (complex)",
+                "Large (site/multiple buildings)",
+                "Not sure",
+            ],
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="focus",
+            question="What's the primary focus?",
+            type="choice",
+            options=[
+                "Educational/Historical",
+                "Architectural Detail",
+                "Cultural Experience",
+                "Spiritual/Religious",
+                "Tourism/Exploration",
+            ],
+            required=True,
+        ),
+        ClarificationQuestion(
+            field="indoor_outdoor",
+            question="Is the experience indoor, outdoor, or mixed?",
+            type="choice",
+            options=["Indoor", "Outdoor", "Mixed"],
+            required=True,
+        ),
+    ],
 }
 
 
-def get_fallback_questions(domain: str, answered_fields: Dict[str, Any]) -> List[ClarificationQuestion]:
+def get_fallback_questions(
+    domain: str, answered_fields: Dict[str, Any]
+) -> List[ClarificationQuestion]:
     """Get fallback questions."""
     all_questions = DOMAIN_QUESTIONS.get(domain, DOMAIN_QUESTIONS["real_estate"])
     relevant = []
@@ -111,7 +284,11 @@ def get_fallback_questions(domain: str, answered_fields: Dict[str, Any]) -> List
             dep_value = answered_fields[q.depends_on]
             if isinstance(dep_value, bool) and not dep_value:
                 continue
-            if isinstance(dep_value, str) and dep_value.lower() in ["no", "false", "none"]:
+            if isinstance(dep_value, str) and dep_value.lower() in [
+                "no",
+                "false",
+                "none",
+            ]:
                 continue
         relevant.append(q)
     return relevant
@@ -213,7 +390,9 @@ async def process_clarification_llm(
     # Merge answers first (fresh answers win over stale intake).
     updated = {**current_answers, **(intake_entities or {})}
     for key, value in new_answers.items():
-        updated[key] = convert_value(value, domain, key) if isinstance(value, str) else value
+        updated[key] = (
+            convert_value(value, domain, key) if isinstance(value, str) else value
+        )
 
     user_payload: Dict[str, Any] = {
         "domain": domain,
@@ -232,7 +411,7 @@ async def process_clarification_llm(
 
     messages = [
         {"role": "system", "content": CLARIFICATION_SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(user_payload)}
+        {"role": "user", "content": json.dumps(user_payload)},
     ]
 
     try:
@@ -273,7 +452,9 @@ async def process_clarification_llm(
         return process_clarification_fallback(domain, current_answers, new_answers)
 
 
-def _clean_fallback_answer(field: str, value: Any, domain: str) -> tuple[Any | None, str | None]:
+def _clean_fallback_answer(
+    field: str, value: Any, domain: str
+) -> tuple[Any | None, str | None]:
     """Validate a free-text fallback answer against the field's question type.
 
     Returns (clean_value, raw_note). Free sentences ("when it was built...")
@@ -300,11 +481,17 @@ def _clean_fallback_answer(field: str, value: Any, domain: str) -> tuple[Any | N
         if "," in text or "/" in text:
             parts = [p.strip() for p in re.split(r"[,/]", text) if p.strip()]
             if parts and all(
-                p.lower() in opt_lows or any(p.lower() in o.split("/") for o in opt_lows) for p in parts
+                p.lower() in opt_lows
+                or any(p.lower() in o.split("/") for o in opt_lows)
+                for p in parts
             ):
                 return text, raw
         for opt in q.options:
-            if opt.lower() == low or low in opt.lower().split("/") or opt.lower() in low:
+            if (
+                opt.lower() == low
+                or low in opt.lower().split("/")
+                or opt.lower() in low
+            ):
                 return opt, raw
         if len(text) <= 40 and len(parts) <= 3:
             return text, raw
@@ -344,7 +531,11 @@ def process_clarification_fallback(
     updated = current_answers.copy()
     notes: Dict[str, str] = {}
     for key, value in new_answers_norm.items():
-        clean, raw = _clean_fallback_answer(key, value, domain) if isinstance(value, str) else (value, None)
+        clean, raw = (
+            _clean_fallback_answer(key, value, domain)
+            if isinstance(value, str)
+            else (value, None)
+        )
         if raw is not None:
             notes[key] = raw
         if clean is None:
@@ -361,7 +552,11 @@ def process_clarification_fallback(
         if q.evidence_span:
             continue
         fragment = updated.get(q.field)
-        if isinstance(fragment, str) and fragment and fragment.lower() not in ("true", "false"):
+        if (
+            isinstance(fragment, str)
+            and fragment
+            and fragment.lower() not in ("true", "false")
+        ):
             q.evidence_span = fragment[:200]
         else:
             # No evidence for this field in the idea: mark the gap explicitly.
@@ -371,13 +566,19 @@ def process_clarification_fallback(
         top = remaining_questions[0]
         best = ""
         for v in updated.values():
-            if isinstance(v, str) and len(v) > len(best) and v.lower() not in ("true", "false"):
+            if (
+                isinstance(v, str)
+                and len(v) > len(best)
+                and v.lower() not in ("true", "false")
+            ):
                 best = v[:200]
         if best and (not top.evidence_span or top.evidence_span.startswith("no ")):
             top.evidence_span = best
 
     total_questions = len(DOMAIN_QUESTIONS.get(domain, []))
-    answered_count = len([f for f in updated if f in [q.field for q in DOMAIN_QUESTIONS.get(domain, [])]])
+    answered_count = len(
+        [f for f in updated if f in [q.field for q in DOMAIN_QUESTIONS.get(domain, [])]]
+    )
     completion = answered_count / max(total_questions, 1)
 
     required_fields = [q.field for q in DOMAIN_QUESTIONS.get(domain, []) if q.required]
@@ -406,8 +607,3 @@ async def process_clarification_answers(
     return await process_clarification_llm(
         domain, current_answers, new_answers, prompt, objective, intake_entities
     )
-
-
-def get_clarification_questions(domain: str, answered_fields: Dict[str, Any]) -> List[ClarificationQuestion]:
-    """Get questions for domain (fallback only - LLM version generates dynamically)."""
-    return get_fallback_questions(domain, answered_fields)

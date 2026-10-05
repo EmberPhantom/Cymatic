@@ -8,10 +8,10 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        terracotta: "bg-terracotta text-white hover:bg-terracotta-600 shadow-xs transition-all active:translate-y-px",
-        charcoal: "bg-charcoal text-white hover:bg-charcoal-50 shadow-xs transition-all active:translate-y-px",
-        gold: "bg-gold text-white hover:bg-gold-600 shadow-xs transition-all",
-        sage: "bg-sage text-white hover:bg-sage-600 shadow-xs transition-all",
+        terracotta: "bg-terracotta text-white hover:bg-terracotta-600 shadow-sm transition-all active:translate-y-px",
+        charcoal: "bg-charcoal text-white hover:bg-charcoal-50 shadow-sm transition-all active:translate-y-px",
+        gold: "bg-gold text-white hover:bg-gold-600 shadow-sm transition-all",
+        sage: "bg-sage text-white hover:bg-sage-600 shadow-sm transition-all",
         "outline-terracotta": "border border-terracotta/40 text-terracotta hover:bg-terracotta-50 dark:hover:bg-terracotta/10 transition-colors",
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",

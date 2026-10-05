@@ -12,6 +12,7 @@ import type { BadgeProps } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { SceneViewportPreview } from "@/components/scene/SceneViewportPreview"
 import { PipelineStepper, type PipelineStage } from "@/components/pipeline/PipelineStepper"
+import { countSpecEntities } from "@/lib/validations"
 import { isActivePath, routes } from "@/lib/routes"
 import {
   Sparkles,
@@ -106,7 +107,7 @@ export default function ProjectDetailPage() {
   const isHeritage = project.domain === "heritage"
   const latestSpec = specs && specs.length > 0 ? specs[0] : null
   const specVersion = latestSpec ? `v${latestSpec.version}` : null
-  const entityCount = latestSpec?.payload_json?.entities?.length ?? 0
+  const entityCount = latestSpec ? countSpecEntities(latestSpec.payload_json) : 0
   const assetCount = assets?.length ?? 0
   const isStreamReady = project.status === "published" || project.status === "scene_ready"
 
@@ -130,7 +131,7 @@ export default function ProjectDetailPage() {
             <div className="flex items-center gap-1.5">
               <Badge
                 variant={isHeritage ? "sage" : "terracotta"}
-                className="text-[10px] font-mono uppercase tracking-wider px-2.5 py-0.5 font-semibold shadow-2xs"
+                className="text-[10px] font-mono uppercase tracking-wider px-2.5 py-0.5 font-semibold shadow-sm"
               >
                 {isHeritage ? "Heritage Site" : "Real Estate"}
               </Badge>
@@ -156,7 +157,7 @@ export default function ProjectDetailPage() {
           )}
 
           <Link href={routes.builder(projectId)}>
-            <Button variant="terracotta" size="sm" className="gap-1.5 text-xs font-medium h-8 shadow-xs">
+            <Button variant="terracotta" size="sm" className="gap-1.5 text-xs font-medium h-8 shadow-sm">
               <Sparkles className="h-3.5 w-3.5" />
               <span>Launch Builder →</span>
             </Button>
@@ -216,7 +217,7 @@ export default function ProjectDetailPage() {
         {/* Right 4 Cols: Technical Simulation Telemetry & Direct Actions */}
         <div className="lg:col-span-4 space-y-3">
           {/* Spec State */}
-          <div className="p-3.5 rounded-xl border border-border bg-card shadow-2xs space-y-2">
+          <div className="p-3.5 rounded-xl border border-border bg-card shadow-sm space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-mono uppercase text-stonegray">SPECIFICATION</span>
               <FileCode2 className="h-3.5 w-3.5 text-stonegray" />
@@ -235,7 +236,7 @@ export default function ProjectDetailPage() {
           </div>
 
           {/* Scene State */}
-          <div className="p-3.5 rounded-xl border border-border bg-card shadow-2xs space-y-2">
+          <div className="p-3.5 rounded-xl border border-border bg-card shadow-sm space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-mono uppercase text-stonegray">SCENE GRAPH</span>
               <Layers className="h-3.5 w-3.5 text-stonegray" />
@@ -254,7 +255,7 @@ export default function ProjectDetailPage() {
           </div>
 
           {/* Asset State */}
-          <div className="p-3.5 rounded-xl border border-border bg-card shadow-2xs space-y-2">
+          <div className="p-3.5 rounded-xl border border-border bg-card shadow-sm space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-mono uppercase text-stonegray">STORAGE ASSETS</span>
               <Package className="h-3.5 w-3.5 text-stonegray" />
@@ -273,7 +274,7 @@ export default function ProjectDetailPage() {
           </div>
 
           {/* Stream State */}
-          <div className="p-3.5 rounded-xl border border-border bg-card shadow-2xs space-y-2">
+          <div className="p-3.5 rounded-xl border border-border bg-card shadow-sm space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-mono uppercase text-stonegray">VR STREAM</span>
               <Radio className="h-3.5 w-3.5 text-stonegray" />

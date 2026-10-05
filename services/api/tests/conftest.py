@@ -6,6 +6,7 @@ Fixes:
   - Alembic-only schema (no create_all fallback)
   - Hard-fail on import errors instead of silent pass
 """
+
 import pytest
 import pytest_asyncio
 import sys
@@ -26,7 +27,9 @@ from cymatic_shared.utils import to_async_db_url
 # Environment defaults — must be set BEFORE importing any app module
 # ---------------------------------------------------------------------------
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-testing-only-32charslong")
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://cymatic:cymatic@localhost:5432/cymatic_test")
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+asyncpg://cymatic:cymatic@localhost:5432/cymatic_test"
+)
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("S3_ENDPOINT", "http://localhost:9000")
 os.environ.setdefault("S3_ACCESS_KEY", "minioadmin")
@@ -37,22 +40,28 @@ os.environ.setdefault("S3_REGION", "us-east-1")
 # ---------------------------------------------------------------------------
 # Path setup + app imports
 # ---------------------------------------------------------------------------
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 try:
     from app.main import app
     from app.db.session import Base, get_db
-    from app.core.config import get_settings
+    from app.models.organization import Organization
+    from app.models.user import User, UserRole
+    from app.models.project import Project, ProjectStatus
+    from app.core.security import get_password_hash, create_access_token
+    from cymatic_shared.agents.intake_agent import IntakeResult
+    from cymatic_shared.agents.clarification_agent import ClarificationResult
 except ModuleNotFoundError:
     from services.api.app.main import app
     from services.api.app.db.session import Base, get_db
-    from services.api.app.core.config import get_settings
 
 # ---------------------------------------------------------------------------
 # Test engine + session factory
 # ---------------------------------------------------------------------------
 TEST_DATABASE_URL = to_async_db_url(
-    os.environ.get("DATABASE_URL", "postgresql://cymatic:cymatic@localhost:5432/cymatic")
+    os.environ.get(
+        "DATABASE_URL", "postgresql://cymatic:cymatic@localhost:5432/cymatic"
+    )
 )
 
 engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
@@ -74,6 +83,7 @@ app.dependency_overrides[get_db] = override_get_db
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture(scope="session")
 async def setup_db():
     """Apply Alembic migrations only. No create_all fallback."""
@@ -82,6 +92,7 @@ async def setup_db():
     for attempt in range(30):
         try:
             import asyncpg
+
             conn = await asyncpg.connect(sync_url)
             await conn.close()
             break
@@ -89,8 +100,8 @@ async def setup_db():
             if attempt == 29:
                 raise RuntimeError("PostgreSQL not ready after 30s")
             await asyncio.sleep(1)
-    
-    alembic_dir = os.path.join(os.path.dirname(__file__), '..')
+
+    alembic_dir = os.path.join(os.path.dirname(__file__), "..")
     alembic_cfg = Config(os.path.join(alembic_dir, "alembic.ini"))
     # Use sync URL for alembic
     alembic_cfg.set_main_option("sqlalchemy.url", sync_url)
@@ -100,11 +111,17 @@ async def setup_db():
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+        # alembic_version is not part of Base.metadata, so drop it too;
+        # otherwise the next run's `upgrade head` is a no-op on a table-less
+        # DB and every test errors with UndefinedTable.
+        await conn.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
 
 
 @pytest_asyncio.fixture
 async def client(setup_db) -> AsyncGenerator[AsyncClient, None]:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         yield ac
 
 
@@ -114,18 +131,10 @@ async def db_session(setup_db) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-from app.models.organization import Organization
-from app.models.user import User, UserRole
-from app.models.project import Project, ProjectStatus
-from app.core.security import get_password_hash, create_access_token
-from cymatic_shared.agents.intake_agent import IntakeResult
-from cymatic_shared.agents.clarification_agent import ClarificationResult
-from cymatic_shared.agents.clarification_agent import ClarificationQuestion
-
-
 @pytest.fixture(autouse=True)
 def deterministic_agent_results(monkeypatch):
     """Keep endpoint tests deterministic and independent of live LLM providers."""
+
     async def intake(prompt, context=None):
         return IntakeResult(
             detected_domain="real_estate",
@@ -145,7 +154,9 @@ def deterministic_agent_results(monkeypatch):
         )
 
     monkeypatch.setattr("app.api.v1.endpoints.specs.process_intake", intake)
-    monkeypatch.setattr("app.api.v1.endpoints.specs.process_clarification_answers", clarify)
+    monkeypatch.setattr(
+        "app.api.v1.endpoints.specs.process_clarification_answers", clarify
+    )
 
 
 @pytest_asyncio.fixture
@@ -157,7 +168,7 @@ async def test_user(db_session):
     user = User(
         email=f"fixture-{uuid.uuid4().hex[:10]}@example.com",
         name="Fixture User",
-        hashed_password=get_password_hash("testpass123"),
+        hashed_password=get_password_hash("testpass12345"),
         role=UserRole.CREATOR,
         organization_id=organization.id,
         is_active=True,
@@ -171,7 +182,35 @@ async def test_user(db_session):
 @pytest_asyncio.fixture
 async def auth_headers(test_user):
     access_token = create_access_token(
-        data={"sub": str(test_user.id), "email": test_user.email, "org_id": test_user.organization_id}
+        data={
+            "sub": str(test_user.id),
+            "email": test_user.email,
+            "org_id": test_user.organization_id,
+        }
+    )
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+@pytest_asyncio.fixture
+async def admin_auth_headers(db_session, test_user):
+    """Admin in the SAME org as test_user (plan approval requires admin)."""
+    admin = User(
+        email=f"admin-{uuid.uuid4().hex[:10]}@example.com",
+        name="Fixture Admin",
+        hashed_password=get_password_hash("testpass12345"),
+        role=UserRole.ADMIN,
+        organization_id=test_user.organization_id,
+        is_active=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+    access_token = create_access_token(
+        data={
+            "sub": str(admin.id),
+            "email": admin.email,
+            "org_id": admin.organization_id,
+        }
     )
     return {"Authorization": f"Bearer {access_token}"}
 

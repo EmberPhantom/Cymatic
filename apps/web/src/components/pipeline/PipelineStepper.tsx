@@ -25,7 +25,7 @@ export function PipelineStepper({ currentStage, status, className }: PipelineSte
   const isFailed = status === "failed"
 
   return (
-    <div className={cn("w-full p-4 rounded-xl border border-warmgray bg-card shadow-2xs", className)}>
+    <div className={cn("w-full p-4 rounded-xl border border-warmgray bg-card shadow-sm", className)}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-terracotta" />
@@ -55,7 +55,7 @@ export function PipelineStepper({ currentStage, status, className }: PipelineSte
                 className={cn(
                   "flex flex-col p-2.5 rounded-lg border transition-all duration-200 bg-card group",
                   isCurrent && !isFailed
-                    ? "border-terracotta shadow-xs ring-1 ring-terracotta/40"
+                    ? "border-terracotta shadow-sm ring-1 ring-terracotta/40"
                     : isCompleted
                     ? "border-sage/50 text-foreground"
                     : isFailed && isCurrent
@@ -70,13 +70,13 @@ export function PipelineStepper({ currentStage, status, className }: PipelineSte
 
                   {/* Exact symbols: Completed: ✓, Current: ●, Pending: ○ */}
                   {isCompleted ? (
-                    <span className="h-5 w-5 rounded-full bg-sage text-white flex items-center justify-center text-[11px] font-bold shadow-xs">
+                    <span className="h-5 w-5 rounded-full bg-sage text-white flex items-center justify-center text-[11px] font-bold shadow-sm">
                       ✓
                     </span>
                   ) : isCurrent ? (
                     <span className="relative flex h-5 w-5 items-center justify-center">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-terracotta opacity-75" />
-                      <span className="relative inline-flex rounded-full h-5 w-5 bg-terracotta text-white items-center justify-center text-[10px] font-bold shadow-xs">
+                      <span className="relative inline-flex rounded-full h-5 w-5 bg-terracotta text-white items-center justify-center text-[10px] font-bold shadow-sm">
                         ●
                       </span>
                     </span>

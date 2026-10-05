@@ -23,7 +23,9 @@ export interface SimulationSpec {
   id: number
   project_id: number
   version: number
-  payload_json: Record<string, any>
+  // Free-form backend JSON: keep as `unknown`, narrow via
+  // parseSpecPayloadOrThrow / specEntities / specSection in @/lib/validations.
+  payload_json: unknown
   status: string
   created_at: string
   updated_at?: string
@@ -34,14 +36,18 @@ export interface IntakeResult {
   objective: string
   missing_fields: string[]
   suggested_questions: string[]
-  extracted_entities: Record<string, any>
+  // Free-form backend JSON: narrow via parseIntakeResultOrThrow /
+  // asEntityRecord in @/lib/validations.
+  extracted_entities: unknown
   confidence: number
   analyser_mode?: "llm" | "slm" | "fallback" | string
   run_id?: string
 }
 
 export interface ClarifyResult {
-  updated_fields: Record<string, any>
+  // Free-form backend JSON: narrow via parseClarifyResultOrThrow /
+  // asEntityRecord in @/lib/validations.
+  updated_fields: unknown
   ready_for_generation: boolean
   completion_percentage: number
   remaining_questions: ClarificationQuestion[]

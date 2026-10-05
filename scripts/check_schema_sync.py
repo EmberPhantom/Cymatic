@@ -4,17 +4,28 @@ Schema Sync Check - Compares Python Pydantic models with TypeScript interfaces.
 
 This script extracts field names and types from both schemas and reports any drift.
 """
+import re
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import importlib.util
 
 SCHEMA_ROOT = Path(__file__).parent.parent / "schemas"
+SHARED_SCHEMAS = Path(__file__).parent.parent / "packages" / "cymatic-shared" / "cymatic_shared" / "schemas"
 # (python file, typescript file, root model/interface name)
+# Candidate survey 2026-10-04: schemas/ contains exactly two .py+.ts schema
+# pairs (simulation_spec, planning_sheet). simulation_spec_generated.py has NO
+# TypeScript counterpart (codegen output, not a sync pair); __init__.py and
+# package.json are not schemas. Service-local app/schemas/ copies are banned
+# (see SHARED_COPIES below). So the pair list stays at 2 — each entry is
+# existence-checked at runtime and skipped with a warning instead of crashing.
 SCHEMA_PAIRS = [
     ("simulation_spec.py", "simulation_spec.ts", "SimulationSpec"),
     ("planning_sheet.py", "planning_sheet.ts", "PlanningSheet"),
 ]
+# Service-local copies are banned: shared/schemas must stay byte-identical
+# to the canonical root schemas (validators import from shared).
+SHARED_COPIES = ["simulation_spec.py", "planning_sheet.py"]
 
 
 def extract_python_schema(py_file: str, model_name: str) -> Dict[str, Any]:
@@ -29,6 +40,54 @@ def extract_python_schema(py_file: str, model_name: str) -> Dict[str, Any]:
     # Get the JSON schema from Pydantic
     schema = getattr(module, model_name).model_json_schema()
     return schema
+
+
+def _strip_ts_line_comment(line: str) -> str:
+    """Remove a trailing `//` comment, ignoring `//` inside '...' / "..." / `...`.
+
+    Prevents URLs in comments (e.g. `// see https://x`) from leaking colons
+    into field parsing, while keeping `//` inside string literals intact.
+    """
+    quote: Optional[str] = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"', "`"):
+            quote = ch
+        elif ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            return line[:i]
+        i += 1
+    return line
+
+
+# Anchored to TypeScript property syntax: `name?: Type` with an optional
+# trailing `;`/`,` — NOT a bare "split on any ':'", so colons inside string
+# literal types ('a:b'), ternaries, URLs, or mapped/index-signature lines that
+# don't match are never mis-split (non-matching lines are skipped).
+_TS_FIELD_RE = re.compile(
+    r"^(?:readonly\s+)?([A-Za-z_$][\w$]*)(\?)?\s*:\s*(.+?)\s*[;,]?\s*$"
+)
+
+
+def _parse_ts_field(stripped: str) -> Optional[Tuple[str, str]]:
+    """Parse one stripped TS line into (field_name, type_text)."""
+    code = _strip_ts_line_comment(stripped).strip()
+    if not code or code.startswith(("//", "*", "/*", "|", "'", '"', "`", "@", "}")):
+        return None
+    match = _TS_FIELD_RE.match(code)
+    if not match:
+        return None
+    name, _optional, type_text = match.groups()
+    type_text = type_text.strip()
+    if not name or not type_text:
+        return None
+    return name, type_text
 
 
 def extract_typescript_schema(ts_file: str) -> Dict[str, Any]:
@@ -55,15 +114,13 @@ def extract_typescript_schema(ts_file: str) -> Dict[str, Any]:
             brace_count = stripped.count('{') - stripped.count('}')
         elif in_interface:
             brace_count += stripped.count('{') - stripped.count('}')
-            if ':' in stripped and not stripped.startswith('//'):
-                # Field definition
-                parts = stripped.split(':')
-                field_name = parts[0].replace('?', '').strip()
-                if field_name and not field_name.startswith('//'):
-                    if current_interface not in interfaces:
-                        interfaces[current_interface] = {}
-                    if isinstance(interfaces[current_interface], dict):
-                        interfaces[current_interface][field_name] = parts[1].split(';')[0].strip()
+            parsed = _parse_ts_field(stripped)
+            if parsed is not None:
+                field_name, field_type = parsed
+                if current_interface not in interfaces:
+                    interfaces[current_interface] = {}
+                if isinstance(interfaces[current_interface], dict):
+                    interfaces[current_interface][field_name] = field_type
             if brace_count <= 0:
                 in_interface = False
 
@@ -142,8 +199,11 @@ def compare_schemas(py_fields: Dict[str, str], ts_fields: Dict[str, Dict[str, st
     for key in py_keys & ts_keys:
         py_type = py_main[key]
         ts_type = ts_main[key]
-        if not types_match(py_type, ts_type):
+        allowlist_notes: List[str] = []
+        if not types_match(py_type, ts_type, allowlist_notes):
             warnings.append(f"Type mismatch: {main_name}.{key} - Python: {py_type}, TypeScript: {ts_type}")
+        else:
+            warnings.extend(f"{main_name}.{key}: {note}" for note in allowlist_notes)
 
     # Check nested interfaces
     for ts_interface, ts_props in ts_fields.items():
@@ -162,9 +222,39 @@ def compare_schemas(py_fields: Dict[str, str], ts_fields: Dict[str, Dict[str, st
     return errors, warnings, info
 
 
-def types_match(py_type: str, ts_type: str) -> bool:
-    """Check if Python and TypeScript types are compatible."""
+# Explicit allowlist of TypeScript nominal type references that have no
+# primitive Python equivalent (nested interfaces / enums / aliases declared in
+# the .ts sources). A hit is COMPATIBLE but always emits a warning via the
+# `notes` out-param so silent blanket-True can never hide drift. Anything not
+# listed here and not matching the equivalences below is a MISMATCH (strict).
+CUSTOM_TYPE_ALLOWLIST = frozenset({
+    'domain', 'planningdomain', 'entity', 'entitytype', 'navigationpoint', 'navigationpath', 'navigationspec',
+    'lightingspec', 'customlight', 'copilotpolicy', 'performancebudget', 'specmetadata',
+    'planspace', 'spacesize', 'dimension', 'plancolor', 'planmaterial', 'spacelighting', 'researchref',
+    'lengthunit', 'sheetstatus', 'lightingpreset',
+})
+
+
+def _is_ts_string_literal_union(ts_norm: str) -> bool:
+    """True if every `|`-separated member is a quoted string literal."""
+    members = [m.strip().rstrip(';').rstrip(',') for m in ts_norm.split('|')]
+    if len(members) < 2:
+        return False
+    return all(
+        len(m) >= 2 and m[0] == m[-1] and m[0] in ("'", '"')
+        for m in members
+    )
+
+
+def types_match(py_type: str, ts_type: str, notes: Optional[List[str]] = None) -> bool:
+    """Check if Python and TypeScript types are compatible (strict).
+
+    Unknown custom TS references return False unless explicitly listed in
+    CUSTOM_TYPE_ALLOWLIST — and allowlist hits append a warning to `notes`.
+    """
     # Normalize types (keep brackets: slicing below depends on them)
+    # Strip union members/quotes for the nominal lookup: e.g. TS
+    # `"room" | "poi"` or `'warm' | 'cool'` are string-literal unions.
     py_norm = py_type.lower()
     ts_norm = ts_type.lower()
 
@@ -172,22 +262,31 @@ def types_match(py_type: str, ts_type: str) -> bool:
     if py_norm == ts_norm:
         return True
 
-    # Handle TypeScript type references (Domain, Entity, etc.)
-    if ts_norm in ['domain', 'planningdomain', 'entity', 'entitytype', 'navigationpoint', 'navigationpath', 'navigationspec',
-                    'lightingspec', 'customlight', 'copilotpolicy', 'performancebudget', 'specmetadata',
-                    'planspace', 'spacesize', 'dimension', 'plancolor', 'planmaterial', 'spacelighting', 'researchref',
-                    'lengthunit', 'sheetstatus']:
+    # TypeScript string-literal union (e.g. `"a" | "b"`) vs Python string/enum
+    if py_norm in ('string', 'str') and _is_ts_string_literal_union(ts_norm):
         return True
 
-    # Handle array types: Array<Entity> vs Entity[]
+    # Handle array types first so the allowlist note names the inner types:
+    # Array<Entity> vs Entity[] (either direction).
     if py_norm.startswith('array<') and ts_norm.endswith('[]'):
         py_inner = py_norm[6:-1]
         ts_inner = ts_norm[:-2]
-        return types_match(py_inner, ts_inner)
+        return types_match(py_inner, ts_inner, notes)
     if ts_norm.startswith('array<') and py_norm.endswith('[]'):
         ts_inner = ts_norm[6:-1]
         py_inner = py_norm[:-2]
-        return types_match(py_inner, ts_inner)
+        return types_match(py_inner, ts_inner, notes)
+
+    # Handle TypeScript nominal type references via explicit allowlist only.
+    # The base nominal (before any `[]`/`Array<>`/union decoration) must be listed.
+    ts_base = re.split(r'[\s<>\[\]|,;()]+', ts_norm)[0].strip('\'"')
+    if ts_base in CUSTOM_TYPE_ALLOWLIST:
+        if notes is not None:
+            notes.append(
+                f"Allowlisted nominal type assumed compatible: Python '{py_type}' vs TS '{ts_type}'"
+            )
+        return True
+
     # Dict[str, X] (pydantic 'object') vs TypeScript Record<string, X>
     if py_norm == 'object' and ts_norm.startswith('record<string'):
         return True
@@ -216,8 +315,30 @@ def main():
     all_warnings: List[str] = []
     all_info: List[str] = []
 
+    for name in SHARED_COPIES:
+        root_p, shared_p = SCHEMA_ROOT / name, SHARED_SCHEMAS / name
+        if not root_p.exists() or not shared_p.exists():
+            all_warnings.append(f"Shared copy check skipped (missing file): {name}")
+            continue
+        root = root_p.read_bytes()
+        shared = shared_p.read_bytes()
+        if root != shared:
+            all_errors.append(f"Shared copy drifted: packages/.../schemas/{name} != schemas/{name}")
+        else:
+            print(f"Shared copy identical: {name}")
+
     for py_file, ts_file, main_name in SCHEMA_PAIRS:
         print(f"\n--- {py_file} <-> {ts_file} ---")
+        # Existence-gated: only pairs whose files actually exist are checked.
+        # (Survey: no further .py+.ts pairs exist in schemas/ — see note above.)
+        if not (SCHEMA_ROOT / py_file).exists():
+            all_warnings.append(f"Pair skipped, Python side missing: {py_file}")
+            print(f"  skipped (missing {py_file})")
+            continue
+        if not (SCHEMA_ROOT / ts_file).exists():
+            all_warnings.append(f"Pair skipped, TypeScript side missing: {ts_file}")
+            print(f"  skipped (missing {ts_file})")
+            continue
         try:
             py_schema = extract_python_schema(py_file, main_name)
             py_fields = get_pydantic_fields(py_schema)

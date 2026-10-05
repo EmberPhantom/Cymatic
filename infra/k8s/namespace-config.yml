@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cymatic
+  labels:
+    app.kubernetes.io/part-of: cymatic
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cymatic-config
+  namespace: cymatic
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  # Internal service DNS; external URLs come from Ingress + frontend build args.
+  LLM_ROUTER_URL: "http://llm-router:8001"
+  # RENDER_SERVER_URL (legacy Unity render path) intentionally unset: the
+  # Unity/WebRTC path is frozen (see docs/27-mobile-render-pivot.md) and the
+  # MVP renders on-device. Re-add here if that path is ever revived.
+  # RENDER_SERVER_URL: "http://render-server:8080"
+  S3_BUCKET_NAME: "cymatic"
+  S3_REGION: "us-east-1"
+---
+# Fill via: kubectl create secret generic cymatic-secrets --from-literal=... -n cymatic
+# Required keys: DATABASE_URL, REDIS_URL, REDIS_RATE_URL, REDIS_REVOKED_URL,
+# REDIS_PUBSUB_URL, S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY,
+# JWT_SECRET_KEY (>=32 chars), ADMIN_API_KEY, REDIS_PASSWORD, POSTGRES_PASSWORD,
+# MINIO_ROOT_PASSWORD, GROQ_API_KEY, OPENROUTER_API_KEY, NVIDIA_NIM_API_KEY,
+# OPENAI_API_KEY, SARVAM_API_KEY, APINEX_API_KEY
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cymatic-secrets
+  namespace: cymatic
+type: Opaque
+stringData:
+  JWT_SECRET_KEY: "REPLACE_ME_32_CHARS_MIN"
+  ADMIN_API_KEY: "REPLACE_ME"

@@ -168,7 +168,7 @@ Measure:
 The MVP is release-ready when:
 1. real estate walkthrough generation works
 2. heritage template demo works
-3. true stereo streaming works
+3. true stereo on-device rendering works
 4. gaze/controller input works
 5. voice copilot works
 6. one concurrent stream is stable

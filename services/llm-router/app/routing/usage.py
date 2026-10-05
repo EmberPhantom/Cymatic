@@ -9,6 +9,7 @@ from typing import Any
 import redis.asyncio as redis
 import structlog
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
 
 from app.core.config import get_settings
 
@@ -61,10 +62,18 @@ class ProviderQuota(BaseModel):
     current_tpm: int = 0
     current_daily_tokens: int = 0
     current_monthly_cost_usd: float = 0.0
-    rpm_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    tpm_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    daily_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    monthly_window_start: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    rpm_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    tpm_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    daily_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    monthly_window_start: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 class UsageTracker:
@@ -75,7 +84,11 @@ class UsageTracker:
 
     def __init__(self, redis_url: str | None = None) -> None:
         # DB 2 = usage (isolated from cache/rate)
-        self.redis_url = redis_url or getattr(settings, "REDIS_USAGE_URL", None) or settings.REDIS_URL
+        self.redis_url = (
+            redis_url
+            or getattr(settings, "REDIS_USAGE_URL", None)
+            or settings.REDIS_URL
+        )
         self._client: redis.Redis | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._local_quotas: dict[str, ProviderQuota] = {}
@@ -147,7 +160,11 @@ class UsageTracker:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if self._client is not None and running is not None and self._loop is not running:
+        if (
+            self._client is not None
+            and running is not None
+            and self._loop is not running
+        ):
             self._client = None
             self._loop = None
         if not self._client:
@@ -192,17 +209,30 @@ return current
             return 0
         try:
             # Use Lua for atomic INCR+EXPIRE
-            result = await self._client.eval(self._INCR_EXPIRE_LUA, 1, key, str(increment), str(ttl))
+            result = await self._client.eval(
+                self._INCR_EXPIRE_LUA, 1, key, str(increment), str(ttl)
+            )
             return int(float(result)) if result is not None else 0
-        except Exception:
-            # Fallback pipeline
+        except (RedisError, OSError, asyncio.TimeoutError):
+            # Crash-safe fallback: INCR first, then EXPIRE only when TTL==-1.
+            # A crash between the two RTTs leaves a TTL-less key, but the
+            # next increment repairs it (TTL==-1 -> EXPIRE), so the key can
+            # never stay permanent.
             try:
-                pipe = self._client.pipeline(transaction=False)
-                pipe.incrby(key, increment)  # type: ignore
-                pipe.expire(key, ttl)  # type: ignore
-                res = await pipe.execute()
-                return int(res[0]) if res else 0
-            except Exception as e:
+                val = await self._client.incrby(key, increment)  # type: ignore
+                try:
+                    ttl_left = await self._client.ttl(key)  # type: ignore
+                except (RedisError, OSError, asyncio.TimeoutError):
+                    ttl_left = -1
+                if ttl_left == -1:
+                    try:
+                        await self._client.expire(key, ttl)  # type: ignore
+                    except (RedisError, OSError, asyncio.TimeoutError) as e:
+                        logger.warning(
+                            "quota_expire_failed", key=key, error=str(e)
+                        )
+                return int(val) if val is not None else 0
+            except (RedisError, OSError, asyncio.TimeoutError) as e:
                 logger.warning("quota_incr_failed", key=key, error=str(e))
                 return 0
 
@@ -212,16 +242,27 @@ return current
         if self._client is None:
             return 0.0
         try:
-            result = await self._client.eval(self._INCRBYFLOAT_EXPIRE_LUA, 1, key, str(increment), str(ttl))
+            result = await self._client.eval(
+                self._INCRBYFLOAT_EXPIRE_LUA, 1, key, str(increment), str(ttl)
+            )
             return float(result) if result is not None else 0.0
-        except Exception:
+        except (RedisError, OSError, asyncio.TimeoutError):
+            # Crash-safe fallback (see _redis_incr): repair TTL-less keys.
             try:
-                pipe = self._client.pipeline(transaction=False)
-                pipe.incrbyfloat(key, increment)  # type: ignore
-                pipe.expire(key, ttl)  # type: ignore
-                res = await pipe.execute()
-                return float(res[0]) if res else 0.0
-            except Exception as e:
+                val = await self._client.incrbyfloat(key, increment)  # type: ignore
+                try:
+                    ttl_left = await self._client.ttl(key)  # type: ignore
+                except (RedisError, OSError, asyncio.TimeoutError):
+                    ttl_left = -1
+                if ttl_left == -1:
+                    try:
+                        await self._client.expire(key, ttl)  # type: ignore
+                    except (RedisError, OSError, asyncio.TimeoutError) as e:
+                        logger.warning(
+                            "quota_expire_failed", key=key, error=str(e)
+                        )
+                return float(val) if val is not None else 0.0
+            except (RedisError, OSError, asyncio.TimeoutError) as e:
                 logger.warning("quota_incr_float_failed", key=key, error=str(e))
                 return 0.0
 
@@ -258,14 +299,24 @@ return current
                     tokens_for_quota = 150
                 else:
                     # Rough: chars/4 tokens
-                    tokens_for_quota = max(10, len(usage.model) * 2) if usage.model else 100
+                    tokens_for_quota = (
+                        max(10, len(usage.model) * 2) if usage.model else 100
+                    )
                     # Prefer metadata text_len if present
-                    text_len = usage.metadata.get("text_len") or usage.metadata.get("chars")
+                    text_len = usage.metadata.get("text_len") or usage.metadata.get(
+                        "chars"
+                    )
                     if isinstance(text_len, int):
                         tokens_for_quota = max(10, text_len // 4)
             else:
-                tokens_for_quota = max(tokens_for_quota, 1) if usage.task_type not in ("stt", "tts") else tokens_for_quota
-            pipe.hincrby(day_key, f"{usage.provider}:{usage.task_type}:tokens", tokens_for_quota)  # type: ignore
+                tokens_for_quota = (
+                    max(tokens_for_quota, 1)
+                    if usage.task_type not in ("stt", "tts")
+                    else tokens_for_quota
+                )
+            pipe.hincrby(
+                day_key, f"{usage.provider}:{usage.task_type}:tokens", tokens_for_quota
+            )  # type: ignore
             pipe.hincrby(day_key, f"{usage.provider}:latency_sum", usage.latency_ms)  # type: ignore
             pipe.expire(day_key, 2592000)  # type: ignore
             await pipe.execute()
@@ -298,8 +349,14 @@ return current
             if usage.task_type == "stt":
                 tokens = 150
             else:
-                text_len = usage.metadata.get("text_len") if isinstance(usage.metadata.get("text_len"), int) else 100
-                tokens = max(10, int(text_len) // 4) if isinstance(text_len, int) else 100
+                text_len = (
+                    usage.metadata.get("text_len")
+                    if isinstance(usage.metadata.get("text_len"), int)
+                    else 100
+                )
+                tokens = (
+                    max(10, int(text_len) // 4) if isinstance(text_len, int) else 100
+                )
 
         cost_per_1k = self._estimate_cost(usage.provider, usage.model)
         cost = (tokens / 1000) * cost_per_1k
@@ -343,7 +400,11 @@ return current
         # Increment - use estimated tokens for STT/TTS
         tokens = usage.total_tokens
         if tokens == 0 and usage.task_type in ("stt", "tts"):
-            tokens = 150 if usage.task_type == "stt" else max(10, int(usage.metadata.get("text_len", 100)) // 4)  # type: ignore
+            tokens = (
+                150
+                if usage.task_type == "stt"
+                else max(10, int(usage.metadata.get("text_len", 100)) // 4)
+            )  # type: ignore
         quota.current_rpm += 1
         quota.current_tpm += tokens
         quota.current_daily_tokens += tokens
@@ -358,11 +419,22 @@ return current
             "nvidia_nim": 0.0,
             "openai": 0.002 if "gpt-4o-mini" in model else 0.01,
             "sarvam": 0.001,
+            "apinex": 0.0,  # Free-tier gateway models
+            "local": 0.0,  # On-box Ollama inference
         }
         return costs.get(provider, 0.001)
 
     async def check_quota(self, provider: str, estimated_tokens: int = 1000) -> bool:
         """Check if request would exceed quota (Redis first, fallback local). Returns True if allowed."""
+        # Fail-closed for unknown providers: no quota row means no budget was
+        # ever approved, so deny rather than allowing unbounded usage.
+        try:
+            from app.schemas.providers import ProviderName as _ProviderName
+
+            _ProviderName(provider)
+        except ValueError:
+            logger.warning("quota_unknown_provider", provider=provider)
+            return False
         quota_limits = self._get_provider_limits(provider)
         now = datetime.now(timezone.utc)
         minute_bucket = now.strftime("%Y-%m-%d-%H-%M")
@@ -410,13 +482,16 @@ return current
 
                 return True
             except Exception as e:
-                logger.warning("quota_check_redis_failed", provider=provider, error=str(e))
+                logger.warning(
+                    "quota_check_redis_failed", provider=provider, error=str(e)
+                )
                 # fall through to local
 
         # Fallback local (also covers no Redis)
         quota = self._local_quotas.get(provider)
         if not quota:
-            return True
+            # Unknown provider with no quota row: deny (fail-closed).
+            return False
         # Update limits from live config
         quota = self._get_provider_limits(provider)
 
@@ -484,7 +559,9 @@ return current
                     "monthly_cost_usd": {
                         "used": round(cur_monthly, 4),
                         "limit": quota_limits.monthly_cost_limit_usd,
-                        "remaining": round(quota_limits.monthly_cost_limit_usd - cur_monthly, 4),
+                        "remaining": round(
+                            quota_limits.monthly_cost_limit_usd - cur_monthly, 4
+                        ),
                     },
                 }
             except Exception:
@@ -520,12 +597,16 @@ return current
             "daily_tokens": {
                 "used": quota.current_daily_tokens,
                 "limit": quota.daily_token_limit,
-                "remaining": max(0, quota.daily_token_limit - quota.current_daily_tokens),
+                "remaining": max(
+                    0, quota.daily_token_limit - quota.current_daily_tokens
+                ),
             },
             "monthly_cost_usd": {
                 "used": round(quota.current_monthly_cost_usd, 4),
                 "limit": quota.monthly_cost_limit_usd,
-                "remaining": round(quota.monthly_cost_limit_usd - quota.current_monthly_cost_usd, 4),
+                "remaining": round(
+                    quota.monthly_cost_limit_usd - quota.current_monthly_cost_usd, 4
+                ),
             },
         }
 
@@ -581,19 +662,91 @@ return current
                     by_provider: dict[str, Any] = stats["by_provider"]
                     by_task: dict[str, Any] = stats["by_task"]
                     if metric == "count":
-                        by_provider[provider] = by_provider.get(provider, 0) + int(val_str)
+                        by_provider[provider] = by_provider.get(provider, 0) + int(
+                            val_str
+                        )
                         by_task[task] = by_task.get(task, 0) + int(val_str)
-                        stats["total_requests"] = int(stats["total_requests"]) + int(val_str)
+                        stats["total_requests"] = int(stats["total_requests"]) + int(
+                            val_str
+                        )
                     elif metric == "tokens":
-                        by_provider[f"{provider}_tokens"] = by_provider.get(f"{provider}_tokens", 0) + int(val_str)
-                        stats["total_tokens"] = int(stats["total_tokens"]) + int(val_str)
+                        by_provider[f"{provider}_tokens"] = by_provider.get(
+                            f"{provider}_tokens", 0
+                        ) + int(val_str)
+                        stats["total_tokens"] = int(stats["total_tokens"]) + int(
+                            val_str
+                        )
                     elif metric == "latency_sum":
                         latency_sum += int(val_str)
 
         if int(stats["total_requests"]) > 0:
             stats["avg_latency_ms"] = latency_sum / int(stats["total_requests"])
 
+        # Populate by_model from existing per-call records (bounded scan so
+        # the stats endpoint cannot trigger unbounded Redis load).
+        try:
+            await self._populate_by_model(days, stats)
+        except Exception as e:
+            logger.debug("usage_by_model_failed", error=str(e))
+
         return stats
+
+    async def _populate_by_model(self, days: int, stats: dict[str, Any]) -> None:
+        """Aggregate per-model counts/tokens from `usage:{date}:{id}` records.
+
+        Reads only existing per-call data (no new writes). Bounded: at most
+        200 records per day, 50 keys per SCAN round.
+        """
+        import json as _json
+
+        if self._client is None:
+            return
+        by_model: dict[str, Any] = stats.setdefault("by_model", {})
+        for i in range(days):
+            day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
+            pattern = f"usage:{day}:*"
+            scanned = 0
+            cursor: Any = 0
+            try:
+                while scanned < 200:
+                    cursor, keys = await self._client.scan(
+                        cursor=cursor, match=pattern, count=50
+                    )
+                    if keys:
+                        for k in keys:
+                            if scanned >= 200:
+                                break
+                            scanned += 1
+                            k_str = (
+                                k.decode() if isinstance(k, bytes) else str(k)
+                            )
+                            try:
+                                raw = await self._client.get(k_str)
+                            except Exception:
+                                continue
+                            if not raw:
+                                continue
+                            raw_str = (
+                                raw.decode()
+                                if isinstance(raw, bytes)
+                                else str(raw)
+                            )
+                            try:
+                                rec = _json.loads(raw_str)
+                            except Exception:
+                                continue
+                            model = str(rec.get("model", "unknown"))
+                            tokens = int(rec.get("total_tokens", 0) or 0)
+                            entry = by_model.get(model)
+                            if not isinstance(entry, dict):
+                                entry = {"count": 0, "tokens": 0}
+                                by_model[model] = entry
+                            entry["count"] = int(entry.get("count", 0)) + 1
+                            entry["tokens"] = int(entry.get("tokens", 0)) + tokens
+                    if cursor == 0 or cursor == "0":
+                        break
+            except Exception:
+                continue
 
 
 # Global usage tracker

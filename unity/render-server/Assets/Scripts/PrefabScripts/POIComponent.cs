@@ -15,40 +15,40 @@ namespace Cymatic.Prefabs
         [SerializeField] private bool hasNarration = true;
         [SerializeField] private AudioClip narrationClip;
         [SerializeField] private string narrationText;
-        
+
         [Header("Interaction")]
         [SerializeField] private float interactionRadius = 2f;
         [SerializeField] private bool requiresProximity = true;
         [SerializeField] private float narrationTriggerDistance = 3f;
-        
+
         [Header("Navigation")]
         [SerializeField] private Transform[] connectedPOIs;
         [SerializeField] private float navigationWeight = 1f;
-        
+
         [Header("Visual")]
         [SerializeField] private GameObject highlightEffect;
         [SerializeField] private Material highlightMaterial;
-        
+
         [Header("Historical/Cultural")]
         [SerializeField] private string historicalPeriod;
         [SerializeField] private string culturalSignificance;
         [SerializeField] private int constructionYear;
-        
+
         private SphereCollider _triggerCollider;
         private Material _originalMaterial;
         private Renderer[] _renderers;
         private bool _isHighlighted = false;
-        
+
         public string POIName => poiName;
         public POIType POIType => poiType;
         public string Description => description;
         public bool HasNarration => hasNarration && (narrationClip != null || !string.IsNullOrEmpty(narrationText));
         public float InteractionRadius => interactionRadius;
         public Transform[] ConnectedPOIs => connectedPOIs;
-        
+
         public event System.Action<POIComponent> OnPlayerEnter;
         public event System.Action<POIComponent> OnPlayerExit;
-        
+
         void Awake()
         {
             _triggerCollider = GetComponent<SphereCollider>();
@@ -58,12 +58,12 @@ namespace Cymatic.Prefabs
             }
             _triggerCollider.isTrigger = true;
             _triggerCollider.radius = interactionRadius;
-            
+
             _renderers = GetComponentsInChildren<Renderer>(true);
             if (_renderers.Length > 0)
                 _originalMaterial = _renderers[0].sharedMaterial;
         }
-        
+
         void OnTriggerEnter(Collider other)
         {
             if (!requiresProximity) return;
@@ -74,7 +74,7 @@ namespace Cymatic.Prefabs
                 OnPlayerEnter?.Invoke(this);
             }
         }
-        
+
         void OnTriggerExit(Collider other)
         {
             if (other.CompareTag("Player") || other.CompareTag("MainCamera"))
@@ -84,11 +84,11 @@ namespace Cymatic.Prefabs
                 OnPlayerExit?.Invoke(this);
             }
         }
-        
+
         public void PlayNarration(AudioSource audioSource)
         {
             if (!HasNarration || audioSource == null) return;
-            
+
             if (narrationClip != null)
             {
                 audioSource.clip = narrationClip;
@@ -100,18 +100,18 @@ namespace Cymatic.Prefabs
                 // This would integrate with the TTS system
             }
         }
-        
+
         public void SetHighlighted(bool highlighted)
         {
             _isHighlighted = highlighted;
             ApplyHighlight(highlighted);
         }
-        
+
         private void ApplyHighlight(bool highlighted)
         {
             if (highlightEffect != null)
                 highlightEffect.SetActive(highlighted);
-            
+
             if (highlightMaterial != null && _renderers != null)
             {
                 foreach (var renderer in _renderers)
@@ -131,22 +131,22 @@ namespace Cymatic.Prefabs
                 }
             }
         }
-        
+
         public float GetDistanceToPlayer(Vector3 playerPosition)
         {
             return Vector3.Distance(transform.position, playerPosition);
         }
-        
+
         public bool IsPlayerInRange(Vector3 playerPosition, float additionalRange = 0f)
         {
             return Vector3.Distance(transform.position, GetComponent<Collider>().ClosestPointOnBounds(Vector3.zero)) <= interactionRadius;
         }
-        
+
         private void OnDrawGizmosSelected()
         {
             Gizmos.color = Color.yellow;
             Gizmos.DrawWireSphere(transform.position, interactionRadius);
-            
+
             Gizmos.color = Color.cyan;
             if (connectedPOIs != null)
             {
@@ -158,7 +158,7 @@ namespace Cymatic.Prefabs
             }
         }
     }
-    
+
     public enum POIType
     {
         Generic,

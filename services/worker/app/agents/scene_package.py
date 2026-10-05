@@ -6,15 +6,20 @@ MVP Interim Note:
 - This keeps generation non-blocking and lightweight for mobile VR; GLB/baked assets will be added post-MVP via Unity render server.
 - Atomic file writes and deep-copy safety are enforced even though storage is via MinIO in production.
 """
+
 import copy
-import os
-import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from cymatic_shared.schemas.simulation_spec import Entity, NavigationPath, NavigationPoint, NavigationSpec, SimulationSpec
+from cymatic_shared.schemas.simulation_spec import (
+    Entity,
+    NavigationPath,
+    NavigationPoint,
+    NavigationSpec,
+    SimulationSpec,
+)
 import structlog
 
 logger = structlog.get_logger()
@@ -23,7 +28,9 @@ logger = structlog.get_logger()
 class ScenePackageMetadata(BaseModel):
     format: str = "cymatic_v1"
     spec_version: int
-    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    generated_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     generator: str = "cymatic-worker"
     unity_version: str = "2022.3"
     target_platform: str = "android"
@@ -32,6 +39,7 @@ class ScenePackageMetadata(BaseModel):
 
 class SceneEntity(BaseModel):
     """Unity-ready entity representation."""
+
     id: str
     name: str
     type: str
@@ -73,8 +81,15 @@ class CopilotPolicyData(BaseModel):
     default_language: str = "en"
     personality: str = "helpful_guide"
     allowed_actions: list[str] = [
-        "highlight_object", "show_label", "move_to_point", "open_menu",
-        "change_material", "pause_tour", "resume_tour", "play_audio_hint", "answer_question"
+        "highlight_object",
+        "show_label",
+        "move_to_point",
+        "open_menu",
+        "change_material",
+        "pause_tour",
+        "resume_tour",
+        "play_audio_hint",
+        "answer_question",
     ]
     knowledge_base: str | None = None
 
@@ -90,6 +105,7 @@ class PerformanceBudgetData(BaseModel):
 
 class ScenePackage(BaseModel):
     """Complete scene package for Unity runtime."""
+
     metadata: ScenePackageMetadata
     domain: str
     entities: list[SceneEntity]
@@ -127,9 +143,9 @@ class ScenePackageGenerator:
                 "monument": "Prefabs/Heritage/MonumentPOI",
             },
             "light": "Prefabs/Lighting/HeritageLight",
-        }
+        },
     }
-    
+
     # Component templates
     COMPONENT_TEMPLATES: dict[str, list[dict[str, Any]]] = {
         "room": [
@@ -146,20 +162,30 @@ class ScenePackageGenerator:
             {"type": "NavigationArea", "areaType": "Walkable"},
         ],
         "light": [
-            {"type": "Light", "lightType": "Directional", "intensity": 1.0, "color": [1.0, 0.95, 0.9]},
+            {
+                "type": "Light",
+                "lightType": "Directional",
+                "intensity": 1.0,
+                "color": [1.0, 0.95, 0.9],
+            },
         ],
         "navigation_point": [
             {"type": "SphereCollider", "isTrigger": True, "radius": 1.5},
             {"type": "NavigationPoint", "pointId": "", "connections": []},
         ],
     }
-    
-    def generate(self, spec: SimulationSpec, spec_version: int, asset_manifest: dict[str, Any] | None = None) -> ScenePackage:
+
+    def generate(
+        self,
+        spec: SimulationSpec,
+        spec_version: int,
+        asset_manifest: dict[str, Any] | None = None,
+    ) -> ScenePackage:
         """Generate complete scene package from SimulationSpec."""
-        
+
         # Convert entities
         entities = [self._convert_entity(e, spec.domain) for e in spec.entities]
-        
+
         # Convert navigation
         nav_points = [
             NavigationPoint(
@@ -167,36 +193,36 @@ class ScenePackageGenerator:
                 name=p.name,
                 position=p.position,
                 description=p.description or "",
-                connections=p.connections
+                connections=p.connections,
             )
             for p in spec.navigation.points
         ]
-        
+
         nav_paths = [
             NavigationPath(
                 from_point=p.from_point,
                 to=p.to,
                 type=p.type,
-                waypoints=p.waypoints or []
+                waypoints=p.waypoints or [],
             )
             for p in spec.navigation.paths
         ]
-        
+
         navigation = NavigationSpec(
             points=nav_points,
             paths=nav_paths,
-            default_start_point=spec.navigation.default_start_point
+            default_start_point=spec.navigation.default_start_point,
         )
-        
+
         # Convert lighting
         lighting = LightingData(
             preset=spec.lighting.preset,
             time_of_day=spec.lighting.time_of_day,
             ambient_intensity=spec.lighting.ambient_intensity,
             sun_direction=spec.lighting.sun_direction or [0.5, -1, 0.3],
-            custom_lights=spec.lighting.custom_lights or []
+            custom_lights=spec.lighting.custom_lights or [],
         )
-        
+
         # Copilot policy
         copilot = CopilotPolicyData(
             enabled=spec.copilot_policy.enabled,
@@ -206,7 +232,7 @@ class ScenePackageGenerator:
             allowed_actions=spec.copilot_policy.allowed_actions,
             knowledge_base=spec.copilot_policy.knowledge_base,
         )
-        
+
         # Performance budget
         perf = PerformanceBudgetData(
             target_fps=spec.performance_budget.target_fps,
@@ -216,12 +242,12 @@ class ScenePackageGenerator:
             max_entities=spec.performance_budget.max_entities,
             lod_distances=spec.performance_budget.lod_distances,
         )
-        
+
         # Metadata
         metadata = ScenePackageMetadata(
             spec_version=spec_version,
         )
-        
+
         package = ScenePackage(
             metadata=metadata,
             domain=spec.domain,
@@ -230,40 +256,42 @@ class ScenePackageGenerator:
             lighting=lighting,
             copilot_policy=copilot,
             performance_budget=perf,
-            asset_manifest=asset_manifest or {}
+            asset_manifest=asset_manifest or {},
         )
-        
-        logger.info("scene_package_generated", domain=spec.domain, entities=len(entities))
+
+        logger.info(
+            "scene_package_generated", domain=spec.domain, entities=len(entities)
+        )
         return package
-    
+
     def _convert_entity(self, entity: Entity, domain: str) -> SceneEntity:
         """Convert SimulationSpec Entity to SceneEntity."""
-        
+
         # Determine prefab path
         prefab_path = self._get_prefab_path(entity, domain)
 
         # Get components - deep copy to avoid nested mutation sharing (HIGH: shallow copy)
         base_components = self.COMPONENT_TEMPLATES.get(entity.type, [])
         components: list[dict[str, Any]] = copy.deepcopy(base_components)
-        
+
         # Customize components based on entity properties
         if entity.type == "navigation_point":
             for comp in components:
                 if comp.get("type") == "NavigationPoint":
                     comp["pointId"] = entity.id
                     comp["connections"] = entity.properties.get("connections", [])
-        
+
         if entity.type == "poi":
             for comp in components:
                 if comp.get("type") == "POIComponent":
                     comp["description"] = entity.properties.get("description", "")
                     comp["hasNarration"] = entity.properties.get("has_narration", True)
-        
+
         # Convert children recursively
         children = []
         for child in entity.children or []:
             children.append(self._convert_entity(child, domain))
-        
+
         return SceneEntity(
             id=entity.id,
             name=entity.name,
@@ -274,9 +302,9 @@ class ScenePackageGenerator:
             prefab_path=prefab_path,
             properties=entity.properties,
             components=components,
-            children=children
+            children=children,
         )
-    
+
     def _get_prefab_path(self, entity: Entity, domain: str) -> str | None:
         """Get Unity prefab path for entity."""
         mappings: dict[str, Any] = self.PREFAB_MAPPINGS.get(domain, {})
@@ -291,36 +319,21 @@ class ScenePackageGenerator:
                     return str(val) if val is not None else None
                 # No style match: return None to signal missing mapping rather than wrong prefab.
                 # Caller can handle fallback or leave prefab_path empty.
-                logger.debug("prefab_style_missing", entity_type=entity.type, style=style, domain=domain)
+                logger.debug(
+                    "prefab_style_missing",
+                    entity_type=entity.type,
+                    style=style,
+                    domain=domain,
+                )
                 return None
             else:
                 return str(type_mappings) if type_mappings is not None else None
 
         return None
-    
+
     def to_json(self, package: ScenePackage) -> str:
         """Serialize scene package to JSON."""
         return package.model_dump_json(indent=2)
-    
-    def save_to_file(self, package: ScenePackage, filepath: str):
-        """Save scene package to file atomically (non-blocking friendly)."""
-        dir_name = os.path.dirname(os.path.abspath(filepath)) or "."
-        os.makedirs(dir_name, exist_ok=True)
-        # Atomic write via temp file + replace (HIGH: save)
-        fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".tmp_scene_")
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(self.to_json(package))
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, filepath)
-        finally:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except OSError:
-                pass
-        logger.info("scene_package_saved", path=filepath)
 
 
 # Global generator instance

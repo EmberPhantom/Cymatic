@@ -1,10 +1,16 @@
 from functools import lru_cache
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
 from pydantic import Field, field_validator
-from typing import Any
+from typing import Annotated, Any
 
-_ENV_FILE = str(Path(__file__).resolve().parents[3] / ".env")
+_CONFIG_PATH = Path(__file__).resolve()
+# services/api/app/core/config.py is 4 levels below repo root;
+# container image is rooted at /app with fewer parents. Compose injects
+# env directly, so a missing container-local .env is valid.
+_ENV_FILE = (
+    str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+)
 
 
 class Settings(BaseSettings):
@@ -58,12 +64,25 @@ class Settings(BaseSettings):
     LLM_ROUTER_URL: str = "http://localhost:8001"
 
     # Streaming
+    # Legacy HTTP-push signaling target for handle_offer/handle_answer/handle_candidate
+    # in streaming.py. Unused by the current Unity render server or Android client,
+    # both of which use the WebSocket relay at /v1/stream/ws/{session_id} instead.
     RENDER_SERVER_URL: str = "http://localhost:8080"
     SIGNALING_URL: str = "ws://localhost:8000/v1/stream"
     STUN_URL: str = "stun:stun.l.google.com:19302"
     TURN_URL: str = ""
     TURN_USERNAME: str = ""
     TURN_PASSWORD: str = ""
+
+    # Native mobile render endpoint (Unity-free path)
+    MOBILE_MIN_APP_VERSION: str = "0.1.0"
+    RENDER_HEARTBEAT_TIMEOUT_SECONDS: int = 600
+    # Bounded global sweep of dead non-terminal sessions per heartbeat run.
+    RENDER_GLOBAL_SWEEP_LIMIT: int = 100
+
+    # Orphan asset-upload hygiene (UPLOADING rows never completed by the client)
+    ASSET_UPLOAD_STALE_HOURS: int = 24
+    ASSET_UPLOAD_SWEEP_LIMIT: int = 100
 
     # Feature Flags
     ENABLE_HAND_TRACKING: bool = False
@@ -76,13 +95,46 @@ class Settings(BaseSettings):
 
     # Rate Limiting (requests per minute)
     RATE_LIMIT_AUTH: str = "100/minute"
+    RATE_LIMIT_AUTH_REFRESH: str = "10/minute"
     RATE_LIMIT_API: str = "1000/minute"
     RATE_LIMIT_LLM: str = "50/minute"
+    RATE_LIMIT_GENERATE: str = "50/minute"
+    RATE_LIMIT_WS_HANDSHAKE: str = "20/minute"
+    RATE_LIMIT_WS_USER: str = "30/minute"
+
+    # Outbound LLM-router HTTP client
+    LLM_ROUTER_TIMEOUT_SECONDS: float = 30.0
+    LLM_ROUTER_CONNECT_TIMEOUT_SECONDS: float = 5.0
+    # Streaming render-server forward client (shorter: LAN host)
+    STREAM_HTTP_TIMEOUT_SECONDS: float = 10.0
+    STREAM_FORWARD_TIMEOUT_SECONDS: float = 5.0
+    STREAM_FORWARD_CONNECT_SECONDS: float = 3.0
+    HTTP_MAX_KEEPALIVE_CONNECTIONS: int = 20
+    HTTP_MAX_CONNECTIONS: int = 50
+
+    # Upload/voice guards
+    MAX_VOICE_AUDIO_BYTES: int = 2 * 1024 * 1024
+    MAX_VOICE_LANGUAGE_LEN: int = 10
+
+    # Health-probe timeout (seconds)
+    HEALTH_CHECK_TIMEOUT_SECONDS: float = 2.0
 
     ADMIN_API_KEY: str = ""
 
-    # CORS
-    CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    # CORS - comma-separated list of allowed browser origins, e.g.
+    # "http://localhost:3000,http://localhost:8090" (web app + mobile viewer).
+    # NoDecode: pydantic-settings otherwise tries to JSON-parse list-typed env
+    # vars before validators run, which rejects a plain comma-separated string.
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def split_cors_origins(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod
@@ -114,9 +166,13 @@ class Settings(BaseSettings):
         env = info.data.get("ENVIRONMENT") if hasattr(info, "data") else None
         if env == "production":
             if "localhost" in v or "127.0.0.1" in v:
-                raise ValueError("DATABASE_URL must not contain localhost in production")
+                raise ValueError(
+                    "DATABASE_URL must not contain localhost in production"
+                )
             if ":cymatic@" in v or "cymatic:cymatic" in v:
-                raise ValueError("DATABASE_URL uses insecure default credentials in production")
+                raise ValueError(
+                    "DATABASE_URL uses insecure default credentials in production"
+                )
         return v
 
     @field_validator("POSTGRES_PASSWORD")
@@ -124,7 +180,9 @@ class Settings(BaseSettings):
     def validate_postgres_password(cls, v: str, info: Any) -> str:
         env = info.data.get("ENVIRONMENT") if hasattr(info, "data") else None
         if env == "production" and v in ("cymatic", "", "postgres", "password"):
-            raise ValueError("POSTGRES_PASSWORD must be set to non-default in production")
+            raise ValueError(
+                "POSTGRES_PASSWORD must be set to non-default in production"
+            )
         return v
 
     @field_validator("MINIO_ROOT_PASSWORD", "S3_SECRET_KEY")
@@ -139,7 +197,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_redis_password(cls, v: str, info: Any) -> str:
         env = info.data.get("ENVIRONMENT") if hasattr(info, "data") else None
-        if env == "production" and (not v or v in ("cymatic_redis_pass", "password", "redis")):
+        if env == "production" and (
+            not v or v in ("cymatic_redis_pass", "password", "redis")
+        ):
             raise ValueError("REDIS_PASSWORD must be set in production")
         return v
 

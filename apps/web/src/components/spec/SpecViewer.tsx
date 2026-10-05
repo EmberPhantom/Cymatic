@@ -188,13 +188,13 @@ function EntityRow({ entity, onEdit }: { entity: Record<string, any>; onEdit?: (
   )
 }
 
-function CollapsibleSection({ 
-  title, 
-  icon: Icon, 
-  description, 
-  children, 
-  defaultOpen = false 
-}: { 
+function CollapsibleSection({
+  title,
+  icon: Icon,
+  description,
+  children,
+  defaultOpen = false
+}: {
   title: string
   icon: React.ComponentType<{ className?: string }>
   description: string

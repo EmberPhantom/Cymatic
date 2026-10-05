@@ -1,15 +1,23 @@
 """Heritage Templates - Pre-built heritage walkthrough configurations"""
+
 from typing import Any
 
 from cymatic_shared.schemas.simulation_spec import (
-    SimulationSpec, SpecMetadata, Entity, NavigationSpec, NavigationPoint,
-    NavigationPath, LightingSpec, CopilotPolicy, PerformanceBudget
+    SimulationSpec,
+    SpecMetadata,
+    Entity,
+    NavigationSpec,
+    NavigationPoint,
+    NavigationPath,
+    LightingSpec,
+    CopilotPolicy,
+    PerformanceBudget,
 )
 
 
 class HeritageTemplateLibrary:
     """Library of pre-built heritage templates"""
-    
+
     TEMPLATES = {
         "temple_south_indian": {
             "name": "South Indian Temple",
@@ -23,7 +31,7 @@ class HeritageTemplateLibrary:
                 "garbhagriha_sanctum",
                 "pradakshina_path",
                 "temple_tank",
-                "nandi_mandapa"
+                "nandi_mandapa",
             ],
             "layout": "axial",
             "narration_style": "spiritual",
@@ -40,7 +48,7 @@ class HeritageTemplateLibrary:
                 "mandapa",
                 "garbhagriha",
                 "shikhara_view",
-                "circumambulation_path"
+                "circumambulation_path",
             ],
             "layout": "axial",
             "narration_style": "spiritual",
@@ -59,7 +67,7 @@ class HeritageTemplateLibrary:
                 "zenana_quarters",
                 "royal_gardens",
                 "armory",
-                "hammam"
+                "hammam",
             ],
             "layout": "courtyard_sequence",
             "narration_style": "historical",
@@ -78,7 +86,7 @@ class HeritageTemplateLibrary:
                 "zenana",
                 "chhatri_towers",
                 "stepwell",
-                "temple_complex"
+                "temple_complex",
             ],
             "layout": "courtyard_sequence",
             "narration_style": "cultural",
@@ -97,7 +105,7 @@ class HeritageTemplateLibrary:
                 "baradari",
                 "side_pavilions",
                 "otla_seating",
-                "service_areas"
+                "service_areas",
             ],
             "layout": "enclosed_courtyard",
             "narration_style": "cultural",
@@ -116,7 +124,7 @@ class HeritageTemplateLibrary:
                 "mihrab",
                 "minarets",
                 "dome_interior",
-                "charbagh_gardens"
+                "charbagh_gardens",
             ],
             "layout": "radial",
             "narration_style": "spiritual",
@@ -135,18 +143,24 @@ class HeritageTemplateLibrary:
                 "chatra",
                 "pradakshina_path",
                 "vihara_monastery",
-                "chaitya_hall"
+                "chaitya_hall",
             ],
             "layout": "radial",
             "narration_style": "spiritual",
             "recommended_languages": ["en", "hi", "pi", "sa"],
         },
     }
-    
+
     @classmethod
-    def get_template(cls, template_id: str) -> dict[str, Any]:
-        """Get template by ID"""
-        return cls.TEMPLATES.get(template_id, cls.TEMPLATES["haveli_courtyard"])
+    def get_template(cls, template_id: str) -> dict[str, Any] | None:
+        """Get template by ID.
+
+        Returns None for unknown IDs — callers must surface an explicit
+        error. Never silently substitute a default template: generating a
+        Haveli walkthrough when the user asked for something else is a
+        silent wrong-output bug.
+        """
+        return cls.TEMPLATES.get(template_id)
 
     @classmethod
     def list_templates(cls) -> list[dict[str, Any]]:
@@ -171,196 +185,221 @@ def create_heritage_spec_from_template(
 ) -> "SimulationSpec":
     """Create a SimulationSpec from a heritage template"""
     template = HeritageTemplateLibrary.get_template(template_id)
+    if template is None:
+        available = sorted(HeritageTemplateLibrary.TEMPLATES)
+        raise ValueError(
+            f"Unknown heritage template '{template_id}'. "
+            f"Available: {', '.join(available)}"
+        )
     custom = customizations or {}
-    
+
     # Merge template defaults with customizations
     site_type = custom.get("site_type", template["site_type"])
     pois = custom.get("key_pois", template["default_pois"])
     layout = template["layout"]
     _narration = template["narration_style"]
     languages = custom.get("languages", template["recommended_languages"])
-    
+
     # Generate entities
     entities = []
     entity_id = 0
-    
+
     def next_id(prefix: str) -> str:
         nonlocal entity_id
         entity_id += 1
         return f"{prefix}_{entity_id}"
-    
+
     spacing = 15
     x_pos = 0
     z_pos = 0
-    
+
     for i, poi_name in enumerate(pois):
         poi_name = poi_name.strip()
         if not poi_name:
             continue
-        
+
         if layout == "axial":
             # Linear arrangement
-            entities.append(Entity(
-                id=next_id("poi"),
-                type="poi",
-                name=poi_name.replace("_", " ").title(),
-                position=[x_pos, 0, z_pos],
-                properties={
-                    "description": f"Key point of interest: {poi_name}",
-                    "site_type": site_type,
-                    "historical_significance": "high",
-                    "has_narration": True,
-                    "indoor": True,
-                }
-            ))
-            x_pos += spacing
-            
-        elif layout == "courtyard_sequence":
-            # Courtyard arrangement
-            entities.append(Entity(
-                id=next_id("poi"),
-                type="poi",
-                name=poi_name.replace("_", " ").title(),
-                position=[x_pos, 0, z_pos],
-                properties={
-                    "description": f"Key area: {poi_name}",
-                    "site_type": site_type,
-                    "has_narration": True,
-                    "indoor": True,
-                }
-            ))
-            x_pos += spacing
-            if x_pos > spacing * 2:
-                x_pos = 0
-                z_pos += spacing
-                
-        elif layout == "radial":
-            # Circular arrangement
-            import math
-            angle = (2 * math.pi * i) / max(len(pois), 1)
-            radius = spacing + 10
-            x = radius * math.cos(angle)
-            z = radius * math.sin(angle)
-            
-            entities.append(Entity(
-                id=next_id("poi"),
-                type="poi",
-                name=poi_name.replace("_", " ").title(),
-                position=[x, 0, z],
-                properties={
-                    "description": f"Key point: {poi_name}",
-                    "site_type": site_type,
-                    "has_narration": True,
-                    "indoor": True,
-                }
-            ))
-            
-        elif layout == "enclosed_courtyard":
-            # Courtyard with central feature
-            if i == 0:
-                # Central feature
-                entities.append(Entity(
-                    id=next_id("poi"),
-                    type="poi",
-                    name="Central Courtyard",
-                    position=[0, 0, 0],
-                    properties={
-                        "description": "Central courtyard with fountain",
-                        "is_courtyard_center": True,
-                        "has_narration": True,
-                    }
-                ))
-            else:
-                # Surrounding POIs
-                entities.append(Entity(
+            entities.append(
+                Entity(
                     id=next_id("poi"),
                     type="poi",
                     name=poi_name.replace("_", " ").title(),
                     position=[x_pos, 0, z_pos],
                     properties={
-                        "description": f"Pavilion: {poi_name}",
+                        "description": f"Key point of interest: {poi_name}",
+                        "site_type": site_type,
+                        "historical_significance": "high",
                         "has_narration": True,
-                    }
-                ))
+                        "indoor": True,
+                    },
+                )
+            )
+            x_pos += spacing
+
+        elif layout == "courtyard_sequence":
+            # Courtyard arrangement
+            entities.append(
+                Entity(
+                    id=next_id("poi"),
+                    type="poi",
+                    name=poi_name.replace("_", " ").title(),
+                    position=[x_pos, 0, z_pos],
+                    properties={
+                        "description": f"Key area: {poi_name}",
+                        "site_type": site_type,
+                        "has_narration": True,
+                        "indoor": True,
+                    },
+                )
+            )
+            x_pos += spacing
+            if x_pos > spacing * 2:
+                x_pos = 0
+                z_pos += spacing
+
+        elif layout == "radial":
+            # Circular arrangement
+            import math
+
+            angle = (2 * math.pi * i) / max(len(pois), 1)
+            radius = spacing + 10
+            x = radius * math.cos(angle)
+            z = radius * math.sin(angle)
+
+            entities.append(
+                Entity(
+                    id=next_id("poi"),
+                    type="poi",
+                    name=poi_name.replace("_", " ").title(),
+                    position=[x, 0, z],
+                    properties={
+                        "description": f"Key point: {poi_name}",
+                        "site_type": site_type,
+                        "has_narration": True,
+                        "indoor": True,
+                    },
+                )
+            )
+
+        elif layout == "enclosed_courtyard":
+            # Courtyard with central feature
+            if i == 0:
+                # Central feature
+                entities.append(
+                    Entity(
+                        id=next_id("poi"),
+                        type="poi",
+                        name="Central Courtyard",
+                        position=[0, 0, 0],
+                        properties={
+                            "description": "Central courtyard with fountain",
+                            "is_courtyard_center": True,
+                            "has_narration": True,
+                        },
+                    )
+                )
+            else:
+                # Surrounding POIs
+                entities.append(
+                    Entity(
+                        id=next_id("poi"),
+                        type="poi",
+                        name=poi_name.replace("_", " ").title(),
+                        position=[x_pos, 0, z_pos],
+                        properties={
+                            "description": f"Pavilion: {poi_name}",
+                            "has_narration": True,
+                        },
+                    )
+                )
                 x_pos += spacing
                 if x_pos > spacing * 2:
                     x_pos = 0
                     z_pos += spacing
-    
+
     # Add entrance
-    entities.append(Entity(
-        id=next_id("poi"),
-        type="poi",
-        name="Main Entrance",
-        position=[0, 0, -spacing] if layout != "enclosed_courtyard" else [-spacing, 0, 0],
-        properties={
-            "description": "Primary entrance to the heritage site",
-            "is_entrance": True,
-            "has_narration": True,
-        }
-    ))
-    
+    entities.append(
+        Entity(
+            id=next_id("poi"),
+            type="poi",
+            name="Main Entrance",
+            position=[0, 0, -spacing]
+            if layout != "enclosed_courtyard"
+            else [-spacing, 0, 0],
+            properties={
+                "description": "Primary entrance to the heritage site",
+                "is_entrance": True,
+                "has_narration": True,
+            },
+        )
+    )
+
     # Add ambient light
-    entities.append(Entity(
-        id=next_id("light"),
-        type="light",
-        name="Ambient Light",
-        position=[0, 20, 0],
-        properties={
-            "light_type": "directional",
-            "intensity": 1.0,
-            "color": [1.0, 0.95, 0.85]
-        }
-    ))
-    
+    entities.append(
+        Entity(
+            id=next_id("light"),
+            type="light",
+            name="Ambient Light",
+            position=[0, 20, 0],
+            properties={
+                "light_type": "directional",
+                "intensity": 1.0,
+                "color": [1.0, 0.95, 0.85],
+            },
+        )
+    )
+
     # Create navigation
     nav_points = []
     nav_paths = []
-    
+
     for i, entity in enumerate(entities):
         if entity.type == "poi":
-            nav_points.append(NavigationPoint(
-                id=f"nav_{entity.id}",
-                name=entity.name,
-                position=entity.position,
-                description=f"Visit {entity.name}",
-                connections=[]
-            ))
-    
+            nav_points.append(
+                NavigationPoint(
+                    id=f"nav_{entity.id}",
+                    name=entity.name,
+                    position=entity.position,
+                    description=f"Visit {entity.name}",
+                    connections=[],
+                )
+            )
+
     # Create paths based on layout
     if layout == "axial" or layout == "courtyard_sequence":
         for i in range(len(nav_points) - 1):
-            nav_paths.append(NavigationPath(
-                from_point=nav_points[i].id,
-                to=nav_points[i + 1].id,
-                type="walk"
-            ))
+            nav_paths.append(
+                NavigationPath(
+                    from_point=nav_points[i].id, to=nav_points[i + 1].id, type="walk"
+                )
+            )
         # Return path
         if len(nav_points) > 2:
-            nav_paths.append(NavigationPath(
-                from_point=nav_points[-1].id,
-                to=nav_points[0].id,
-                type="walk"
-            ))
+            nav_paths.append(
+                NavigationPath(
+                    from_point=nav_points[-1].id, to=nav_points[0].id, type="walk"
+                )
+            )
     elif layout == "radial" or layout == "enclosed_courtyard":
         # Center to each POI
         center_point = nav_points[0] if nav_points else None
         if center_point:
             for point in nav_points[1:]:
-                nav_paths.append(NavigationPath(
-                    from_point=center_point.id,
-                    to=point.id,
-                    type="walk"
-                ))
+                nav_paths.append(
+                    NavigationPath(from_point=center_point.id, to=point.id, type="walk")
+                )
             # Connect adjacent
             for i in range(1, len(nav_points)):
                 next_i = (i % (len(nav_points) - 1)) + 1
-                nav_paths.append(NavigationPath(
-                    from_point=nav_points[i].id,
-                    to=nav_points[next_i].id,
-                    type="walk"
-                ))
-    
+                nav_paths.append(
+                    NavigationPath(
+                        from_point=nav_points[i].id,
+                        to=nav_points[next_i].id,
+                        type="walk",
+                    )
+                )
+
     # Update connections
     for path in nav_paths:
         for point in nav_points:
@@ -370,9 +409,9 @@ def create_heritage_spec_from_template(
             if point.id == path.to:
                 if path.from_point not in point.connections:
                     point.connections.append(path.from_point)
-    
+
     default_start = nav_points[0].id if nav_points else "start"
-    
+
     # Create spec
     spec = SimulationSpec(
         domain="heritage",
@@ -380,18 +419,14 @@ def create_heritage_spec_from_template(
             title=custom.get("title", f"{template['name']} Walkthrough"),
             description=custom.get("description", template["description"]),
             version="1.0.0",
-            tags=["heritage", template["site_type"], template["culture"]]
+            tags=["heritage", template["site_type"], template["culture"]],
         ),
         entities=entities,
         navigation=NavigationSpec(
-            points=nav_points,
-            paths=nav_paths,
-            default_start_point=default_start
+            points=nav_points, paths=nav_paths, default_start_point=default_start
         ),
         lighting=LightingSpec(
-            preset="golden_hour",
-            time_of_day="morning",
-            ambient_intensity=0.8
+            preset="golden_hour", time_of_day="morning", ambient_intensity=0.8
         ),
         copilot_policy=CopilotPolicy(
             enabled=True,
@@ -405,10 +440,10 @@ def create_heritage_spec_from_template(
             max_draw_calls=50,
             texture_budget_mb=100,
             max_entities=500,
-            lod_distances=[10.0, 25.0, 50.0]
-        )
+            lod_distances=[10.0, 25.0, 50.0],
+        ),
     )
-    
+
     return spec
 
 
@@ -431,7 +466,7 @@ def get_heritage_asset_catalog(site_type: str) -> dict[str, list[str]]:
             "nature": [
                 "models/nature/banyan_tree.glb",
                 "models/nature/temple_tank.glb",
-            ]
+            ],
         },
         "palace": {
             "architecture": [
@@ -449,7 +484,7 @@ def get_heritage_asset_catalog(site_type: str) -> dict[str, list[str]]:
             "nature": [
                 "models/nature/garden.glb",
                 "models/nature/charbagh.glb",
-            ]
+            ],
         },
         "courtyard": {
             "architecture": [
@@ -466,7 +501,7 @@ def get_heritage_asset_catalog(site_type: str) -> dict[str, list[str]]:
             "nature": [
                 "models/nature/tulsi_plant.glb",
                 "models/nature/courtyard_tree.glb",
-            ]
+            ],
         },
         "monument": {
             "architecture": [
@@ -482,7 +517,7 @@ def get_heritage_asset_catalog(site_type: str) -> dict[str, list[str]]:
             "nature": [
                 "models/nature/charbagh.glb",
                 "models/nature/reflecting_pool.glb",
-            ]
-        }
+            ],
+        },
     }
     return catalogs.get(site_type, catalogs["courtyard"])

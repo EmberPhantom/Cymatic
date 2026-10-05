@@ -1,14 +1,16 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
 
 _CONFIG_PATH = Path(__file__).resolve()
 # The repository layout has four parents above this file; the container image
 # is rooted at /app and has fewer parents. Compose injects environment values
 # directly, so a missing container-local .env is valid.
-_ENV_FILE = str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+_ENV_FILE = (
+    str(_CONFIG_PATH.parents[4] / ".env") if len(_CONFIG_PATH.parents) > 4 else ".env"
+)
 
 
 class Settings(BaseSettings):
@@ -21,7 +23,10 @@ class Settings(BaseSettings):
     LLM_ROUTER_HOST: str = "0.0.0.0"
     LLM_ROUTER_PORT: int = 8001
 
-    # Redis DB split: 1 cache, 2 usage, 3 rate
+    # Redis DB split: 1 cache, 2 usage, 3 rate.
+    # NOTE (LAN assumption, no TLS work in MVP): default URLs are plaintext
+    # redis:// on the compose LAN. Do not expose Redis off-LAN; switch to
+    # rediss:// + REDIS_PASSWORD for any non-LAN deployment.
     REDIS_URL: str = "redis://localhost:6379/1"
     REDIS_CACHE_URL: str | None = None
     REDIS_USAGE_URL: str | None = None
@@ -46,6 +51,8 @@ class Settings(BaseSettings):
 
     # Offline <3B SLM via Ollama sidecar (feature-flagged, default off for cloud CI).
     # LAN compose with `--profile local` sets ENABLE_LOCAL_LLM=true and starts ollama.
+    # NOTE (LAN assumption, no TLS work in MVP): OLLAMA_URL is plaintext HTTP on
+    # the compose/Docker LAN. Keep it off public networks.
     ENABLE_LOCAL_LLM: bool = False
     OLLAMA_URL: str = "http://ollama:11434"
     OLLAMA_MODEL: str = "phi-3-mini-3.8b-q4"
@@ -56,12 +63,26 @@ class Settings(BaseSettings):
 
     # Admin API key for management endpoints
     ADMIN_API_KEY: str = ""
+    # Data-plane API key for LLM inference routes. Empty = fall back to
+    # ADMIN_API_KEY for back-compat (a warning is logged when falling back).
+    LLM_API_KEY: str = ""
 
     # Rate Limiting
     RATE_LIMIT_LLM: str = "50/minute"
 
     # CORS
-    CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    # NoDecode: pydantic-settings otherwise tries to JSON-parse list-typed env
+    # vars before validators run, which rejects a plain comma-separated string.
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def split_cors_origins(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     @field_validator("ENVIRONMENT")
     @classmethod
@@ -86,12 +107,18 @@ class Settings(BaseSettings):
             raise ValueError(f"LOG_LEVEL must be one of {allowed}")
         return v.upper()
 
-    @field_validator("REDIS_URL", "REDIS_CACHE_URL", "REDIS_USAGE_URL", "REDIS_RATE_URL")
+    @field_validator(
+        "REDIS_URL", "REDIS_CACHE_URL", "REDIS_USAGE_URL", "REDIS_RATE_URL"
+    )
     @classmethod
     def validate_redis_url(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        if v and not (v.startswith("redis://") or v.startswith("rediss://") or v.startswith("redis+")):
+        if v and not (
+            v.startswith("redis://")
+            or v.startswith("rediss://")
+            or v.startswith("redis+")
+        ):
             raise ValueError("REDIS_URL must start with redis:// or rediss://")
         return v
 
@@ -102,9 +129,13 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must not be empty")
         for origin in v:
             if origin == "*":
-                raise ValueError("CORS_ORIGINS wildcard '*' not allowed with allow_credentials")
+                raise ValueError(
+                    "CORS_ORIGINS wildcard '*' not allowed with allow_credentials"
+                )
             if not (origin.startswith("http://") or origin.startswith("https://")):
-                raise ValueError(f"CORS origin must start with http:// or https://: {origin}")
+                raise ValueError(
+                    f"CORS origin must start with http:// or https://: {origin}"
+                )
         return v
 
     @field_validator("RATE_LIMIT_LLM")
@@ -132,7 +163,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_provider_key(cls, v: str) -> str:
         if v and v.strip() != v:
-            raise ValueError("Provider API key must not have leading/trailing whitespace")
+            raise ValueError(
+                "Provider API key must not have leading/trailing whitespace"
+            )
         if v and len(v) < 8 and v != "":
             raise ValueError("Provider API key too short")
         return v

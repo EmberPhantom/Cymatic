@@ -8,8 +8,14 @@ from app.models.project import Project
 from app.models.stream_session import StreamSession
 from app.models.runtime_event import RuntimeEvent
 from app.models.user import User
+from cymatic_shared.model_enums import RuntimeEventType
 
 router = APIRouter()
+
+# DoS bounds for session analytics: breakdown scans newest-first with a cap;
+# totals come from COUNT(*) so they stay exact.
+MAX_EVENTS_SCAN = 1000
+MAX_NAV_PATH = 500
 
 
 class ProjectAnalytics(BaseModel):
@@ -60,7 +66,9 @@ async def get_project_analytics(
 
     # Aggregate sessions via SQL to avoid N+1 / loading all rows
     total_sessions_res = await db.execute(
-        select(func.count(StreamSession.id)).where(StreamSession.project_id == project_id)
+        select(func.count(StreamSession.id)).where(
+            StreamSession.project_id == project_id
+        )
     )
     total_sessions = int(total_sessions_res.scalar() or 0)
 
@@ -101,14 +109,16 @@ async def get_project_analytics(
         .where(StreamSession.project_id == project_id)
         .where(
             RuntimeEvent.event_type.in_(
-                ["tour_completed", "session_completed", "walkthrough_completed"]
+                [
+                    RuntimeEventType.TOUR_COMPLETED,
+                    RuntimeEventType.SESSION_COMPLETED,
+                    RuntimeEventType.WALKTHROUGH_COMPLETED,
+                ]
             )
         )
     )
     completed_sessions = int(completed_sessions_res.scalar() or 0)
-    completion_rate = (
-        completed_sessions / total_sessions if total_sessions else 0.0
-    )
+    completion_rate = completed_sessions / total_sessions if total_sessions else 0.0
 
     return ProjectAnalytics(
         project_id=project_id,
@@ -142,9 +152,21 @@ async def get_session_analytics(
     if not project or project.organization_id != current_user.organization_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Get events (fix column name session_id not stream_session_id)
+    # Total via COUNT (exact even for huge sessions); breakdown scans only the
+    # latest MAX_EVENTS_SCAN rows so a 10k-event session can't OOM the worker.
+    total_events = (
+        await db.scalar(
+            select(func.count())
+            .select_from(RuntimeEvent)
+            .where(RuntimeEvent.session_id == session_id)
+        )
+        or 0
+    )
     events_result = await db.execute(
-        select(RuntimeEvent).where(RuntimeEvent.session_id == session_id)
+        select(RuntimeEvent)
+        .where(RuntimeEvent.session_id == session_id)
+        .order_by(RuntimeEvent.id.desc())
+        .limit(MAX_EVENTS_SCAN)
     )
     events = events_result.scalars().all()
 
@@ -155,14 +177,18 @@ async def get_session_analytics(
 
     for event in events:
         events_by_type[event.event_type] = events_by_type.get(event.event_type, 0) + 1
-        if event.event_type == "navigation_point_changed":
+        if event.event_type == RuntimeEventType.NAVIGATION_POINT_CHANGED:
             nav_data = event.payload_json
             if "point_id" in nav_data:
                 navigation_path.append(nav_data["point_id"])
-        elif event.event_type == "copilot_message_sent":
+        elif event.event_type == RuntimeEventType.COPILOT_MESSAGE_SENT:
             copilot_interactions += 1
-        elif event.event_type in ["voice_session_started", "voice_session_completed"]:
+        elif event.event_type in [
+            RuntimeEventType.VOICE_SESSION_STARTED,
+            RuntimeEventType.VOICE_SESSION_COMPLETED,
+        ]:
             voice_interactions += 1
+    navigation_path = navigation_path[:MAX_NAV_PATH]
 
     duration: float = 0
     if session.ended_at and session.started_at:
@@ -171,7 +197,7 @@ async def get_session_analytics(
     return SessionAnalytics(
         session_id=session_id,
         duration_seconds=int(duration),
-        events_count=len(events),
+        events_count=total_events,
         events_by_type=events_by_type,
         navigation_path=navigation_path,
         copilot_interactions=copilot_interactions,

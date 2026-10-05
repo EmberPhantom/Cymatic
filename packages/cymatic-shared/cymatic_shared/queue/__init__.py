@@ -1,4 +1,5 @@
 """Shared job queue infrastructure - Redis-based task queue."""
+
 import json
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,10 @@ import structlog
 import uuid
 
 logger = structlog.get_logger()
+
+# Bound for cancel scans: a stuck queue deeper than this needs ops attention,
+# not an unbounded Python scan per cancel call.
+_CANCEL_SCAN_LIMIT = 1000
 
 
 class JobStatus(str, Enum):
@@ -39,6 +44,10 @@ class Job(BaseModel):
     error: Optional[str] = None
     retry_count: int = 0
     max_retries: int = 3
+    # Set by fail_job BEFORE the delayed-requeue sleep so a worker crash
+    # doesn't lose the retry intent; sweep_stale_retries() re-enqueues
+    # hashes stuck in RETRY whose retry_at has passed. Cleared on requeue.
+    retry_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
@@ -56,6 +65,7 @@ class JobQueue:
     def __init__(self, redis_url: str):
         self.redis_url = redis_url
         self._client: Optional[redis.Redis] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._queues = {
             "generation": "queue:generation",
             "spec": "queue:spec",
@@ -64,17 +74,34 @@ class JobQueue:
         }
 
     async def connect(self):
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if (
+            self._client is not None
+            and self._loop is not None
+            and running is not None
+            and self._loop is not running
+        ):
+            # Stale self-created client bound to a previous (possibly closed)
+            # loop, e.g. across uvicorn reloads. Drop and recreate. Clients
+            # injected externally (tests) have _loop None and are left alone.
+            self._client = None
+            self._loop = None
         if not self._client:
             self._client = redis.from_url(
                 self.redis_url,
                 encoding="utf-8",
                 decode_responses=True,
             )
+            self._loop = running
 
     async def disconnect(self):
         if self._client:
             await self._client.close()
             self._client = None
+            self._loop = None
 
     @property
     def client(self) -> redis.Redis:
@@ -92,15 +119,23 @@ class JobQueue:
             pipe.zadd(queue_key, {job_json: job.priority.value})
             pipe.hset(
                 f"job:{job.id}",
-                mapping={"data": job_json, "status": job.status.value, "queue": queue_name},
+                mapping={
+                    "data": job_json,
+                    "status": job.status.value,
+                    "queue": queue_name,
+                },
             )
             pipe.expire(f"job:{job.id}", 604800)
             await pipe.execute()
 
-        logger.info("job_enqueued", job_id=job.id, queue=queue_name, priority=job.priority.name)
+        logger.info(
+            "job_enqueued", job_id=job.id, queue=queue_name, priority=job.priority.name
+        )
         return job.id
 
-    async def acquire_job_lock(self, job_id: str, worker_id: str, ttl: int | None = None) -> str | None:
+    async def acquire_job_lock(
+        self, job_id: str, worker_id: str, ttl: int | None = None
+    ) -> str | None:
         ttl = ttl or self.LOCK_TTL
         lock_token = str(uuid.uuid4())
         lock_key = f"job:lock:{job_id}"
@@ -111,7 +146,9 @@ class JobQueue:
                 f"job:{job_id}",
                 mapping={
                     "lock_token": lock_token,
-                    "lock_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat(),
+                    "lock_expires_at": (
+                        datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                    ).isoformat(),
                     "worker_id": worker_id,
                 },
             )
@@ -130,7 +167,9 @@ class JobQueue:
         result = await self.client.eval(lua_script, 1, lock_key, lock_token)
         return result == 1
 
-    async def renew_job_lock(self, job_id: str, lock_token: str, ttl: int | None = None) -> bool:
+    async def renew_job_lock(
+        self, job_id: str, lock_token: str, ttl: int | None = None
+    ) -> bool:
         ttl = ttl or self.LOCK_TTL
         lock_key = f"job:lock:{job_id}"
         lua_script = """
@@ -144,12 +183,18 @@ class JobQueue:
         if result == 1:
             await self.client.hset(
                 f"job:{job_id}",
-                mapping={"lock_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()},
+                mapping={
+                    "lock_expires_at": (
+                        datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                    ).isoformat()
+                },
             )
             return True
         return False
 
-    async def dequeue(self, queue_name: str = "generation", worker_id: str | None = None) -> Optional[Job]:
+    async def dequeue(
+        self, queue_name: str = "generation", worker_id: str | None = None
+    ) -> Optional[Job]:
         await self.connect()
         queue_key = self._queues.get(queue_name, f"queue:{queue_name}")
 
@@ -251,7 +296,9 @@ class JobQueue:
             logger.error("job_failed_max_retries", job_id=job.id, error=error)
         else:
             job.status = JobStatus.RETRY
-            logger.warning("job_retry", job_id=job.id, attempt=job.retry_count, error=error)
+            logger.warning(
+                "job_retry", job_id=job.id, attempt=job.retry_count, error=error
+            )
 
         await self.client.hset(
             f"job:{job.id}",
@@ -259,7 +306,7 @@ class JobQueue:
         )
 
         if job.status == JobStatus.RETRY:
-            delay = min(2 ** job.retry_count * 5, 300)
+            delay = min(2**job.retry_count * 5, 300)
             # Resolve original queue from stored hash to avoid job.type fragmentation (e.g., generate_spec vs generation)
             stored_queue: str | None = queue_name
             if not stored_queue:
@@ -271,15 +318,111 @@ class JobQueue:
                 except Exception:
                     stored_queue = None
             target_queue = stored_queue or job.type
-            # Non-blocking delayed requeue; task is held by event loop, but retry survives restart via job:{id} status RETRY
+
+            # Persist retry intent BEFORE the sleep so a crash/restart during
+            # the delay window doesn't lose the retry (recovered by
+            # sweep_stale_retries at startup).
+            job.retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            await self.client.hset(
+                f"job:{job.id}",
+                mapping={
+                    "data": job.model_dump_json(),
+                    "status": job.status.value,
+                    "retry_at": job.retry_at.isoformat(),
+                    "queue": target_queue,
+                },
+            )
+
+            # Non-blocking delayed requeue.
             async def _delayed_requeue():
                 await asyncio.sleep(delay)
-                # Re-fetch latest job to avoid stale retry_count
                 try:
+                    # Skip if a startup sweep (or another path) already
+                    # requeued/completed this job — avoids double execution.
+                    try:
+                        cur = await self.client.hget(f"job:{job.id}", "status")
+                        if isinstance(cur, bytes):
+                            cur = cur.decode("utf-8")
+                    except Exception:
+                        cur = None
+                    if cur != JobStatus.RETRY.value:
+                        return
+                    job.status = JobStatus.QUEUED
+                    job.retry_at = None
                     await self.enqueue(job, target_queue)
                 except Exception as e:
                     logger.error("delayed_requeue_failed", job_id=job.id, error=str(e))
+
             asyncio.create_task(_delayed_requeue())
+
+    async def sweep_stale_retries(
+        self, queue_name: str | None = None, limit: int = 100
+    ) -> int:
+        """Re-enqueue RETRY jobs whose retry_at passed (crash recovery).
+
+        Call once at worker startup: any job left in RETRY (e.g. the process
+        died during fail_job's delayed-requeue sleep) is requeued to its
+        stored queue (delayed path) or, when no queue was stored, to a queue
+        derived from job.type (immediate/original path). Jobs without a
+        parsable past-due retry_at are left alone.
+
+        Returns the number of jobs requeued.
+        """
+        await self.connect()
+        now = datetime.now(timezone.utc)
+        requeued = 0
+        async for key in self.client.scan_iter(match="job:*", count=100):
+            if isinstance(key, bytes):
+                key = key.decode("utf-8")
+            if key.startswith("job:lock:"):
+                continue
+            try:
+                fields = await self.client.hmget(
+                    key, "data", "status", "retry_at", "queue"
+                )
+            except Exception:
+                continue
+            data_raw, status_raw, retry_at_raw, queue_raw = (
+                (list(fields) + [None] * 4)[:4] if fields else (None, None, None, None)
+            )
+            if isinstance(status_raw, bytes):
+                status_raw = status_raw.decode("utf-8")
+            if status_raw != JobStatus.RETRY.value:
+                continue
+            if isinstance(retry_at_raw, bytes):
+                retry_at_raw = retry_at_raw.decode("utf-8")
+            try:
+                retry_at = (
+                    datetime.fromisoformat(retry_at_raw) if retry_at_raw else None
+                )
+            except (ValueError, TypeError):
+                continue
+            if retry_at is None or retry_at > now:
+                continue
+            if not data_raw:
+                continue
+            if isinstance(data_raw, bytes):
+                data_raw = data_raw.decode("utf-8")
+            if isinstance(queue_raw, bytes):
+                queue_raw = queue_raw.decode("utf-8")
+            if queue_name and queue_raw and queue_raw != queue_name:
+                continue
+            try:
+                job = Job(**json.loads(data_raw))
+            except Exception:
+                continue
+            target_queue = queue_raw or job.type
+            try:
+                job.status = JobStatus.QUEUED
+                job.retry_at = None
+                await self.enqueue(job, target_queue)
+                requeued += 1
+                logger.info("stale_retry_requeued", job_id=job.id, queue=target_queue)
+            except Exception as e:
+                logger.error("stale_retry_requeue_failed", job_id=job.id, error=str(e))
+            if requeued >= limit:
+                break
+        return requeued
 
     async def get_queue_stats(self, queue_name: str = "generation") -> dict:
         await self.connect()
@@ -287,15 +430,79 @@ class JobQueue:
         pending = await self.client.zcard(queue_key)
         return {"queue": queue_name, "pending_jobs": pending}
 
+    async def get_job_status(self, job_id: str) -> Optional[Job]:
+        """Fetch job by ID (None when unknown)."""
+        await self.connect()
+        job_data = await self.client.hget(f"job:{job_id}", "data")
+        if not job_data:
+            return None
+        return Job(**json.loads(job_data))
+
+    async def cancel_job(self, job_id: str) -> bool:
+        """Cancel a queued or running job. False when already terminal/unknown."""
+        await self.connect()
+        job_data = await self.client.hget(f"job:{job_id}", "data")
+        if not job_data:
+            return False
+        job = Job(**json.loads(job_data))
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+            return False
+        if job.lock_token:
+            await self.release_job_lock(job_id, job.lock_token)
+        # Resolve the ORIGINAL queue stored at enqueue time (e.g. "spec"),
+        # not job.type (e.g. "generate_spec"), otherwise ZREM misses.
+        stored_queue: Optional[str] = None
+        try:
+            raw = await self.client.hget(f"job:{job_id}", "queue")
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            stored_queue = raw
+        except Exception:
+            stored_queue = None
+        queue_key = self._queues.get(
+            stored_queue or "", f"queue:{stored_queue or job.type}"
+        )
+        # Job JSON changes across state transitions, so exact-match ZREM
+        # often misses: scan known queues (bounded) and remove by parsed id.
+        queues_to_try = [queue_key, *self._queues.values()]
+        seen: set = set()
+        for qk in queues_to_try:
+            if qk in seen:
+                continue
+            seen.add(qk)
+            try:
+                members = await self.client.zrange(qk, 0, _CANCEL_SCAN_LIMIT - 1)
+                for m in members:
+                    try:
+                        mid = json.loads(m).get("id")
+                    except Exception:
+                        continue
+                    if mid == job_id:
+                        await self.client.zrem(qk, m)
+            except Exception:
+                continue
+        job.status = JobStatus.CANCELLED
+        job.completed_at = datetime.now(timezone.utc)
+        job.lock_token = None
+        job.lock_expires_at = None
+        await self.client.hset(
+            f"job:{job_id}",
+            mapping={"data": job.model_dump_json(), "status": job.status.value},
+        )
+        logger.info("job_cancelled", job_id=job_id)
+        return True
+
 
 JOB_HANDLERS: dict[str, Callable] = {}
 
 
 def register_job_handler(job_type: str):
     """Decorator to register job handlers."""
+
     def decorator(func: Callable):
         JOB_HANDLERS[job_type] = func
         return func
+
     return decorator
 
 

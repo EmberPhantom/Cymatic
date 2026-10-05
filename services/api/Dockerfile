@@ -66,7 +66,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s \
     CMD curl -fsS http://localhost:8000/health || exit 1
 
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-4}"]
+# Prod default is 2 workers, NOT 4: at ~128-150Mi per uvicorn worker, 2 fits
+# the compose mem_limit 512m / k8s limit 512Mi with headroom, while 4 (~520Mi
+# RSS) risks OOM under those limits. k8s uses this default (the ConfigMap does
+# not set API_WORKERS); local compose/.env may override to 4 on bigger boxes.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-2}"]
 
 # ── Test ───────────────────────────────────────────────────────
 FROM runtime AS test

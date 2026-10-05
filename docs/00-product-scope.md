@@ -107,7 +107,7 @@ Capabilities:
 - publish workflow
 
 ### Runtime
-- true stereo streaming
+- on-device true stereo rendering (Filament SBS)
 - gaze dwell interaction
 - controller selection
 - voice copilot
@@ -146,7 +146,7 @@ The following are not part of MVP:
 The MVP is successful if:
 1. a walkthrough can be generated from prompt
 2. the generated scene can be published
-3. the Android client can receive a true stereo stream
+3. the Android client can render a true stereo walkthrough on-device
 4. gaze/controller input works reliably
 5. voice copilot works
 6. one concurrent stream is stable

@@ -12,7 +12,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         {/* Top Logo */}
         <div>
           <Link href="/" className="inline-flex items-center gap-2.5 group">
-            <div className="h-7 w-7 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-xs transition-transform group-hover:scale-105">
+            <div className="h-7 w-7 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-sm transition-transform group-hover:scale-105">
               CY
             </div>
             <div className="flex flex-col">
@@ -38,7 +38,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           </p>
 
           {/* Mini Spec & Telemetry Card */}
-          <div className="p-3.5 rounded-xl border border-border bg-card shadow-2xs space-y-2.5">
+          <div className="p-3.5 rounded-xl border border-border bg-card shadow-sm space-y-2.5">
             <div className="flex items-center justify-between border-b border-border pb-2">
               <span className="text-[10px] font-mono font-bold text-foreground uppercase tracking-wider">
                 SIMULATION SPEC // V1.0

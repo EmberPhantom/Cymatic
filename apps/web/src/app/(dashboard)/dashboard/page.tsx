@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge"
 import type { BadgeProps } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
+import { getErrorMessage } from "@/lib/errors"
 import { api } from "@/lib/api"
 import { queryKeys } from "@/lib/queryKeys"
 import { useQueryClient } from "@tanstack/react-query"
@@ -171,8 +172,7 @@ export default function DashboardPage() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.projects.all })
       setDeleteTarget(null)
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { detail?: string } } }
-      setDeleteError(e?.response?.data?.detail || "Delete failed. Please try again.")
+      setDeleteError(getErrorMessage(err, "Delete failed. Please try again."))
     } finally {
       setIsDeleting(false)
     }
@@ -191,7 +191,7 @@ export default function DashboardPage() {
 
         <Dialog open={showNewProject} onOpenChange={setShowNewProject}>
           <DialogTrigger asChild>
-            <Button variant="terracotta" size="sm" className="gap-1.5 font-medium shadow-xs h-8 text-xs">
+            <Button variant="terracotta" size="sm" className="gap-1.5 font-medium shadow-sm h-8 text-xs">
               <Plus className="h-3.5 w-3.5" />
               <span>New Simulation</span>
             </Button>
@@ -225,7 +225,7 @@ export default function DashboardPage() {
                     onClick={() => setDomain("real_estate")}
                     className={`p-3 rounded-lg border text-xs text-left transition-all ${
                       domain === "real_estate"
-                        ? "border-terracotta bg-terracotta-50/50 dark:bg-terracotta-950/20 font-medium text-foreground shadow-xs ring-1 ring-terracotta/40"
+                        ? "border-terracotta bg-terracotta-50/50 dark:bg-terracotta-950/20 font-medium text-foreground shadow-sm ring-1 ring-terracotta/40"
                         : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
                     }`}
                   >
@@ -238,7 +238,7 @@ export default function DashboardPage() {
                     onClick={() => setDomain("heritage")}
                     className={`p-3 rounded-lg border text-xs text-left transition-all ${
                       domain === "heritage"
-                        ? "border-sage bg-sage-50/50 dark:bg-sage-950/20 font-medium text-foreground shadow-xs ring-1 ring-sage/40"
+                        ? "border-sage bg-sage-50/50 dark:bg-sage-950/20 font-medium text-foreground shadow-sm ring-1 ring-sage/40"
                         : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
                     }`}
                   >
@@ -274,7 +274,7 @@ export default function DashboardPage() {
             }}
             className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 border whitespace-nowrap ${
               activeFilter === "all"
-                ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal border-transparent font-semibold shadow-xs"
+                ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal border-transparent font-semibold shadow-sm"
                 : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
             }`}
           >
@@ -290,7 +290,7 @@ export default function DashboardPage() {
             }}
             className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 border whitespace-nowrap ${
               activeFilter === "real_estate"
-                ? "bg-terracotta text-white border-transparent font-semibold shadow-xs"
+                ? "bg-terracotta text-white border-transparent font-semibold shadow-sm"
                 : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
             }`}
           >
@@ -306,7 +306,7 @@ export default function DashboardPage() {
             }}
             className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 border whitespace-nowrap ${
               activeFilter === "heritage"
-                ? "bg-sage text-white border-transparent font-semibold shadow-xs"
+                ? "bg-sage text-white border-transparent font-semibold shadow-sm"
                 : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
             }`}
           >
@@ -322,7 +322,7 @@ export default function DashboardPage() {
             }}
             className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 border whitespace-nowrap ${
               activeFilter === "published"
-                ? "bg-gold text-white border-transparent font-semibold shadow-xs"
+                ? "bg-gold text-white border-transparent font-semibold shadow-sm"
                 : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
             }`}
           >
@@ -375,7 +375,7 @@ export default function DashboardPage() {
             <button
               onClick={() => setViewMode("grid")}
               className={`p-1 rounded transition-colors ${
-                viewMode === "grid" ? "bg-card text-foreground shadow-2xs" : "text-stonegray hover:text-foreground"
+                viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-stonegray hover:text-foreground"
               }`}
               title="Grid View"
               aria-label="Grid view"
@@ -385,7 +385,7 @@ export default function DashboardPage() {
             <button
               onClick={() => setViewMode("table")}
               className={`p-1 rounded transition-colors ${
-                viewMode === "table" ? "bg-card text-foreground shadow-2xs" : "text-stonegray hover:text-foreground"
+                viewMode === "table" ? "bg-card text-foreground shadow-sm" : "text-stonegray hover:text-foreground"
               }`}
               title="Table View"
               aria-label="Table view"
@@ -440,7 +440,7 @@ export default function DashboardPage() {
                 return (
                   <Card
                     key={project.id}
-                    className="flex h-full flex-col border border-border bg-card hover:border-foreground/40 hover:shadow-xs transition-all duration-200 overflow-hidden group"
+                    className="flex h-full flex-col border border-border bg-card hover:border-foreground/40 hover:shadow-sm transition-all duration-200 overflow-hidden group"
                   >
                     {/* Blueprint Preview Bar */}
                     <div className="h-24 relative bg-charcoal text-white flex items-center justify-center overflow-hidden border-b border-border">
@@ -549,7 +549,7 @@ export default function DashboardPage() {
                           <Button
                             size="sm"
                             variant="terracotta"
-                            className="w-full h-8 text-xs font-semibold gap-1.5 shadow-2xs"
+                            className="w-full h-8 text-xs font-semibold gap-1.5 shadow-sm"
                           >
                             <Sparkles className="h-3.5 w-3.5" />
                             <span>Builder →</span>

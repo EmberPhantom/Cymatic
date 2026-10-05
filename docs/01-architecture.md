@@ -6,7 +6,7 @@ The architecture must support:
 - no-code simulation generation
 - AI-assisted scene creation
 - structured validation
-- true stereo streaming
+- on-device true stereo rendering
 - low-end Android compatibility
 - enterprise-ready security foundations
 - future multi-domain expansion
@@ -26,7 +26,7 @@ flowchart TD
     C --> H[Agent Runtime Service]
     C --> I[Analytics / Credits]
     C --> J[Security / Audit]
-    C --> K[Stream Signaling Service]
+    C --> K[Render Session Service]
 
     C --> L[(PostgreSQL)]
     C --> M[(Redis)]
@@ -39,19 +39,18 @@ flowchart TD
     O --> S[OpenAI]
     O --> T[Sarvam]
 
-    C --> U[Unity Render Server]
-    U --> V[True Stereo Stream]
-    V --> W[Android VR Client]
+    C --> U[Scene Package + Assets]
+    U --> W[Android Native Renderer]
 
     W --> X[Head Orientation Input]
     W --> Y[Controller Input]
     W --> Z[Voice Input]
     W --> AA[Optional UVC Hand Tracking]
 
-    X --> U
-    Y --> U
+    X --> W
+    Y --> W
     Z --> C
-    AA --> U
+    AA --> W
 ```
 
 ---
@@ -74,7 +73,7 @@ No-code web application for simulation creation and management.
 - Real-time spec preview with 3D scene preview
 - Manual scene editing with drag-and-drop
 - Version control and spec history
-- One-click publish to Unity Render Server
+- One-click publish to the on-device renderer
 - Usage analytics and credit consumption dashboard
 
 **Tech Stack:**
@@ -97,8 +96,7 @@ Central control plane.
 - simulation spec CRUD and versioning
 - generation job orchestration
 - asset management (upload, processing, CDN)
-- WebRTC stream session management
-- WebRTC signaling server
+- render session management (mobile devices, heartbeats)
 - analytics and credit tracking
 - audit logging and compliance
 
@@ -134,49 +132,33 @@ Central AI access layer with intelligent routing.
 
 ---
 
-### 4. Unity Render Server
-Windows-native rendering/streaming runtime.
+### 4. Android Native Renderer
+On-device 3D walkthrough (Filament, stereo SBS). No server GPU.
 
 **Responsibilities:**
-- load generated scene package (.cymatic format)
-- render stereo cameras (left/right eye)
-- H.264 hardware encoding (NVENC/QuickSync)
-- WebRTC streaming (side-by-side stereo)
-- WebRTC signaling (WebSocket)
-- receive input (head pose, controller, voice, optional hand tracking)
-- execute permitted copilot commands (highlight, navigate, highlight, etc.)
-- emit runtime events (navigation, interaction, copilot)
-- adaptive bitrate streaming (5-30 Mbps)
-- NavMesh baking for navigation
+- fetch scene package (`scene-package/view`) + asset downloads
+- render stereo cameras (left/right eye, IPD from settings)
+- map `cymatic_v1` entities to meshes (GLB-or-primitive fallback)
+- guided tour along navigation paths + free look
+- gaze dwell (2 s), controller, push-to-talk voice + TTS replies
+- render sessions with heartbeat (`/v1/render/*`)
+- thermal monitoring and resolution scaling
 
 **Tech Stack:**
-- Unity 2022.3 LTS
-- Unity WebRTC package 2.3+
-- H.264 hardware encoding (NVENC/QuickSync)
-- WebSocket signaling (port 8080)
-- STUN/TURN for NAT traversal
+- Kotlin + Filament (`filament-android`, `gltfio-android`)
+- SensorFusion head pose, GazeSelector, ControllerManager
+- Retrofit + Gson, EncryptedSharedPreferences
+
+See `docs/05-mobile-render.md` and `docs/27-mobile-render-pivot.md`.
+The legacy Unity render/streaming server is frozen (appendix in `05`).
 
 ---
 
-### 5. Android Client
-Phone-side VR streaming client.
+### 5. Walkthrough Preview (web viewer)
+Lightweight Vite + Three.js SPA for previewing published packages in a
+mobile/desktop browser. Reads `scene-package/view` only.
 
-**Responsibilities:**
-- receive WebRTC stream (side-by-side stereo)
-- display stereo video (Google Cardboard compatible)
-- IMU sensor fusion (accelerometer + gyroscope + magnetometer)
-- Bluetooth controller input (Daydream/Cardboard style)
-- push-to-talk voice capture (16kHz, Opus)
-- optional UVC camera hand tracking (MediaPipe)
-- send compact input packets (head pose, controller, voice, optional hand)
-- thermal monitoring and adaptive quality
-
-**Tech Stack:**
-- Kotlin + Android SDK 24+
-- Google WebRTC (org.webrtc:google-webrtc:1.0.32006)
-- CameraX for UVC camera
-- MediaPipe Hands (optional)
-- ExoPlayer for audio playback
+---
 
 ---
 
@@ -199,7 +181,7 @@ AI agents propose changes; trusted services validate and apply them.
 Hand tracking, UVC camera, advanced modules are optional (env flags).
 
 ### Latency-aware design
-Streaming quality adapts to device/network constraints.
+Render resolution scales to device thermal headroom; budgets enforced per spec.
 
 ### Domain-generic core
 The core platform is reusable for future domains (medical, industrial, education).
@@ -222,7 +204,6 @@ sequenceDiagram
     participant Backend
     participant LLMRouter
     participant Worker
-    participant Unity
     participant Android
 
     User->>Frontend: Enter prompt
@@ -239,21 +220,17 @@ sequenceDiagram
     Worker->>Backend: Scene ready
     Backend->>Frontend: Spec ready + scene package URL
     User->>Frontend: Click "Publish"
-    Backend->>Unity: Signal scene package URL
-    Unity->>MinIO: Download .cymatic package
-    Unity->>Unity: Instantiate scene, build NavMesh
-    User->>Android: Launch app, enter session ID
-    Android->>Backend: Create stream session
-    Backend->>Unity: Signal WebRTC offer
-    Unity->>Android: WebRTC offer (SDP)
-    Android->>Unity: WebRTC answer + ICE candidates
-    Unity->>Android: True stereo H.264 stream
-    Android->>Unity: Head pose + controller + voice input
-    Unity->>Android: Stereo video stream
-    Android->>Backend: Voice transcript (STT)
-    Backend->>LLMRouter: Copilot query
+    User->>Android: Launch app, pick project
+    Android->>Backend: POST /v1/render/sessions (device registry)
+    Backend->>Android: session_id + scene_url
+    Android->>Backend: GET scene-package/view + asset downloads
+    Android->>Android: Build Filament scene, start stereo walkthrough
+    Android->>Backend: heartbeat (PENDING→ACTIVE)
+    Android->>Backend: Voice audio (PTT)
+    Backend->>LLMRouter: STT + copilot query
     LLMRouter->>Backend: Copilot response
-    Backend->>Android: TTS audio + actions
+    Backend->>Android: Transcript + TTS audio
+    Android->>Backend: POST render session end
 ```
 
 ---
@@ -265,17 +242,17 @@ sequenceDiagram
 ┌─────────────────────────────────────────────────────────────┐
 │                    Developer Machine (Windows)              │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   Docker    │  │   Unity     │  │    Android Studio   │ │
-│  │  Compose    │  │  Render     │  │    + Android Phone  │ │
-│  │  (Postgres, │  │  Server     │  │    (OnePlus 6T)     │ │
-│  │  Redis,     │  │  (Windows)  │  │                     │ │
-│  │  MinIO)     │  │             │  │                     │ │
+│  │   Docker    │  │  Android    │  │   Next.js Frontend  │ │
+│  │  Compose    │  │  Studio +   │  │   + Viewer          │ │
+│  │  (Postgres, │  │  Phone      │  │   (Ports 3000/8090) │ │
+│  │  Redis,     │  │  (OnePlus   │  │                     │ │
+│  │  MinIO)     │  │  6T, Filament│ │                     │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 │                                                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   FastAPI   │  │   Worker    │  │    Next.js Frontend   │ │
-│  │   Backend   │  │  (Python)   │  │    (Port 3000)       │ │
-│  │  (Port 8000)│  │  (Port 8002)│  │                      │ │
+│  │   FastAPI   │  │   Worker    │  │    LLM Router       │ │
+│  │   Backend   │  │  (Python)   │  │    (Port 8001)      │ │
+│  │  (Port 8000)│  │  (Port 8002)│  │                     │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -290,8 +267,8 @@ sequenceDiagram
 │  └──────────┘ └──────────┘ └──────────┘ └─────────────────┘  │
 │                                                              │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────┐  │
-│  │ PostgreSQL│ │  Redis   │ │  MinIO   │ │  Unity Render  │  │
-│  │  (Primary)│ │  Cluster │ │  (S3 API)│ │  (GPU Node)    │  │
+│  │ PostgreSQL│ │  Redis   │ │  MinIO   │ │  Viewer (static) │  │
+│  │  (Primary)│ │  Cluster │ │  (S3 API)│ │  (Port 8090)     │  │
 │  └──────────┘ └──────────┘ └──────────┘ └────────────────┘  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -309,7 +286,7 @@ sequenceDiagram
 | **LLM** | Sensitivity routing, no tenant data to free providers |
 | **Storage** | MinIO SSE-S3, presigned URLs (1hr TTL), bucket policies |
 | **Database** | Row-level security, encrypted connections, encrypted at rest |
-| **Streaming** | DTLS-SRTP (WebRTC), TURN over TLS, signed URLs |
+| **Render sessions** | Device registry, per-user session guard, presigned scene/asset URLs (1hr TTL) |
 | **Audit** | Immutable logs (append-only), correlation IDs, 90-day retention |
 
 ---
@@ -321,8 +298,7 @@ sequenceDiagram
 | FastAPI | Stateless, k8s HPA (CPU>70%) | 100 req/s per pod |
 | Worker | Stateless, k8s HPA (queue depth) | 10 concurrent jobs |
 | LLM Router | Stateless, k8s HPA (latency) | 50 req/s per pod |
-| Unity Render | Single GPU (no multi-GPU) | 1 concurrent stream |
-| Unity Build | CI/CD pipeline | 1 build at a time |
+| Android render | On-device Filament | 1 concurrent session/user |
 
 ---
 
@@ -334,7 +310,7 @@ sequenceDiagram
 | **Application** | Structured logs (structlog), OpenTelemetry | Latency p50/p95/p99, error rate, throughput |
 | **Business** | Custom events (PostgreSQL) | Spec generation time, stream start time, session duration |
 | **LLM** | Custom dashboard | Token usage, cost, latency, fallback rate |
-| **Streaming** | Custom WebRTC stats | FPS, bitrate, latency, packet loss, thermal |
+| **On-device render** | Android diagnostics + session analytics | FPS, draw calls, tris, thermal, tour completion |
 
 ---
 
@@ -345,10 +321,10 @@ sequenceDiagram
 | PostgreSQL primary failure | <1s | <30s | Streaming replica + auto-failover (Patroni) |
 | Redis failure | <1s | <10s | Redis Sentinel (3 nodes) |
 | MinIO failure | <1min | <5min | Erasure coding (4+2), cross-region replication |
-| Unity Render GPU failure | N/A | Manual | Spare GPU node, manual DNS switch |
+| Render device failure | N/A | Manual | Spare test phone, re-login + new session |
 | Region outage | <1hr | <4hr | Cross-region backup (daily snapshots) |
 
 ---
 
-*Last updated: 2026-08-18*
-*Version: 1.0*
+*Last updated: 2026-10-02 (mobile-render pivot; Unity path frozen, see docs/27)*
+*Version: 1.1*

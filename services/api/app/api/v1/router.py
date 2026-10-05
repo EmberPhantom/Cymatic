@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     projects,
     specs,
     assets,
+    render,
     streaming,
     analytics,
     credits,
@@ -24,6 +25,7 @@ api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
 api_router.include_router(specs.router, prefix="/projects", tags=["specs"])
 api_router.include_router(assets.router, prefix="/assets", tags=["assets"])
+api_router.include_router(render.router, prefix="/render", tags=["render"])
 api_router.include_router(streaming.router, prefix="/stream", tags=["streaming"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(credits.router, prefix="/credits", tags=["credits"])

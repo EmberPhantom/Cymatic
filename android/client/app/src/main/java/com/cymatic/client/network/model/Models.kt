@@ -13,6 +13,10 @@ data class LoginResponse(
     @SerializedName("token_type") val tokenType: String = "bearer"
 )
 
+data class RefreshRequest(
+    @SerializedName("token") val token: String
+)
+
 data class RegisterRequest(
     @SerializedName("email") val email: String,
     @SerializedName("password") val password: String,
@@ -150,7 +154,9 @@ data class ICECandidate(
 data class InputPacket(
     @SerializedName("input_type") val inputType: String,
     @SerializedName("payload") val payload: Map<String, Any>,
-    @SerializedName("timestamp") val timestamp: Double
+    // Epoch milliseconds - must match Unity's InputManager.InputPacket.timestamp (long, ms),
+    // since input packets are relayed byte-for-byte from Android to the render server.
+    @SerializedName("timestamp") val timestamp: Long
 ) {
     companion object {
         const val TYPE_HEAD_POSE = "head_pose"

@@ -150,7 +150,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         aria-label="Toggle navigation"
         aria-expanded={mobileOpen}
         aria-controls="sidebar-nav"
-        className="md:hidden fixed top-3 left-4 z-40 rounded-md bg-background border border-border p-1.5 shadow-xs"
+        className="md:hidden fixed top-3 left-4 z-40 rounded-md bg-background border border-border p-1.5 shadow-sm"
         onClick={() => setMobileOpen((v) => !v)}
       >
         {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
@@ -171,7 +171,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Brand header — h-14 matches the top bar height so borders align */}
         <div className="h-14 px-4 shrink-0 border-b border-border flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5 group">
-            <div className="h-7 w-7 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-xs transition-transform group-hover:scale-105">
+            <div className="h-7 w-7 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-sm transition-transform group-hover:scale-105">
               CY
             </div>
             <div className="flex flex-col">
@@ -197,7 +197,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             className={cn(
               "flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150",
               !projectId && isActivePath(pathname, routes.dashboard)
-                ? "bg-darkmineral text-white dark:bg-charcoal dark:text-white font-semibold shadow-2xs"
+                ? "bg-darkmineral text-white dark:bg-charcoal dark:text-white font-semibold shadow-sm"
                 : "text-stonegray hover:text-foreground hover:bg-muted/50"
             )}
           >
@@ -290,7 +290,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     className={cn(
                       "flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150",
                       active
-                        ? "bg-darkmineral text-white dark:bg-charcoal dark:text-white font-semibold shadow-2xs"
+                        ? "bg-darkmineral text-white dark:bg-charcoal dark:text-white font-semibold shadow-sm"
                         : "text-stonegray hover:text-foreground hover:bg-muted/50"
                     )}
                   >

@@ -35,8 +35,13 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class TenantScopingMiddleware(BaseHTTPMiddleware):
-    """Middleware to enforce tenant scoping on all requests."""
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Attach a request ID + timing headers to all non-exempt requests.
+
+    NOTE: despite the former name (TenantScopingMiddleware), this middleware
+    does NOT enforce tenant isolation — that is done per-endpoint via
+    organization_id filters (see _require_org_project and friends).
+    """
 
     EXEMPT_PATHS = {
         "/health",
@@ -49,7 +54,9 @@ class TenantScopingMiddleware(BaseHTTPMiddleware):
     }
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in self.EXEMPT_PATHS or request.url.path.startswith("/static"):
+        if request.url.path in self.EXEMPT_PATHS or request.url.path.startswith(
+            "/static"
+        ):
             return await call_next(request)
         request.state.request_id = str(uuid.uuid4())
         start_time = time.time()
@@ -136,7 +143,9 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
             logger.warning("audit_log_unexpected", error=str(e))
 
     def _determine_action(self, method: str, path: str) -> str | None:
-        if method == "POST" and path.startswith("/v1/projects/"):
+        if method == "POST" and (
+            path.startswith("/v1/projects/") or path == "/v1/projects"
+        ):
             if "/generate-spec" in path:
                 return "spec_generated"
             if "/generate-scene" in path:

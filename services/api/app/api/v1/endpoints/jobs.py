@@ -12,7 +12,9 @@ from app.models.user import User
 router = APIRouter()
 
 
-async def _assert_job_ownership(job_payload: dict, current_user: User, db: AsyncSession) -> None:
+async def _assert_job_ownership(
+    job_payload: dict, current_user: User, db: AsyncSession
+) -> None:
     """Fail-closed ownership check: job must belong to caller's org.
 
     Jobs carry project_id, spec_id, or asset_id. Resolve to project org;

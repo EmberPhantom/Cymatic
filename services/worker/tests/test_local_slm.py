@@ -1,4 +1,5 @@
 """Tests for the offline <3B SLM architect branch (phi-3-mini q4 via Ollama)."""
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -14,7 +15,12 @@ from app.agents.architect_agent import (
 
 VALID_SLM_SPEC = {
     "domain": "real_estate",
-    "metadata": {"title": "SLM Test", "description": "SLM Test", "version": 1, "tags": ["real_estate"]},
+    "metadata": {
+        "title": "SLM Test",
+        "description": "SLM Test",
+        "version": 1,
+        "tags": ["real_estate"],
+    },
     "entities": [
         {
             "id": "room_living",
@@ -26,15 +32,35 @@ VALID_SLM_SPEC = {
     ],
     "navigation": {
         "points": [
-            {"id": "nav1", "name": "Living", "position": [2.5, 1.6, 1.6], "connections": ["nav2"]},
-            {"id": "nav2", "name": "Kitchen", "position": [7, 1.6, 1.6], "connections": ["nav1"]},
+            {
+                "id": "nav1",
+                "name": "Living",
+                "position": [2.5, 1.6, 1.6],
+                "connections": ["nav2"],
+            },
+            {
+                "id": "nav2",
+                "name": "Kitchen",
+                "position": [7, 1.6, 1.6],
+                "connections": ["nav1"],
+            },
         ],
         "paths": [{"from": "nav1", "to": "nav2"}],
         "default_start_point": "nav1",
     },
     "lighting": {"preset": "warm", "time_of_day": "evening", "ambient_intensity": 0.8},
-    "copilot_policy": {"enabled": True, "languages": ["en"], "default_language": "en", "personality": "helpful_guide"},
-    "performance_budget": {"target_fps": 60, "max_triangles": 100000, "max_draw_calls": 50, "texture_budget_mb": 100},
+    "copilot_policy": {
+        "enabled": True,
+        "languages": ["en"],
+        "default_language": "en",
+        "personality": "helpful_guide",
+    },
+    "performance_budget": {
+        "target_fps": 60,
+        "max_triangles": 100000,
+        "max_draw_calls": 50,
+        "texture_budget_mb": 100,
+    },
 }
 
 # Hybrid path: the SLM returns ONLY entities; the scaffold is deterministic.
@@ -143,7 +169,18 @@ async def test_create_spec_llm_slm_first_then_cloud(monkeypatch):
             raise OSError("ollama down")
         return VALID_SLM_SPEC
 
-    with patch("app.agents.architect_agent.call_llm_json", new=AsyncMock(side_effect=_fake_llm)):
+    with (
+        patch(
+            "app.agents.architect_agent.call_llm_json",
+            new=AsyncMock(side_effect=_fake_llm),
+        ),
+        patch(
+            # Cloud path is budget-guarded (call_llm_json_with_budget); same fake
+            # so the SLM failure still falls back to exactly one cloud attempt.
+            "app.agents.architect_agent.call_llm_json_with_budget",
+            new=AsyncMock(side_effect=_fake_llm),
+        ),
+    ):
         result = await create_spec_llm(_input())
     assert result.spec is not None
     assert calls["n"] == 2  # SLM attempt + cloud attempt
@@ -153,9 +190,17 @@ async def test_create_spec_llm_slm_first_then_cloud(monkeypatch):
 async def test_create_spec_llm_slm_and_cloud_fail_to_template(monkeypatch):
     """SLM + cloud both down: deterministic template fallback still yields a spec."""
     monkeypatch.setattr("app.agents.architect_agent._local_llm_enabled", lambda: True)
-    with patch(
-        "app.agents.architect_agent.call_llm_json",
-        new=AsyncMock(side_effect=Exception("all LLMs down")),
+    with (
+        patch(
+            "app.agents.architect_agent.call_llm_json",
+            new=AsyncMock(side_effect=Exception("all LLMs down")),
+        ),
+        patch(
+            # Cloud path is budget-guarded; without this the cloud attempt would
+            # hit the (mocked) shared client and succeed, defeating the test.
+            "app.agents.architect_agent.call_llm_json_with_budget",
+            new=AsyncMock(side_effect=Exception("all LLMs down")),
+        ),
     ):
         result = await create_spec_llm(_input())
     assert result.spec.domain == "real_estate"
@@ -167,7 +212,9 @@ async def test_create_spec_llm_flag_off_skips_slm(monkeypatch):
     """Flag off: single cloud attempt, no SLM call."""
     monkeypatch.setattr("app.agents.architect_agent._local_llm_enabled", lambda: False)
     with patch(
-        "app.agents.architect_agent.call_llm_json",
+        # Flag off: the single cloud attempt goes through the budget-guarded
+        # wrapper (plain call_llm_json is the SLM-only path here).
+        "app.agents.architect_agent.call_llm_json_with_budget",
         new=AsyncMock(side_effect=Exception("cloud down")),
     ) as mock_llm:
         result = await create_spec_llm(_input())

@@ -21,7 +21,7 @@ namespace Cymatic
         [SerializeField] private int _minBitrate = 5000000;
         [SerializeField] private int _maxBitrate = 30000000;
         [SerializeField] private bool _useHardwareEncoding = true;
-        
+
         // WebRTC
 #if UNITY_WEBRTC
         private RTCPeerConnection _peerConnection;
@@ -32,7 +32,7 @@ namespace Cymatic
 #endif
         private RenderTexture _leftEyeTexture;
         private RenderTexture _rightEyeTexture;
-        
+
         // Cameras
         private Camera _leftCamera;
         private Camera _rightCamera;
@@ -53,21 +53,21 @@ namespace Cymatic
                 return _blitMaterial;
             }
         }
-        
+
         // P0 FIX: VideoEncoder mock removed -> use no-op stub guarded
         private bool _isStreaming = false;
         private float _frameInterval;
         private double _lastFrameTime;
-        
+
         // Stats
         private int _framesEncoded = 0;
         private float _currentBitrate = 0;
         private int _currentFPS = 0;
-        
+
         public bool IsStreaming => _isStreaming;
         public int CurrentFPS => _currentFPS;
         public float CurrentBitrateMbps => _currentBitrate / 1000000f;
-        
+
         public void Configure(int width, int height, int fps, int minBitrate, int maxBitrate)
         {
             // P0 FIX: 270 width 3840 overflow - clamp combined width
@@ -82,7 +82,7 @@ namespace Cymatic
             _maxBitrate = maxBitrate;
             _frameInterval = 1f / _targetFPS;
         }
-        
+
         public async UniTask<string> CreateAnswer(string offerSdp)
         {
             if (_peerConnection == null)
@@ -113,7 +113,7 @@ namespace Cymatic
             return answerStub.sdp;
 #endif
         }
-        
+
         public async UniTask SetRemoteDescription(string sdp)
         {
             if (_peerConnection == null) return;
@@ -127,7 +127,7 @@ namespace Cymatic
             await _peerConnection.SetRemoteDescription(answer);
 #endif
         }
-        
+
         public async UniTask AddIceCandidate(string candidate, string sdpMid, int sdpMLineIndex)
         {
             if (_peerConnection == null) return;
@@ -146,7 +146,7 @@ namespace Cymatic
             await _peerConnection.AddIceCandidate(iceCandidate);
 #endif
         }
-        
+
         private async UniTask InitializePeerConnection()
         {
             // LAN-first: host candidates suffice; STUN adds DNS/gathering delay.
@@ -174,14 +174,14 @@ namespace Cymatic
             {
                 iceServers = iceServers
             };
-            
+
             // P0 FIX: real com.unity.webrtc 3.0.0-pre.8 requires ref RTCConfiguration
 #if UNITY_WEBRTC
             _peerConnection = new RTCPeerConnection(ref config);
 #else
             _peerConnection = new Unity.WebRTC.RTCPeerConnection(config);
 #endif
-            
+
             _peerConnection.OnIceCandidate = candidate =>
             {
                 if (candidate == null) return;
@@ -195,7 +195,7 @@ namespace Cymatic
                     Debug.LogWarning($"[WebRTC] SendIceCandidate failed: {e.Message}");
                 }
             };
-            
+
             _peerConnection.OnConnectionStateChange = state =>
             {
                 Debug.Log($"[WebRTC] Connection state: {state}");
@@ -203,7 +203,7 @@ namespace Cymatic
                 {
                     _isStreaming = true;
                 }
-                else if (state == RTCPeerConnectionState.Disconnected || 
+                else if (state == RTCPeerConnectionState.Disconnected ||
                          state == RTCPeerConnectionState.Failed ||
                          state == RTCPeerConnectionState.Closed)
                 {
@@ -213,12 +213,12 @@ namespace Cymatic
             };
             await UniTask.CompletedTask;
         }
-        
+
         public async UniTask StartStreaming(Camera leftCam, Camera rightCam)
         {
             _leftCamera = leftCam;
             _rightCamera = rightCam;
-            
+
             _leftEyeTexture = leftCam != null ? leftCam.targetTexture : null;
             if (_leftEyeTexture == null)
             {
@@ -233,7 +233,7 @@ namespace Cymatic
                 _rightEyeTexture.antiAliasing = 1;
                 _rightEyeTexture.Create();
             }
-            
+
 #if UNITY_WEBRTC
             // Real Unity.WebRTC 3.0.0-pre.8 only supports VideoStreamTrack(Texture) ctor
             try
@@ -255,11 +255,11 @@ namespace Cymatic
                 Debug.LogWarning($"[WebRTC] VideoStreamTrack(Texture) failed: {e.Message}, trying parameterless fallback");
                 try { _videoTrack = new VideoStreamTrack(_leftEyeTexture); } catch { Debug.LogWarning("[WebRTC] Fallback VideoStreamTrack also failed"); }
             }
-            
+
             // Add transceiver - real API: AddTransceiver(MediaStreamTrack)
             RTCRtpTransceiver transceiver = null;
             try { transceiver = _peerConnection.AddTransceiver(_videoTrack); } catch (Exception e) { Debug.LogWarning($"[WebRTC] AddTransceiver failed: {e.Message}"); }
-            
+
             // Configure encoding via RTCRtpSender - real API uses RTCRtpSendParameters with lower-case fields
             try
             {
@@ -302,11 +302,11 @@ namespace Cymatic
             }
             catch {}
 #endif
-            
+
             _isStreaming = true;
             _lastFrameTime = 0;
             EncodingLoop().Forget();
-            
+
             Debug.Log("[WebRTC] Streaming started");
             await UniTask.CompletedTask;
         }
@@ -317,31 +317,31 @@ namespace Cymatic
             await UniTask.CompletedTask;
         }
 #endif
-        
+
         public void StopStreaming()
         {
             _isStreaming = false;
-            
+
             if (_videoTrack != null)
             {
                 try { _videoTrack.Dispose(); } catch {}
                 _videoTrack = null;
             }
-            
+
             if (_peerConnection != null)
             {
                 try { _peerConnection.Close(); } catch {}
                 try { _peerConnection.Dispose(); } catch {}
                 _peerConnection = null;
             }
-            
+
             if (_leftEyeTexture != null && _leftCamera != null && _leftEyeTexture != _leftCamera.targetTexture)
             {
                 _leftEyeTexture.Release();
                 Destroy(_leftEyeTexture);
             }
             _leftEyeTexture = null;
-            
+
             if (_rightEyeTexture != null && _rightCamera != null && _rightEyeTexture != _rightCamera.targetTexture)
             {
                 _rightEyeTexture.Release();
@@ -354,10 +354,10 @@ namespace Cymatic
                 Destroy(_blitMaterial);
                 _blitMaterial = null;
             }
-            
+
             Debug.Log("[WebRTC] Streaming stopped");
         }
-        
+
         private async UniTaskVoid EncodingLoop()
         {
             while (_isStreaming)
@@ -373,11 +373,11 @@ namespace Cymatic
                     await UniTask.Delay(delayMs, DelayType.Realtime, PlayerLoopTiming.Update, this.GetCancellationTokenOnDestroy());
                     continue;
                 }
-                
+
                 _lastFrameTime = now;
-                
+
                 RenderSideBySide();
-                
+
                 var combinedTexture = GetSideBySideTexture();
                 if (combinedTexture != null)
                 {
@@ -386,19 +386,19 @@ namespace Cymatic
 #endif
                     RenderTexture.ReleaseTemporary(combinedTexture);
                 }
-                
+
                 _framesEncoded++;
                 // Yield to allow frame pacing; if _targetFPS high, loop will Delay next iter
                 await UniTask.Yield(PlayerLoopTiming.Update, this.GetCancellationTokenOnDestroy());
             }
         }
-        
+
         private void RenderSideBySide()
         {
             if (_leftCamera == null || _rightCamera == null) return;
             if (_leftCamera.targetTexture == null || _rightCamera.targetTexture == null) return;
             if (_leftEyeTexture == null || _rightEyeTexture == null) return;
-            
+
             try
             {
                 if (_leftCamera.targetTexture != _leftEyeTexture)
@@ -408,7 +408,7 @@ namespace Cymatic
             }
             catch (Exception e) { Debug.LogWarning($"[WebRTC] RenderSideBySide Blit failed: {e.Message}"); }
         }
-        
+
         public void SetBitrate(int bitrate)
         {
             _maxBitrate = bitrate;
@@ -473,7 +473,7 @@ namespace Cymatic
             }
             return combined;
         }
-        
+
         public StreamingStats GetStats()
         {
             return new StreamingStats
@@ -490,7 +490,7 @@ namespace Cymatic
             StopStreaming();
         }
     }
-    
+
     [System.Serializable]
     public class StreamingStats
     {

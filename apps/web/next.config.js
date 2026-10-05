@@ -11,9 +11,9 @@ const nextConfig = {
     root: path.join(__dirname, '../..'),
   },
   experimental: {
-    // Tree-shake barrel imports: lucide-react (~300 icons), date-fns (200+ fns), zod.
+    // Tree-shake barrel imports: lucide-react (~300 icons), zod.
     // Turbopack + Webpack both honor this; avoids pulling entire packages when only a few exports are used.
-    optimizePackageImports: ['lucide-react', 'date-fns', 'zod'],
+    optimizePackageImports: ['lucide-react', 'zod'],
   },
   // Webpack-only fallback for lucide-react icon tree-shaking (Turbopack ignores modularizeImports
   // and relies on optimizePackageImports above). Keep for `next build --no-turbopack` compat.
@@ -39,6 +39,10 @@ const nextConfig = {
     })(),
   },
   async headers() {
+    // SINGLE SOURCE OF TRUTH for Permissions-Policy (middleware.ts must NOT
+    // set it — duplicates would conflict). The voice client needs mic+camera
+    // on self-origin; geolocation stays denied.
+    const permissionsPolicy = "camera=(self), microphone=(self), geolocation=()";
     return [
       {
         source: "/(.*)",
@@ -46,7 +50,7 @@ const nextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Permissions-Policy", value: permissionsPolicy },
         ],
       },
     ];

@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { api } from "@/lib/api"
+import { getErrorMessage } from "@/lib/errors"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -71,7 +72,7 @@ export default function RegisterPage() {
       router.refresh()
       router.replace("/dashboard")
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Registration failed. Please check your details and try again.")
+      setError(getErrorMessage(err, "Registration failed. Please check your details and try again."))
     } finally {
       setLoading(false)
     }
@@ -188,7 +189,7 @@ export default function RegisterPage() {
                 onClick={() => setSelectedInterest("real_estate")}
                 className={`px-2.5 py-2 rounded-lg border text-xs font-medium flex flex-col items-center gap-1 transition-all ${
                   selectedInterest === "real_estate"
-                    ? "border-terracotta bg-terracotta/10 text-terracotta font-semibold shadow-xs"
+                    ? "border-terracotta bg-terracotta/10 text-terracotta font-semibold shadow-sm"
                     : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
                 }`}
               >
@@ -201,7 +202,7 @@ export default function RegisterPage() {
                 onClick={() => setSelectedInterest("heritage")}
                 className={`px-2.5 py-2 rounded-lg border text-xs font-medium flex flex-col items-center gap-1 transition-all ${
                   selectedInterest === "heritage"
-                    ? "border-sage bg-sage/10 text-sage font-semibold shadow-xs"
+                    ? "border-sage bg-sage/10 text-sage font-semibold shadow-sm"
                     : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
                 }`}
               >
@@ -214,7 +215,7 @@ export default function RegisterPage() {
                 onClick={() => setSelectedInterest("both")}
                 className={`px-2.5 py-2 rounded-lg border text-xs font-medium flex flex-col items-center gap-1 transition-all ${
                   selectedInterest === "both"
-                    ? "border-charcoal bg-charcoal/10 text-foreground dark:border-ivory dark:bg-ivory/10 font-semibold shadow-xs"
+                    ? "border-charcoal bg-charcoal/10 text-foreground dark:border-ivory dark:bg-ivory/10 font-semibold shadow-sm"
                     : "border-border text-stonegray hover:text-foreground hover:bg-muted/40"
                 }`}
               >
@@ -224,7 +225,7 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          <Button type="submit" variant="terracotta" className="w-full h-10 font-semibold gap-2 shadow-xs mt-2" disabled={loading}>
+          <Button type="submit" variant="terracotta" className="w-full h-10 font-semibold gap-2 shadow-sm mt-2" disabled={loading}>
             {loading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />

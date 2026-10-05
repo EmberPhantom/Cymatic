@@ -1,4 +1,5 @@
 """Tests for HIGH fixes - very thorough"""
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,13 +22,14 @@ settings.ADMIN_API_KEY = "test-admin-key"
 
 @pytest_asyncio.fixture
 async def client():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         yield ac
 
 
 # --- Config fixes ---
 def test_config_env_parents():
-
     from app.core.config import _ENV_FILE
 
     # Should point to project root, not services
@@ -67,15 +69,55 @@ def test_config_validators():
 # --- Cache fixes ---
 def test_cache_make_key_includes_sensitivity_provider_org():
     cache = LLMCache(redis_url="redis://localhost:6379/0")
-    k1 = cache._make_key("chat", "model-a", "hello", None, sensitivity="public", provider="groq", organization_id="org1")
-    k2 = cache._make_key("chat", "model-a", "hello", None, sensitivity="regulated", provider="groq", organization_id="org1")
-    k3 = cache._make_key("chat", "model-a", "hello", None, sensitivity="public", provider="openai", organization_id="org1")
-    k4 = cache._make_key("chat", "model-a", "hello", None, sensitivity="public", provider="groq", organization_id="org2")
+    k1 = cache._make_key(
+        "chat",
+        "model-a",
+        "hello",
+        None,
+        sensitivity="public",
+        provider="groq",
+        organization_id="org1",
+    )
+    k2 = cache._make_key(
+        "chat",
+        "model-a",
+        "hello",
+        None,
+        sensitivity="regulated",
+        provider="groq",
+        organization_id="org1",
+    )
+    k3 = cache._make_key(
+        "chat",
+        "model-a",
+        "hello",
+        None,
+        sensitivity="public",
+        provider="openai",
+        organization_id="org1",
+    )
+    k4 = cache._make_key(
+        "chat",
+        "model-a",
+        "hello",
+        None,
+        sensitivity="public",
+        provider="groq",
+        organization_id="org2",
+    )
     assert k1 != k2
     assert k1 != k3
     assert k1 != k4
     # Same params should give same key
-    k1b = cache._make_key("chat", "model-a", "hello", None, sensitivity="public", provider="groq", organization_id="org1")
+    k1b = cache._make_key(
+        "chat",
+        "model-a",
+        "hello",
+        None,
+        sensitivity="public",
+        provider="groq",
+        organization_id="org1",
+    )
     assert k1 == k1b
 
 
@@ -89,13 +131,20 @@ def test_cache_make_key_prefix():
 @pytest.mark.asyncio
 async def test_cache_local_ttl():
     cache = LLMCache(redis_url="redis://localhost:6379/0")
-    # Use small TTL
-    await cache.set("task1", "model1", "prompt1", {"data": 1}, ttl=timedelta(milliseconds=10))
+    # Use small TTL (tenant scope required for cache read/write)
+    await cache.set(
+        "task1",
+        "model1",
+        "prompt1",
+        {"data": 1},
+        ttl=timedelta(milliseconds=10),
+        organization_id="org-ttl",
+    )
     # Should be in local cache
     assert len(cache._local_cache) == 1
     await asyncio.sleep(0.02)
     # After expiry, get should return None and evict
-    val = await cache.get("task1", "model1", "prompt1")
+    val = await cache.get("task1", "model1", "prompt1", organization_id="org-ttl")
     assert val is None
 
 
@@ -104,9 +153,11 @@ async def test_cache_invalidate_uses_scan_not_keys():
     cache = LLMCache(redis_url="redis://localhost:6379/0")
     mock_client = AsyncMock()
     # Mock scan to return keys
-    mock_client.scan = AsyncMock(side_effect=[
-        (0, [b"llm_cache:task1:model1:hash1", b"llm_cache:task1:model2:hash2"]),
-    ])
+    mock_client.scan = AsyncMock(
+        side_effect=[
+            (0, [b"llm_cache:task1:model1:hash1", b"llm_cache:task1:model2:hash2"]),
+        ]
+    )
     mock_client.delete = AsyncMock(return_value=2)
     mock_client.get = AsyncMock(return_value=None)
     cache._client = mock_client  # type: ignore
@@ -123,9 +174,11 @@ async def test_cache_invalidate_uses_scan_not_keys():
 async def test_cache_get_stats_uses_scan():
     cache = LLMCache(redis_url="redis://localhost:6379/0")
     mock_client = AsyncMock()
-    mock_client.scan = AsyncMock(side_effect=[
-        (0, [b"llm_cache:a:b:c", b"llm_cache:d:e:f"]),
-    ])
+    mock_client.scan = AsyncMock(
+        side_effect=[
+            (0, [b"llm_cache:a:b:c", b"llm_cache:d:e:f"]),
+        ]
+    )
     cache._client = mock_client  # type: ignore
     cache.connect = AsyncMock()  # type: ignore
     stats = await cache.get_stats()
@@ -293,7 +346,11 @@ def test_messages_to_prompt_no_keyerror():
 
     c = LiteLLMClient()
     # Missing role/content should not KeyError
-    msgs = [{"role": "user", "content": "hi"}, {"content": "missing role"}, {"role": "assistant"}]
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"content": "missing role"},
+        {"role": "assistant"},
+    ]
     prompt = c._messages_to_prompt(msgs)  # type: ignore
     assert "user: hi" in prompt
     assert "assistant:" in prompt
@@ -302,10 +359,21 @@ def test_messages_to_prompt_no_keyerror():
 def test_to_litellm_model_dedup():
     from app.providers.litellm_client import LiteLLMClient
 
-    assert LiteLLMClient._to_litellm_model(ProviderName.GROQ, "groq/openai/gpt-oss-20b") == "groq/openai/gpt-oss-20b"
-    assert LiteLLMClient._to_litellm_model(ProviderName.GROQ, "openai/gpt-oss-20b") == "groq/openai/gpt-oss-20b"
-    assert LiteLLMClient._to_litellm_model("openai", "gpt-4o-mini") == "openai/gpt-4o-mini"
-    assert LiteLLMClient._to_litellm_model("openai", "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert (
+        LiteLLMClient._to_litellm_model(ProviderName.GROQ, "groq/openai/gpt-oss-20b")
+        == "groq/openai/gpt-oss-20b"
+    )
+    assert (
+        LiteLLMClient._to_litellm_model(ProviderName.GROQ, "openai/gpt-oss-20b")
+        == "groq/openai/gpt-oss-20b"
+    )
+    assert (
+        LiteLLMClient._to_litellm_model("openai", "gpt-4o-mini") == "openai/gpt-4o-mini"
+    )
+    assert (
+        LiteLLMClient._to_litellm_model("openai", "openai/gpt-4o-mini")
+        == "openai/gpt-4o-mini"
+    )
 
 
 def test_prompt_injection_sanitization():
@@ -354,8 +422,10 @@ def test_tts_size_cap():
 
     c = LiteLLMClient()
     long_text = "a" * 6000
-    req = TTSRequest(text=long_text)
     try:
+        # Phase C schema bound: over-limit text raises at construction (422);
+        # pre-Phase C it raised inside tts(). Both are ValueError-shaped.
+        req = TTSRequest(text=long_text)
         asyncio.run(c.tts(req))
         assert False
     except ValueError as e:
@@ -393,20 +463,24 @@ async def test_concurrency_semaphore_exists():
 def test_verify_admin_uses_compare_digest():
     import inspect
 
-    from app.main import verify_admin_key, verify_api_key
+    from app.main import verify_admin_key, verify_data_plane_key
 
     assert "compare_digest" in inspect.getsource(verify_admin_key)
-    assert "compare_digest" in inspect.getsource(verify_api_key)
+    assert "compare_digest" in inspect.getsource(verify_data_plane_key)
 
 
 @pytest.mark.asyncio
 async def test_llm_routes_require_auth(client):
     # No auth should be 401 or 503 (if key not configured, but we set it)
-    resp = await client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]})
+    resp = await client.post(
+        "/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}
+    )
     assert resp.status_code in (401, 503)
     resp2 = await client.post("/v1/embeddings", json={"input": ["hello"]})
     assert resp2.status_code in (401, 503)
-    resp3 = await client.post("/v1/audio/transcriptions", json={"audio_data": "dGVzdA=="})
+    resp3 = await client.post(
+        "/v1/audio/transcriptions", json={"audio_data": "dGVzdA=="}
+    )
     assert resp3.status_code in (401, 503)
     resp4 = await client.post("/v1/audio/speech", json={"text": "hello"})
     assert resp4.status_code in (401, 503)
@@ -416,13 +490,22 @@ async def test_llm_routes_require_auth(client):
 async def test_llm_routes_with_auth_but_mocked_provider(client):
     # With correct auth, should not be 401, but will be 502 or 400 due to missing provider mock
     headers = {"X-Api-Key": "test-admin-key"}
-    with patch("app.providers.litellm_client.litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+    with patch(
+        "app.providers.litellm_client.litellm.acompletion", new_callable=AsyncMock
+    ) as mock_acompletion:
         mock_resp = MagicMock()
-        mock_resp.choices = [MagicMock(model_dump=lambda: {"message": {"content": "hi"}})]
-        mock_resp.usage = MagicMock(prompt_tokens=10, completion_tokens=10, total_tokens=20)
+        mock_resp.choices = [
+            MagicMock(model_dump=lambda: {"message": {"content": "hi"}})
+        ]
+        mock_resp.usage = MagicMock(
+            prompt_tokens=10, completion_tokens=10, total_tokens=20
+        )
         mock_acompletion.return_value = mock_resp
         # Need to mock usage_tracker check_quota to allow and rate limit to not block
-        with patch("app.providers.litellm_client.LiteLLMClient._estimate_chat_tokens", return_value=100):
+        with patch(
+            "app.providers.litellm_client.LiteLLMClient._estimate_chat_tokens",
+            return_value=100,
+        ):
             with patch.object(routing_engine, "route") as mock_route:
                 mock_route.return_value = MagicMock(
                     provider=ProviderName.GROQ,
@@ -430,7 +513,9 @@ async def test_llm_routes_with_auth_but_mocked_provider(client):
                     model_profile=MagicMock(),
                     fallback=None,
                 )
-                with patch("app.core.rate_limit.is_rate_limited", new_callable=AsyncMock) as mock_rl:
+                with patch(
+                    "app.core.rate_limit.is_rate_limited", new_callable=AsyncMock
+                ) as mock_rl:
                     mock_rl.return_value = (False, 0)
                     resp = await client.post(
                         "/v1/chat/completions",
@@ -469,21 +554,23 @@ def test_rate_limit_key_per_org_not_ip():
 
 
 def test_api_key_authorization_bearer():
-    from app.main import verify_api_key
+    from app.main import _extract_token, verify_data_plane_key
 
-    # Test that Bearer header works via inspect
+    # Test that Bearer header works via inspect (parsing lives in _extract_token)
     import inspect
 
-    src = inspect.getsource(verify_api_key)
+    src = inspect.getsource(verify_data_plane_key) + inspect.getsource(
+        _extract_token
+    )
     assert "Bearer" in src or "bearer" in src.lower()
 
 
 @pytest.mark.asyncio
 async def test_admin_routes_compare_digest_timing():
-    # Ensure timing-safe compare
-    import app.main as main_module
+    # Ensure timing-safe compare (single source: shared auth factory)
+    import cymatic_shared.auth as shared_auth
 
-    assert "compare_digest" in open(main_module.__file__).read()
+    assert "compare_digest" in open(shared_auth.__file__.replace(".pyc", ".py")).read()
 
 
 def test_env_parents_fix():

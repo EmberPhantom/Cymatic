@@ -106,7 +106,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/" className="flex items-center gap-2.5 group">
-              <div className="h-6 w-6 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-xs transition-transform group-hover:scale-105">
+              <div className="h-6 w-6 rounded-md bg-charcoal dark:bg-ivory text-white dark:text-charcoal flex items-center justify-center font-bold text-xs shadow-sm transition-transform group-hover:scale-105">
                 CY
               </div>
               <div className="flex items-center gap-2">
@@ -189,7 +189,7 @@ export default function Home() {
 
               <div className="pt-2 flex flex-wrap items-center gap-3">
                 <Link href={isAuthenticated ? "/dashboard" : "/register"}>
-                  <Button variant="terracotta" size="lg" className="h-9 px-5 text-xs font-semibold gap-2 shadow-xs">
+                  <Button variant="terracotta" size="lg" className="h-9 px-5 text-xs font-semibold gap-2 shadow-sm">
                     <span>Start Building →</span>
                   </Button>
                 </Link>
@@ -217,7 +217,7 @@ export default function Home() {
                 }}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
                   activeDomain === "heritage"
-                    ? "bg-card text-foreground shadow-xs border border-border/80 font-semibold"
+                    ? "bg-card text-foreground shadow-sm border border-border/80 font-semibold"
                     : "text-stonegray hover:text-foreground"
                 }`}
               >
@@ -237,7 +237,7 @@ export default function Home() {
                 }}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
                   activeDomain === "real_estate"
-                    ? "bg-card text-foreground shadow-xs border border-border/80 font-semibold"
+                    ? "bg-card text-foreground shadow-sm border border-border/80 font-semibold"
                     : "text-stonegray hover:text-foreground"
                 }`}
               >
@@ -275,7 +275,7 @@ export default function Home() {
             {/* Right 4 Cols: Live Node & Telemetry Inspector */}
             <div className="lg:col-span-4 flex flex-col gap-4">
               {/* Active Node Inspector Card */}
-              <div className="p-4 rounded-xl border border-border bg-card shadow-2xs space-y-3">
+              <div className="p-4 rounded-xl border border-border bg-card shadow-sm space-y-3">
                 <div className="flex items-center justify-between border-b border-border pb-2.5">
                   <div className="flex items-center gap-2">
                     <Layers className="h-4 w-4 text-terracotta" />
@@ -315,7 +315,7 @@ export default function Home() {
               </div>
 
               {/* Hardware Performance Constraints Card */}
-              <div className="p-4 rounded-xl border border-border bg-card shadow-2xs space-y-3">
+              <div className="p-4 rounded-xl border border-border bg-card shadow-sm space-y-3">
                 <div className="flex items-center justify-between border-b border-border pb-2.5">
                   <div className="flex items-center gap-2">
                     <Cpu className="h-4 w-4 text-sage" />
@@ -382,7 +382,7 @@ export default function Home() {
             </div>
 
             {/* Interactive Pipeline Stage Tabs */}
-            <div className="flex items-center bg-card p-1 rounded-xl border border-border shadow-2xs overflow-x-auto">
+            <div className="flex items-center bg-card p-1 rounded-xl border border-border shadow-sm overflow-x-auto">
               <button
                 type="button"
                 onClick={() => setActivePipelineTab("prompt")}
@@ -438,7 +438,7 @@ export default function Home() {
           </div>
 
           {/* Interactive Tab Body */}
-          <div className="rounded-xl border border-border bg-card p-6 shadow-2xs min-h-[280px]">
+          <div className="rounded-xl border border-border bg-card p-6 shadow-sm min-h-[280px]">
             {activePipelineTab === "prompt" && (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -617,7 +617,7 @@ export default function Home() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs space-y-2.5 flex flex-col justify-between">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm space-y-2.5 flex flex-col justify-between">
               <div className="space-y-2">
                 <div className="h-8 w-8 rounded-lg bg-terracotta/10 text-terracotta flex items-center justify-center border border-terracotta/20">
                   <Sparkles className="h-4 w-4" />
@@ -632,7 +632,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs space-y-2.5 flex flex-col justify-between">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm space-y-2.5 flex flex-col justify-between">
               <div className="space-y-2">
                 <div className="h-8 w-8 rounded-lg bg-sage/10 text-sage flex items-center justify-center border border-sage/20">
                   <Cpu className="h-4 w-4" />
@@ -647,7 +647,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs space-y-2.5 flex flex-col justify-between">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm space-y-2.5 flex flex-col justify-between">
               <div className="space-y-2">
                 <div className="h-8 w-8 rounded-lg bg-gold/10 text-gold flex items-center justify-center border border-gold/20">
                   <Glasses className="h-4 w-4" />
@@ -662,7 +662,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs space-y-2.5 flex flex-col justify-between">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm space-y-2.5 flex flex-col justify-between">
               <div className="space-y-2">
                 <div className="h-8 w-8 rounded-lg bg-darkmineral/10 text-foreground dark:bg-ivory/10 flex items-center justify-center border border-border">
                   <ShieldCheck className="h-4 w-4 text-terracotta" />
@@ -682,7 +682,7 @@ export default function Home() {
         {/* 4-METRIC STRIP */}
         <section id="telemetry" className="py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto border-t border-border">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm">
               <div className="flex items-baseline justify-between">
                 <span className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground font-mono">60 FPS</span>
                 <span className="text-[10px] font-mono text-sage font-semibold">STEREO</span>
@@ -691,7 +691,7 @@ export default function Home() {
               <div className="text-[11px] text-stonegray mt-0.5">Thermal-safe mobile refresh rate</div>
             </div>
 
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm">
               <div className="flex items-baseline justify-between">
                 <span className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground font-mono">&lt;50ms</span>
                 <span className="text-[10px] font-mono text-terracotta font-semibold">LATENCY</span>
@@ -700,7 +700,7 @@ export default function Home() {
               <div className="text-[11px] text-stonegray mt-0.5">Direct motion-to-photon pipeline</div>
             </div>
 
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm">
               <div className="flex items-baseline justify-between">
                 <span className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground font-mono">80K</span>
                 <span className="text-[10px] font-mono text-gold font-semibold">BUDGET</span>
@@ -709,7 +709,7 @@ export default function Home() {
               <div className="text-[11px] text-stonegray mt-0.5">Enforced geometric limit</div>
             </div>
 
-            <div className="p-4 rounded-xl border border-border bg-card shadow-2xs">
+            <div className="p-4 rounded-xl border border-border bg-card shadow-sm">
               <div className="flex items-baseline justify-between">
                 <span className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground font-mono">7</span>
                 <span className="text-[10px] font-mono text-stonegray font-semibold">PIPELINE</span>

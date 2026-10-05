@@ -23,7 +23,7 @@ class CircuitBreaker(BaseModel):
     """Circuit breaker for provider fault tolerance with asyncio primitives."""
 
     model_config = ConfigDict(validate_assignment=True)
-    provider: ProviderName
+    provider: ProviderName | str
     state: CircuitState = CircuitState.CLOSED
     failure_count: int = 0
     success_count: int = 0
@@ -35,10 +35,70 @@ class CircuitBreaker(BaseModel):
     success_threshold: int = 2
     timeout: float = 30.0  # seconds before trying half-open
 
-    # Asyncio safety – single-flight half-open trial via semaphore
-    _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
-    _half_open_sem: asyncio.Semaphore = PrivateAttr(default_factory=lambda: asyncio.Semaphore(1))
+    # Asyncio safety – single-flight half-open trial via semaphore.
+    # Lazily created per running loop (mirrors cache.py/usage.py pattern):
+    # primitives bound at import/model time break under pytest per-test
+    # loops, so they are (re)created when the running loop changes.
+    _lock: asyncio.Lock | None = PrivateAttr(default=None)
+    _lock_loop: asyncio.AbstractEventLoop | None = PrivateAttr(default=None)
+    _half_open_sem: asyncio.Semaphore | None = PrivateAttr(default=None)
+    _sem_loop: asyncio.AbstractEventLoop | None = PrivateAttr(default=None)
     _half_open_in_progress: bool = PrivateAttr(default=False)
+
+    def _get_lock(self) -> asyncio.Lock:
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+            self._lock_loop = running
+        elif (
+            running is not None
+            and self._lock_loop is not None
+            and self._lock_loop is not running
+        ):
+            self._lock = asyncio.Lock()
+            self._lock_loop = running
+        assert self._lock is not None
+        return self._lock
+
+    def _get_sem(self) -> asyncio.Semaphore:
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if self._half_open_sem is None:
+            self._half_open_sem = asyncio.Semaphore(1)
+            self._sem_loop = running
+        elif (
+            running is not None
+            and self._sem_loop is not None
+            and self._sem_loop is not running
+        ):
+            self._half_open_sem = asyncio.Semaphore(1)
+            self._sem_loop = running
+        assert self._half_open_sem is not None
+        return self._half_open_sem
+
+    def _sem_locked(self) -> bool:
+        sem = self._half_open_sem
+        if sem is None:
+            return False
+        try:
+            return sem.locked()
+        except Exception:
+            return False
+
+    def _sem_release(self) -> None:
+        sem = self._half_open_sem
+        if sem is None:
+            return
+        try:
+            if sem.locked():
+                sem.release()
+        except ValueError:
+            pass
 
     def record_success(self) -> None:
         """Sync record successful request (kept for backward compat / tests).
@@ -50,16 +110,15 @@ class CircuitBreaker(BaseModel):
         self.success_count += 1
         self.last_success_time = datetime.now(timezone.utc)
 
-        if self.state == CircuitState.HALF_OPEN and self.success_count >= self.success_threshold:
+        if (
+            self.state == CircuitState.HALF_OPEN
+            and self.success_count >= self.success_threshold
+        ):
             self.state = CircuitState.CLOSED
             self.success_count = 0
             self._half_open_in_progress = False
             # Release semaphore if held
-            if self._half_open_sem.locked():
-                try:
-                    self._half_open_sem.release()
-                except ValueError:
-                    pass
+            self._sem_release()
             logger.info("circuit_breaker_closed", provider=self.provider)
 
     def record_failure(self) -> None:
@@ -68,19 +127,22 @@ class CircuitBreaker(BaseModel):
         self.success_count = 0
         self.last_failure_time = datetime.now(timezone.utc)
 
-        if self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
+        if (
+            self.state == CircuitState.CLOSED
+            and self.failure_count >= self.failure_threshold
+        ):
             self.state = CircuitState.OPEN
-            logger.warning("circuit_breaker_opened", provider=self.provider, failures=self.failure_count)
+            logger.warning(
+                "circuit_breaker_opened",
+                provider=self.provider,
+                failures=self.failure_count,
+            )
 
         elif self.state == CircuitState.HALF_OPEN:
             self.state = CircuitState.OPEN
             self.success_count = 0
             self._half_open_in_progress = False
-            if self._half_open_sem.locked():
-                try:
-                    self._half_open_sem.release()
-                except ValueError:
-                    pass
+            self._sem_release()
             logger.warning("circuit_breaker_reopened", provider=self.provider)
 
     def can_execute(self) -> bool:
@@ -90,14 +152,16 @@ class CircuitBreaker(BaseModel):
 
         if self.state == CircuitState.OPEN:
             if self.last_failure_time:
-                elapsed = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
+                elapsed = (
+                    datetime.now(timezone.utc) - self.last_failure_time
+                ).total_seconds()
                 if elapsed >= self.timeout:
                     self.state = CircuitState.HALF_OPEN
                     self.success_count = 0
                     # Single trial guard: if already in progress, deny thundering herd
                     if self._half_open_in_progress:
                         return False
-                    if self._half_open_sem.locked():
+                    if self._sem_locked():
                         return False
                     self._half_open_in_progress = True
                     # sync can't await acquire, so treat as acquired via flag
@@ -106,7 +170,7 @@ class CircuitBreaker(BaseModel):
             return False
 
         if self.state == CircuitState.HALF_OPEN:
-            if self._half_open_in_progress or self._half_open_sem.locked():
+            if self._half_open_in_progress or self._sem_locked():
                 return False
             return True
 
@@ -118,67 +182,72 @@ class CircuitBreaker(BaseModel):
     # --- Async variants with proper locking and single-trial semaphore ---
 
     async def async_record_success(self) -> None:
-        async with self._lock:
+        async with self._get_lock():
             self.failure_count = 0
             self.success_count += 1
             self.last_success_time = datetime.now(timezone.utc)
 
-            if self.state == CircuitState.HALF_OPEN and self.success_count >= self.success_threshold:
+            if (
+                self.state == CircuitState.HALF_OPEN
+                and self.success_count >= self.success_threshold
+            ):
                 self.state = CircuitState.CLOSED
                 self.success_count = 0
                 self._half_open_in_progress = False
-                if self._half_open_sem.locked():
-                    try:
-                        self._half_open_sem.release()
-                    except ValueError:
-                        pass
+                self._sem_release()
                 logger.info("circuit_breaker_closed", provider=self.provider)
 
             # Ensure semaphore released after trial
-            if self.state == CircuitState.CLOSED and self._half_open_sem.locked():
+            if self.state == CircuitState.CLOSED and self._sem_locked():
                 # Might have been held from half-open trial
                 try:
                     # Only release if we previously acquired
                     if self._half_open_in_progress:
-                        self._half_open_sem.release()
+                        sem = self._get_sem()
+                        sem.release()
                         self._half_open_in_progress = False
                 except ValueError:
                     pass
 
     async def async_record_failure(self) -> None:
-        async with self._lock:
+        async with self._get_lock():
             self.failure_count += 1
             self.success_count = 0
             self.last_failure_time = datetime.now(timezone.utc)
 
-            if self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
+            if (
+                self.state == CircuitState.CLOSED
+                and self.failure_count >= self.failure_threshold
+            ):
                 self.state = CircuitState.OPEN
-                logger.warning("circuit_breaker_opened", provider=self.provider, failures=self.failure_count)
+                logger.warning(
+                    "circuit_breaker_opened",
+                    provider=self.provider,
+                    failures=self.failure_count,
+                )
             elif self.state == CircuitState.HALF_OPEN:
                 self.state = CircuitState.OPEN
                 self.success_count = 0
                 self._half_open_in_progress = False
-                if self._half_open_sem.locked():
-                    try:
-                        self._half_open_sem.release()
-                    except ValueError:
-                        pass
+                self._sem_release()
                 logger.warning("circuit_breaker_reopened", provider=self.provider)
 
     async def async_can_execute(self) -> bool:
-        async with self._lock:
+        async with self._get_lock():
             if self.state == CircuitState.CLOSED:
                 return True
 
             if self.state == CircuitState.OPEN:
                 if self.last_failure_time:
-                    elapsed = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
+                    elapsed = (
+                        datetime.now(timezone.utc) - self.last_failure_time
+                    ).total_seconds()
                     if elapsed >= self.timeout:
                         # Try to acquire single-flight semaphore for half-open trial
-                        if self._half_open_sem.locked() or self._half_open_in_progress:
+                        if self._sem_locked() or self._half_open_in_progress:
                             return False
                         # Acquire semaphore for this trial
-                        await self._half_open_sem.acquire()
+                        await self._get_sem().acquire()
                         self._half_open_in_progress = True
                         self.state = CircuitState.HALF_OPEN
                         self.success_count = 0
@@ -188,27 +257,46 @@ class CircuitBreaker(BaseModel):
 
             if self.state == CircuitState.HALF_OPEN:
                 # Only one trial at a time
-                if self._half_open_sem.locked() and self._half_open_in_progress:
+                if self._sem_locked() and self._half_open_in_progress:
                     # Already a trial in progress – deny herd
                     return False
-                if self._half_open_sem.locked():
+                if self._sem_locked():
                     return False
                 # Acquire for new trial (should not happen normally, as we acquire on transition)
-                await self._half_open_sem.acquire()
+                await self._get_sem().acquire()
                 self._half_open_in_progress = True
                 return True
 
             return False
 
     async def async_get_state(self) -> CircuitState:
-        async with self._lock:
+        async with self._get_lock():
             return self.state
 
 
 # Global circuit breaker instances
 _circuit_breakers: dict[ProviderName | str, CircuitBreaker] = {}
-# Use asyncio lock for async creation path; sync path uses GIL
-_async_lock = asyncio.Lock()
+# Loop-safe creation lock: asyncio primitives bind to the creating loop, so
+# recreate when the running loop changes (mirrors cache.py/usage.py).
+_async_lock: asyncio.Lock | None = None
+_async_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_async_lock() -> asyncio.Lock:
+    global _async_lock, _async_lock_loop
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if _async_lock is None or (
+        running is not None
+        and _async_lock_loop is not None
+        and _async_lock_loop is not running
+    ):
+        _async_lock = asyncio.Lock()
+        _async_lock_loop = running
+    assert _async_lock is not None
+    return _async_lock
 
 
 def _normalize_provider(provider: ProviderName | str) -> ProviderName | str:
@@ -221,22 +309,24 @@ def _normalize_provider(provider: ProviderName | str) -> ProviderName | str:
 
 
 def get_circuit_breaker(provider: ProviderName | str) -> CircuitBreaker:
-    """Get or create circuit breaker for provider (sync)."""
+    """Get or create circuit breaker for provider (sync).
+
+    Unknown provider strings get their own neutral bucket keyed by the raw
+    string (no GROQ mislabel): the breaker stores the original label.
+    """
     normalized = _normalize_provider(provider)
-    provider_name = normalized if isinstance(normalized, ProviderName) else ProviderName.GROQ
     # Sync creation – dict access is atomic under GIL, no threading.Lock needed
     if normalized not in _circuit_breakers:
-        _circuit_breakers[normalized] = CircuitBreaker(provider=provider_name)
+        _circuit_breakers[normalized] = CircuitBreaker(provider=normalized)
     return _circuit_breakers[normalized]
 
 
 async def get_circuit_breaker_async(provider: ProviderName | str) -> CircuitBreaker:
-    """Async version with lock."""
+    """Async version with loop-safe lock."""
     normalized = _normalize_provider(provider)
-    provider_name = normalized if isinstance(normalized, ProviderName) else ProviderName.GROQ
-    async with _async_lock:
+    async with _get_async_lock():
         if normalized not in _circuit_breakers:
-            _circuit_breakers[normalized] = CircuitBreaker(provider=provider_name)
+            _circuit_breakers[normalized] = CircuitBreaker(provider=normalized)
         return _circuit_breakers[normalized]
 
 
@@ -280,7 +370,9 @@ def get_circuit_breaker_status(provider: ProviderName | str) -> dict[str, Any]:
         "state": cb.state.value,
         "failure_count": cb.failure_count,
         "success_count": cb.success_count,
-        "last_failure": cb.last_failure_time.isoformat() if cb.last_failure_time else None,
+        "last_failure": cb.last_failure_time.isoformat()
+        if cb.last_failure_time
+        else None,
     }
 
 

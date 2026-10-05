@@ -18,7 +18,7 @@ namespace Cymatic
         [SerializeField] private int _targetFPS = 60;
         [SerializeField] private bool _adaptiveQuality = true;
         [SerializeField] private float _updateInterval = 1f;
-        
+
         [Header("Quality Levels")]
         [SerializeField] private QualityPreset[] _qualityPresets = new QualityPreset[]
         {
@@ -28,18 +28,18 @@ namespace Cymatic
             new QualityPreset { name = "Low", renderScale = 0.75f, msaa = 0, shadowQuality = ShadowQuality.Disable, pixelLightCount = 1, textureQuality = 2 },
             new QualityPreset { name = "Minimum", renderScale = 0.5f, msaa = 0, shadowQuality = ShadowQuality.Disable, pixelLightCount = 0, textureQuality = 2 }
         };
-        
+
         [Header("Thermal")]
         [SerializeField] private bool _monitorThermal = true;
         [SerializeField] private float _thermalThrottleThreshold = 0.8f; // 80%
-        
+
         // State
         private int _currentQualityIndex = 2; // Medium
         private bool _isMonitoring = false;
         private float _lastUpdateTime = 0f;
         private float _lastQualityChangeTime = -999f;
         private const float QualityChangeCooldown = 5f;
-        
+
         // Metrics
         private float _currentFPS = 0f;
         private float _avgFrameTime = 0f;
@@ -49,78 +49,78 @@ namespace Cymatic
         private int _triangles = 0;
         private float _memoryUsage = 0f;
         private float _thermalLevel = 0f;
-        
+
         // History for averaging - 180 frames = 3s at 60fps (60 too short, causes oscillation, increases variance)
         private Queue<float> _fpsHistory = new Queue<float>();
         private Queue<float> _frameTimeHistory = new Queue<float>();
         private const int HistorySize = 180;
-        
+
         public int CurrentQualityIndex => _currentQualityIndex;
         public string CurrentQualityName => _qualityPresets[_currentQualityIndex].name;
         public float CurrentFPS => _currentFPS;
         public float AvgFrameTime => _avgFrameTime;
         public float ThermalLevel => _thermalLevel;
-        
+
         void Start() { _instance = this; }
 
         public event Action<int> OnQualityChanged;
         public event Action<float> OnThermalThrottle;
-        
+
         public void Configure(int targetFPS, bool adaptiveQuality)
         {
             _targetFPS = targetFPS;
             _adaptiveQuality = adaptiveQuality;
-            
+
             // Apply initial quality
             ApplyQuality(_currentQualityIndex);
         }
-        
+
         public void StartMonitoring()
         {
             _isMonitoring = true;
             _lastUpdateTime = Time.time;
             MonitoringLoop().Forget();
         }
-        
+
         public void StopMonitoring()
         {
             _isMonitoring = false;
         }
-        
+
         private void Update()
         {
             if (!_isMonitoring) return;
-            
+
             // Collect frame metrics
             _fpsHistory.Enqueue(1f / Time.unscaledDeltaTime);
             _frameTimeHistory.Enqueue(Time.unscaledDeltaTime * 1000f);
-            
+
             if (_fpsHistory.Count > HistorySize)
             {
                 _fpsHistory.Dequeue();
                 _frameTimeHistory.Dequeue();
             }
-            
+
             // Update thermal
             if (_monitorThermal)
             {
                 UpdateThermal();
             }
         }
-        
+
         private async UniTaskVoid MonitoringLoop()
         {
             while (_isMonitoring)
             {
                 await UniTask.Delay(TimeSpan.FromSeconds(_updateInterval));
-                
+
                 if (!_isMonitoring) break;
-                
+
                 CalculateMetrics();
                 CheckAdaptiveQuality();
             }
         }
-        
+
         private void CalculateMetrics()
         {
             // FPS
@@ -130,7 +130,7 @@ namespace Cymatic
                 foreach (var fps in _fpsHistory) sum += fps;
                 _currentFPS = sum / _fpsHistory.Count;
             }
-            
+
             // Frame time
             if (_frameTimeHistory.Count > 0)
             {
@@ -138,7 +138,7 @@ namespace Cymatic
                 foreach (var ft in _frameTimeHistory) sum += ft;
                 _avgFrameTime = sum / _frameTimeHistory.Count;
             }
-            
+
             // Draw calls & triangles - real count (ProfilerRecorder / mesh index count), not drawCalls*1200 estimate
             try {
 #if UNITY_2022_3_OR_NEWER
@@ -152,7 +152,7 @@ namespace Cymatic
                 TryUpdateTriangleCountViaProfilerRecorder(ref _triangles);
 #endif
             } catch { _drawCalls = 0; _triangles = 0; }
-            
+
             // Memory
             _memoryUsage = Profiler.GetTotalAllocatedMemoryLong() / (1024f * 1024f); // MB
             // GPU time approximation via frameTime if not yet measured (kept for metrics compatibility)
@@ -254,7 +254,7 @@ namespace Cymatic
             catch { }
         }
 #endif
-        
+
         private void UpdateThermal()
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
@@ -270,7 +270,7 @@ namespace Cymatic
 #else
             _thermalLevel = Mathf.Lerp(_thermalLevel, UnityEngine.Random.Range(0.2f, 0.5f), 0.1f);
 #endif
-            
+
             if (_thermalLevel > _thermalThrottleThreshold)
             {
                 OnThermalThrottle?.Invoke(_thermalLevel);
@@ -281,18 +281,18 @@ namespace Cymatic
                 }
             }
         }
-        
+
         private void CheckAdaptiveQuality()
         {
             if (!_adaptiveQuality) return;
             // Cooldown to prevent ping-pong: must wait 5s after last quality change before next adjustment
             if (Time.time - _lastQualityChangeTime < QualityChangeCooldown) return;
-            
+
             // Check if we need to adjust quality - asymmetric hysteresis to avoid oscillation
             float fpsDiff = _targetFPS - _currentFPS;
             float reduceThreshold = _targetFPS * 0.10f;  // 10% low -> reduce immediately (with cooldown)
             float increaseThreshold = _targetFPS * 0.15f; // 15% headroom required to increase (hysteresis gap 5%)
-            
+
             if (fpsDiff > reduceThreshold && _currentQualityIndex < _qualityPresets.Length - 1)
             {
                 // FPS too low, reduce quality
@@ -304,59 +304,59 @@ namespace Cymatic
                 SetQuality(_currentQualityIndex - 1);
             }
         }
-        
+
         public void SetQuality(int index)
         {
             index = Mathf.Clamp(index, 0, _qualityPresets.Length - 1);
-            
+
             if (index == _currentQualityIndex) return;
-            
+
             _currentQualityIndex = index;
             _lastQualityChangeTime = Time.time;
             ApplyQuality(index);
             OnQualityChanged?.Invoke(index);
-            
+
             Debug.Log($"[Performance] Quality changed to: {_qualityPresets[index].name}");
         }
-        
+
         private void ApplyQuality(int index)
         {
             var preset = _qualityPresets[index];
-            
+
             // Render scale
             QualitySettings.renderPipeline = null; // Built-in RP
             ScalableBufferManager.ResizeBuffers(preset.renderScale, preset.renderScale);
-            
+
             // MSAA
             QualitySettings.antiAliasing = preset.msaa;
-            
+
             // Shadows
             QualitySettings.shadows = preset.shadowQuality;
-            QualitySettings.shadowResolution = preset.shadowQuality == ShadowQuality.Disable 
-                ? ShadowResolution.Low 
+            QualitySettings.shadowResolution = preset.shadowQuality == ShadowQuality.Disable
+                ? ShadowResolution.Low
                 : ShadowResolution.High;
-            
+
             // Pixel lights
             QualitySettings.pixelLightCount = preset.pixelLightCount;
-            
+
             // Texture quality
             QualitySettings.masterTextureLimit = preset.textureQuality;
-            
+
             // VSync
             QualitySettings.vSyncCount = 0;
-            
+
             // LOD bias
             QualitySettings.lodBias = 1f + (index * 0.2f);
-            
+
             // Max frame rate
             Application.targetFrameRate = _targetFPS;
         }
-        
+
         public void ForceMinimumQuality()
         {
             SetQuality(_qualityPresets.Length - 1);
         }
-        
+
         public PerformanceMetrics GetMetrics()
         {
             return new PerformanceMetrics
@@ -374,7 +374,7 @@ namespace Cymatic
             };
         }
     }
-    
+
     [System.Serializable]
     public class QualityPreset
     {
@@ -385,7 +385,7 @@ namespace Cymatic
         public int pixelLightCount = 2;
         public int textureQuality = 0; // 0=Full, 1=Half, 2=Quarter
     }
-    
+
     [System.Serializable]
     public class PerformanceMetrics
     {

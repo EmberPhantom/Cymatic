@@ -18,8 +18,13 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { SceneViewportPreview } from "@/components/scene/SceneViewportPreview"
 import { PipelineStepper, type PipelineStage } from "@/components/pipeline/PipelineStepper"
+import { BuilderSteps } from "@/components/builder/BuilderSteps"
+import { GenerationProgress } from "@/components/builder/GenerationProgress"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
+import { getErrorMessage } from "@/lib/errors"
+import { parseProjectId } from "@/lib/project-id"
+import { asEntityRecord } from "@/lib/validations"
 import type { IntakeResult, ClarificationQuestion, ClarifyResult } from "@/types"
 import {
   Sparkles,
@@ -37,147 +42,34 @@ import {
   Glasses
 } from "lucide-react"
 
-type Step = "prompt" | "clarify" | "review" | "generate" | "publish"
-type GenerationStage = "spec" | "validation" | "scene" | "publish"
+import {
+  builderReducer,
+  initialBuilderState as initialState,
+  BUILDER_STEPS as STEPS,
+  sanitizeHydratedState,
+  intakeFromGenerationRun,
+  resolveHydratedJob,
+  stepAfterDeadJob,
+  MAX_PROMPT_LENGTH,
+  type BuilderState,
+} from "@/lib/builder-state"
 
-const STEPS: { key: Step; label: string }[] = [
-  { key: "prompt", label: "Enter Prompt" },
-  { key: "clarify", label: "Clarification" },
-  { key: "review", label: "Review Spec" },
-  { key: "generate", label: "Generate" },
-  { key: "publish", label: "Publish" },
-]
+type Step = BuilderState["step"]
+type GenerationStage = BuilderState["generationStage"]
 
-const MAX_PROMPT_LENGTH = 5000
 const JOB_TIMEOUT_MS = 5 * 60 * 1000
 
 // ---------------------------------------------------------------------------
-// Reducer: consolidates the 9 previous useState calls into a single atomic
-// workflow state to prevent out-of-sync step vs generationStage vs currentJobId.
+// Reducer + hydration helpers live in @/lib/builder-state (unit-tested).
 // ---------------------------------------------------------------------------
-type BuilderState = {
-  step: Step
-  prompt: string
-  intakeResult: IntakeResult | null
-  clarifyResult: ClarifyResult | null
-  answers: Record<string, string>
-  currentJobId: string | null
-  generationStage: GenerationStage
-  workflowError: string | null
-}
-
-type BuilderAction =
-  | { type: "SET_PROMPT"; payload: string }
-  | { type: "SET_STEP"; payload: Step }
-  | { type: "SET_INTAKE_RESULT"; payload: IntakeResult | null }
-  | { type: "SET_CLARIFY_RESULT"; payload: ClarifyResult | null }
-  | { type: "SET_ANSWERS"; payload: Record<string, string> }
-  | { type: "SET_ANSWER"; payload: { field: string; value: string } }
-  | { type: "SET_JOB"; payload: string | null }
-  | { type: "SET_STAGE"; payload: GenerationStage }
-  | { type: "SET_ERROR"; payload: string | null }
-  | { type: "SET_WORKFLOW"; payload: Partial<Pick<BuilderState, "step" | "generationStage" | "currentJobId" | "workflowError">> }
-  | { type: "HYDRATE"; payload: Partial<BuilderState> }
-  | { type: "RESET_JOB" }
-
-const initialState: BuilderState = {
-  step: "prompt",
-  prompt: "",
-  intakeResult: null,
-  clarifyResult: null,
-  answers: {},
-  currentJobId: null,
-  generationStage: "spec",
-  workflowError: null,
-}
-
-function builderReducer(state: BuilderState, action: BuilderAction): BuilderState {
-  switch (action.type) {
-    case "SET_PROMPT":
-      return { ...state, prompt: action.payload.slice(0, MAX_PROMPT_LENGTH) }
-    case "SET_STEP":
-      return { ...state, step: action.payload }
-    case "SET_INTAKE_RESULT":
-      return { ...state, intakeResult: action.payload }
-    case "SET_CLARIFY_RESULT":
-      return { ...state, clarifyResult: action.payload }
-    case "SET_ANSWERS":
-      return { ...state, answers: action.payload }
-    case "SET_ANSWER":
-      return { ...state, answers: { ...state.answers, [action.payload.field]: action.payload.value } }
-    case "SET_JOB":
-      return { ...state, currentJobId: action.payload }
-    case "SET_STAGE":
-      return { ...state, generationStage: action.payload }
-    case "SET_ERROR":
-      return { ...state, workflowError: action.payload }
-    case "SET_WORKFLOW":
-      return { ...state, ...action.payload }
-    case "HYDRATE":
-      return { ...state, ...action.payload }
-    case "RESET_JOB":
-      return { ...state, currentJobId: null }
-    default:
-      return state
-  }
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  const anyErr = error as Record<string, unknown> | null
-  // Axios client timeout (ECONNABORTED / "timeout of Xms exceeded"): the backend
-  // LLM call outlived the client timeout. Explain instead of showing raw ms text
-  // that users misread as a quota ("limit exceeded 3000s").
-  const code = (anyErr as { code?: unknown } | null)?.code
-  const msg = (anyErr as { message?: unknown } | null)?.message
-  if (code === "ECONNABORTED" || (typeof msg === "string" && msg.toLowerCase().includes("timeout of"))) {
-    return "Analysis is taking longer than expected (first run warms up AI models). Please wait a moment and retry - your prompt was not lost."
-  }
-  // axios shape: error.response.data.detail can be string | {msg}[] | object
-  const resp = (anyErr as { response?: { data?: { detail?: unknown; correlation_id?: unknown }; headers?: Record<string, string> } } | null)?.response
-  const detail = resp?.data?.detail
-  const correlationId =
-    (resp?.data as { correlation_id?: unknown } | undefined)?.correlation_id ??
-    resp?.headers?.["x-correlation-id"] ??
-    resp?.headers?.["X-Correlation-ID"]
-  const withRef = (text: string) =>
-    typeof correlationId === "string" && correlationId && correlationId !== "-"
-      ? `${text} (ref: ${correlationId})`
-      : text
-  if (typeof detail === "string" && detail.trim()) {
-    // Backend catch-all hides internals as "Unexpected error" - point to ref.
-    if (detail === "Unexpected error") {
-      return withRef("Unexpected error. Please retry and share the reference ID if it persists.")
-    }
-    return withRef(detail)
-  }
-  if (Array.isArray(detail)) {
-    const msgs = detail
-      .map((d) => {
-        if (typeof d === "string") return d
-        if (d && typeof d === "object" && "msg" in (d as Record<string, unknown>)) return String((d as { msg: unknown }).msg)
-        return ""
-      })
-      .filter(Boolean)
-      .join("; ")
-    if (msgs) return msgs
-  }
-  if (detail && typeof detail === "object") {
-    try {
-      return JSON.stringify(detail)
-    } catch {
-      // ignore
-    }
-  }
-  // error.error is used by JobStatus
-  if (anyErr && typeof (anyErr as { error?: unknown }).error === "string") return String((anyErr as { error: string }).error)
-  if (anyErr && typeof (anyErr as { message?: unknown }).message === "string") return String((anyErr as { message: string }).message)
-  return fallback
-}
 
 export default function BuilderPage() {
   const params = useParams()
   const router = useRouter()
-  const projectId = Number(params.id)
+  // Guard the route param: an invalid id renders a local error state below
+  // and never fires intake/clarify/generate hooks (same NaN pattern as
+  // use-project.ts). Mutation hooks throw on null projectId as a second net.
+  const projectId = parseProjectId(params.id)
 
   const [state, dispatch] = useReducer(builderReducer, initialState)
   const { step, prompt, intakeResult, clarifyResult, answers, currentJobId, generationStage, workflowError } = state
@@ -224,48 +116,101 @@ export default function BuilderPage() {
     if (hasHydratedRef.current) return
     hasHydratedRef.current = true
     if (typeof window === "undefined") return
+    if (projectId === null) return
+    let cancelled = false
     try {
       const raw = window.sessionStorage.getItem(storageKey)
       const urlParams = new URLSearchParams(window.location.search)
       const urlRunId = urlParams.get("run_id")
-      let parsed: Partial<BuilderState> | null = null
+      let parsed: unknown = null
       if (raw) {
         try {
-          parsed = JSON.parse(raw) as Partial<BuilderState>
+          parsed = JSON.parse(raw) as unknown
         } catch {
           parsed = null
         }
       }
-      // URL takes precedence for run_id if mismatch, but we still hydrate other fields from storage
-      if (parsed) {
-        const hydrate: Partial<BuilderState> = {}
-        if (typeof parsed.prompt === "string") hydrate.prompt = parsed.prompt.slice(0, MAX_PROMPT_LENGTH)
-        if (parsed.intakeResult && typeof parsed.intakeResult === "object") hydrate.intakeResult = parsed.intakeResult as IntakeResult
-        if (parsed.clarifyResult && typeof parsed.clarifyResult === "object") hydrate.clarifyResult = parsed.clarifyResult as ClarifyResult
-        if (parsed.answers && typeof parsed.answers === "object") hydrate.answers = parsed.answers as Record<string, string>
-        if (typeof parsed.currentJobId === "string" || parsed.currentJobId === null) hydrate.currentJobId = parsed.currentJobId as string | null
-        if (parsed.step && (STEPS as readonly { key: string }[]).some((s) => s.key === parsed.step)) hydrate.step = parsed.step as Step
-        if (parsed.generationStage && ["spec", "validation", "scene", "publish"].includes(parsed.generationStage as string))
-          hydrate.generationStage = parsed.generationStage as GenerationStage
-        // if URL run_id present and differs, prefer URL run_id by keeping intakeResult.run_id as urlRunId if needed
-        if (urlRunId && hydrate.intakeResult && (hydrate.intakeResult as IntakeResult).run_id !== urlRunId) {
-          // keep storage intakeResult but ensure URL consistency; do not override storage blindly
-          // if storage has no run_id, synthesize
-          if (!(hydrate.intakeResult as IntakeResult).run_id) {
-            ;(hydrate.intakeResult as IntakeResult).run_id = urlRunId
-          }
-        } else if (urlRunId && !hydrate.intakeResult) {
-          hydrate.intakeResult = { run_id: urlRunId } as unknown as IntakeResult
-        }
-        if (Object.keys(hydrate).length > 0) {
-          dispatch({ type: "HYDRATE", payload: hydrate })
-        }
-      } else if (urlRunId) {
-        // no storage but URL has run_id -> minimal hydrate to allow resume
-        dispatch({ type: "HYDRATE", payload: { intakeResult: { run_id: urlRunId } as unknown as IntakeResult } })
+      // Validated hydration: run_id-only payloads are NEVER promoted to a
+      // full IntakeResult (no `as unknown as IntakeResult` casts) — they are
+      // refetched from GET generation-runs/{runId} below.
+      const { hydrate, pendingRunIdFetch } = sanitizeHydratedState(parsed, urlRunId)
+      if (Object.keys(hydrate).length > 0) {
+        dispatch({ type: "HYDRATE", payload: hydrate })
+      }
+
+      // Dead job rehydration: verify a restored currentJobId is still live
+      // (single status poll) before the 5-minute window resumes. A dead/GC'd
+      // job resets to review instead of the "Generation Interrupted" limbo.
+      const hydratedJobId = hydrate.currentJobId
+      if (typeof hydratedJobId === "string" && hydratedJobId) {
+        api
+          .get(`/v1/jobs/${encodeURIComponent(hydratedJobId)}/status`)
+          .then((res) => {
+            if (cancelled) return
+            const status = (res.data as { status?: unknown } | undefined)?.status
+            if (resolveHydratedJob(status, false, false) === "dead") {
+              dispatch({ type: "RESET_JOB" })
+              jobStartedAtRef.current = null
+              dispatch({
+                type: "SET_STEP",
+                payload: stepAfterDeadJob(!!hydrate.intakeResult || !!pendingRunIdFetch),
+              })
+              dispatch({
+                type: "SET_ERROR",
+                payload: "The previous job is no longer running (it finished or expired). Your plan is kept — review and compile again.",
+              })
+            }
+          })
+          .catch((err: unknown) => {
+            if (cancelled) return
+            const httpStatus = (err as { response?: { status?: number } })?.response?.status
+            if (resolveHydratedJob(undefined, true, httpStatus === 404) === "dead") {
+              dispatch({ type: "RESET_JOB" })
+              jobStartedAtRef.current = null
+              dispatch({
+                type: "SET_STEP",
+                payload: stepAfterDeadJob(!!hydrate.intakeResult || !!pendingRunIdFetch),
+              })
+              dispatch({
+                type: "SET_ERROR",
+                payload: "The previous job is no longer available (it expired). Your plan is kept — review and compile again.",
+              })
+            }
+            // fail-open on network blips: keep polling, timeout bounds the wait
+          })
+      }
+
+      // run_id-only hydration: refetch the full intake result from the run.
+      if (pendingRunIdFetch) {
+        api
+          .get(`/v1/projects/${projectId}/generation-runs/${encodeURIComponent(pendingRunIdFetch)}`)
+          .then((res) => {
+            if (cancelled) return
+            const rebuilt = intakeFromGenerationRun(res.data)
+            if (rebuilt) {
+              dispatch({ type: "SET_INTAKE_RESULT", payload: rebuilt })
+            } else {
+              dispatch({ type: "SET_INTAKE_RESULT", payload: null })
+              dispatch({
+                type: "SET_ERROR",
+                payload: "The previous session's details could not be restored. Please describe your idea again.",
+              })
+            }
+          })
+          .catch(() => {
+            if (cancelled) return
+            dispatch({ type: "SET_INTAKE_RESULT", payload: null })
+            dispatch({
+              type: "SET_ERROR",
+              payload: "The previous session's details could not be restored. Please describe your idea again.",
+            })
+          })
       }
     } catch {
       // ignore hydration errors
+    }
+    return () => {
+      cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
@@ -274,6 +219,7 @@ export default function BuilderPage() {
   useEffect(() => {
     if (!hasHydratedRef.current) return
     if (typeof window === "undefined") return
+    if (projectId === null) return
     try {
       const toPersist: Record<string, unknown> = {
         prompt,
@@ -454,6 +400,7 @@ export default function BuilderPage() {
   // Handlers
   // ---------------------------------------------------------------------------
   const handleIntake = useCallback(async () => {
+    if (projectId === null) return
     const trimmed = prompt.trim()
     if (!trimmed) return
     // enforce maxLength even if bypassed
@@ -478,17 +425,18 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to analyze the prompt.") })
     }
-  }, [prompt, intake, project?.domain])
+  }, [prompt, intake, project?.domain, projectId])
 
   const handleClarify = useCallback(async () => {
+    if (projectId === null) return
     try {
       dispatch({ type: "SET_ERROR", payload: null })
       // Send the freshest known entities as base: prior clarify updated_fields
       // win over the original intake, so multi-round clarification accumulates
       // instead of resetting to round 1.
       const baseEntities = {
-        ...(intakeResult?.extracted_entities ?? {}),
-        ...(clarifyResult?.updated_fields ?? {}),
+        ...asEntityRecord(intakeResult?.extracted_entities),
+        ...asEntityRecord(clarifyResult?.updated_fields),
       }
       const result = await clarify.mutateAsync({
         answers,
@@ -501,9 +449,10 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to save clarification answers.") })
     }
-  }, [answers, clarify, intakeResult, clarifyResult])
+  }, [answers, clarify, intakeResult, clarifyResult, projectId])
 
   const handleGenerateSpec = useCallback(async () => {
+    if (projectId === null) return
     try {
       dispatch({ type: "SET_ERROR", payload: null })
       // Approval gate: freeze the reviewed plan sheet before generating.
@@ -521,7 +470,7 @@ export default function BuilderPage() {
       // Prefer LLM-normalized clarify fields over raw text inputs.
       const clarificationAnswers = {
         ...answers,
-        ...(clarifyResult?.updated_fields ?? {}),
+        ...asEntityRecord(clarifyResult?.updated_fields),
       }
       const result = await generateSpec.mutateAsync({
         prompt: prompt.slice(0, MAX_PROMPT_LENGTH),
@@ -536,9 +485,10 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to start specification generation.") })
     }
-  }, [prompt, intakeResult, clarifyResult, answers, generateSpec, planSheet])
+  }, [prompt, intakeResult, clarifyResult, answers, generateSpec, planSheet, projectId])
 
   const handlePublish = useCallback(async () => {
+    if (projectId === null) return
     try {
       dispatch({ type: "SET_ERROR", payload: null })
       const result = await publish.mutateAsync()
@@ -547,7 +497,7 @@ export default function BuilderPage() {
     } catch (error: unknown) {
       dispatch({ type: "SET_ERROR", payload: getErrorMessage(error, "Unable to publish the simulation.") })
     }
-  }, [publish])
+  }, [publish, projectId])
 
   const handleCancel = useCallback(async () => {
     if (!currentJobId) return
@@ -603,6 +553,10 @@ export default function BuilderPage() {
     return "input"
   }, [step, generationStage])
 
+  // Validated view of the free-form intake blob (unknown at the wire type).
+  const extractedEntityRecord = asEntityRecord(intakeResult?.extracted_entities)
+  const hasExtractedEntities = Object.keys(extractedEntityRecord).length > 0
+
   const templatePrompt = isHeritage
     ? "Create an immersive walkthrough of a historic Indian temple complex with stone architecture, courtyards, natural lighting and informational points."
     : "Create a modern 3-bedroom apartment walkthrough with open kitchen, floor-to-ceiling windows, wooden floors, and ambient city lighting."
@@ -628,28 +582,8 @@ export default function BuilderPage() {
           </h1>
         </div>
 
-        {/* Step Indicator Badges */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {STEPS.map((s, idx) => {
-            const isCompleted = idx < stepIndex
-            const isCurrent = idx === stepIndex
-            return (
-              <span
-                key={s.key}
-                className={cn(
-                  "px-2.5 py-1 rounded-md text-[11px] font-mono tracking-tight transition-colors border",
-                  isCurrent
-                    ? "bg-charcoal text-white dark:bg-ivory dark:text-charcoal border-transparent font-semibold shadow-xs"
-                    : isCompleted
-                    ? "bg-sage-50 text-sage-700 border-sage-200 dark:bg-sage-950/40 dark:border-sage-800"
-                    : "bg-muted/30 text-stonegray border-warmgray/60"
-                )}
-              >
-                0{idx + 1} {s.label}
-              </span>
-            )
-          })}
-        </div>
+        {/* Step Indicator Badges (ol + aria-current; see BuilderSteps) */}
+        <BuilderSteps steps={STEPS} currentIndex={stepIndex} />
       </div>
 
       {workflowError && (
@@ -670,7 +604,7 @@ export default function BuilderPage() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* LEFT COLUMN: ✦ CYMATIC AI Creative Prompt Panel (3 cols ~ 25%) */}
         <div className="lg:col-span-3 space-y-4">
-          <Card className="border-warmgray shadow-2xs">
+          <Card className="border-warmgray shadow-sm">
             <CardHeader className="p-4 pb-2">
               <CardTitle className="text-sm font-bold flex items-center gap-2 text-foreground">
                 <Sparkles className="h-4 w-4 text-terracotta" />
@@ -686,6 +620,7 @@ export default function BuilderPage() {
               {step === "prompt" && (
                 <div className="space-y-3">
                   <div className="space-y-1.5">
+                    <Label htmlFor="simulation-prompt">Simulation prompt</Label>
                     <textarea
                       id="simulation-prompt"
                       className="flex min-h-[150px] w-full rounded-xl border border-warmgray bg-background p-3 text-xs ring-offset-background placeholder:text-stonegray focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta leading-relaxed transition-all"
@@ -725,7 +660,7 @@ export default function BuilderPage() {
                               : addition
                             dispatch({ type: "SET_PROMPT", payload: nextPrompt })
                           }}
-                          className="px-2 py-1 rounded-md text-[10px] font-mono border border-warmgray bg-muted/40 hover:bg-terracotta/10 hover:border-terracotta hover:text-terracotta text-stonegray transition-all shadow-2xs"
+                          className="px-2 py-1 rounded-md text-[10px] font-mono border border-warmgray bg-muted/40 hover:bg-terracotta/10 hover:border-terracotta hover:text-terracotta text-stonegray transition-all shadow-sm"
                         >
                           {chip}
                         </button>
@@ -743,7 +678,7 @@ export default function BuilderPage() {
                     variant="terracotta"
                     onClick={handleIntake}
                     disabled={!prompt.trim() || intake.isPending || isPromptOverLimit}
-                    className="w-full h-9 gap-1.5 font-semibold shadow-xs"
+                    className="w-full h-9 gap-1.5 font-semibold shadow-sm"
                   >
                     <span>{intake.isPending ? "Analyzing Architecture…" : "✦ Generate Simulation →"}</span>
                   </Button>
@@ -782,7 +717,18 @@ export default function BuilderPage() {
                           <span>{Math.round(clarifyResult.completion_percentage * 100)}%</span>
                         )}
                       </div>
-                      <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                      <div
+                        role="progressbar"
+                        aria-label="Clarification answers completed"
+                        aria-valuenow={Math.round(
+                          (displayQuestions.filter((q) => (answers[q.field || q.question] || "").trim() !== "").length /
+                            displayQuestions.length) *
+                            100
+                        )}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        className="h-1.5 w-full bg-secondary rounded-full overflow-hidden"
+                      >
                         <div
                           className="h-full bg-terracotta transition-all duration-300"
                           style={{
@@ -864,7 +810,26 @@ export default function BuilderPage() {
                               <div className="flex flex-wrap gap-1.5">
                                 {options.map((o: string) => {
                                   const active = selectedMulti.includes(o)
-                                  return (
+  // Invalid project id: render a local error state. No intake/clarify/
+  // generate hook can fire — useProject is disabled on null, mutation hooks
+  // throw on null, and every handler above early-returns.
+  if (projectId === null) {
+    return (
+      <div className="space-y-5">
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-semibold">Invalid project id</p>
+          <p className="mt-1 text-xs">
+            The URL does not contain a valid project id, so the builder cannot load. Check the link and try again.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => router.push("/dashboard")} className="mt-3 text-xs">
+            Back to Dashboard
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
                                     <button
                                       key={o}
                                       type="button"
@@ -1052,10 +1017,10 @@ export default function BuilderPage() {
                     <div className="rounded-xl border border-dashed border-warmgray p-4 text-center">
                       <p className="text-[11px] text-stonegray">Preparing your plan…</p>
                     </div>
-                  ) : intakeResult?.extracted_entities && Object.keys(intakeResult.extracted_entities).length > 0 ? (
+                  ) : hasExtractedEntities ? (
                     <div className="rounded-xl border border-warmgray bg-charcoal text-white p-3 font-mono text-[11px] overflow-auto max-h-56">
                       <pre className="text-ivory/90 leading-tight">
-                        {JSON.stringify(intakeResult.extracted_entities, null, 2)}
+                        {JSON.stringify(extractedEntityRecord, null, 2)}
                       </pre>
                     </div>
                   ) : (
@@ -1100,9 +1065,12 @@ export default function BuilderPage() {
 
               {/* Step 4: Generation Status */}
               {step === "generate" && (
-                <div className="space-y-4 text-center py-2">
+                <div className="space-y-4 text-center py-2" role="status" aria-label="Generation status">
                   <div className="flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-8 w-8 border-2 border-terracotta border-t-transparent" />
+                    <div
+                      className="animate-spin rounded-full h-8 w-8 border-2 border-terracotta border-t-transparent"
+                      aria-hidden="true"
+                    />
                   </div>
                   <div>
                     <div className="text-xs font-bold text-foreground">
@@ -1117,17 +1085,7 @@ export default function BuilderPage() {
                     </p>
                   </div>
 
-                  {jobProgress !== null && (
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[10px] font-mono text-stonegray">
-                        <span>Progress</span>
-                        <span>{jobProgress}%</span>
-                      </div>
-                      <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                        <div className="h-full bg-terracotta transition-all duration-300" style={{ width: `${jobProgress}%` }} />
-                      </div>
-                    </div>
-                  )}
+                  <GenerationProgress progress={jobProgress} />
 
                   {jobStatus.data?.status === "failed" && (
                     <div role="alert" className="rounded-lg bg-destructive/10 border border-destructive/20 p-2.5 text-xs text-destructive text-center">
@@ -1219,24 +1177,25 @@ export default function BuilderPage() {
             height="h-[480px] xl:h-[540px]"
           />
 
-          <div className="p-3 rounded-xl border border-warmgray bg-card flex items-center justify-between text-[11px] text-stonegray shadow-2xs">
+          <div className="p-3 rounded-xl border border-warmgray bg-card flex items-center justify-between text-[11px] text-stonegray shadow-sm">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-sage animate-pulse" />
               <span className="font-medium text-foreground">Spatial Viewport Active</span>
             </div>
+            {/* No measured stats exist at builder mount time (nothing compiled
+                yet): label the strip illustrative instead of reporting FPS /
+                latency numbers. */}
             <div className="font-mono text-[10px] flex items-center gap-2 text-stonegray">
-              <span>BAKED GI</span>
+              <span>PREVIEW (ILLUSTRATIVE)</span>
               <span>&bull;</span>
-              <span>60 FPS STEREO</span>
-              <span>&bull;</span>
-              <span>LATENCY &lt;45MS</span>
+              <span>NO MEASURED STATS YET</span>
             </div>
           </div>
         </div>
 
         {/* RIGHT COLUMN: Scene Inspector (3 cols ~ 25%) */}
         <div className="lg:col-span-3 space-y-4">
-          <Card className="border-warmgray shadow-2xs">
+          <Card className="border-warmgray shadow-sm">
             <CardHeader className="p-4 pb-2 border-b border-border/70">
               <CardTitle className="text-xs font-bold font-mono uppercase tracking-wider flex items-center gap-2 text-foreground">
                 <Sliders className="h-3.5 w-3.5 text-terracotta" />
@@ -1248,41 +1207,41 @@ export default function BuilderPage() {
             </CardHeader>
 
             <CardContent className="p-4 pt-3 space-y-4 text-xs">
-              {/* SECTION 1: SCENE */}
+              {/* SECTION 1: SCENE (illustrative schematic — no compiled scene yet) */}
               <div className="space-y-1.5">
                 <div className="text-[10px] font-mono uppercase text-foreground font-bold tracking-wider">
-                  SCENE
+                  SCENE (ILLUSTRATIVE)
                 </div>
                 <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
                   <span className="text-stonegray">Environment</span>
-                  <span className="font-medium text-foreground">Baked Global Illum</span>
+                  <span className="font-medium text-foreground">Schematic preview</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
                   <span className="text-stonegray">Lighting</span>
-                  <span className="font-medium text-foreground">Warm Sunlit (45°)</span>
+                  <span className="font-medium text-foreground">Daylight schematic</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
                   <span className="text-stonegray">Architecture</span>
-                  <span className="font-mono font-medium text-foreground">Metric · [0.0, 1.6, 0.0]</span>
+                  <span className="font-mono font-medium text-foreground">Metric scale</span>
                 </div>
               </div>
 
-              {/* SECTION 2: PERFORMANCE */}
+              {/* SECTION 2: PERFORMANCE (targets only — nothing measured yet) */}
               <div className="space-y-1.5">
                 <div className="text-[10px] font-mono uppercase text-terracotta font-bold tracking-wider">
-                  PERFORMANCE
+                  PERFORMANCE (NOT MEASURED)
                 </div>
                 <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
                   <span className="text-stonegray">Triangle Budget</span>
-                  <span className="font-mono font-bold text-terracotta">74.8K / 80K TRI</span>
+                  <span className="font-mono font-bold text-terracotta">Not measured</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
                   <span className="text-stonegray">VR FPS</span>
-                  <span className="font-mono font-bold text-sage">60.0 FPS Stereo</span>
+                  <span className="font-mono font-bold text-sage">Not measured</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-warmgray/60 text-[11px]">
                   <span className="text-stonegray">Streaming Latency</span>
-                  <span className="font-mono font-bold text-foreground">&lt; 45ms LAN</span>
+                  <span className="font-mono font-bold text-foreground">Not measured</span>
                 </div>
               </div>
 

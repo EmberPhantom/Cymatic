@@ -44,34 +44,46 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout tested revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Create CI environment
         run: |
           cp .env.example .env
           sed -i 's/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=test-secret-key-for-compose-that-is-at-least-32-chars/' .env
           sed -i 's/^ADMIN_API_KEY=.*/ADMIN_API_KEY=test-admin-key-for-compose/' .env
+          # .env.example defaults to production-safe values; the compose test
+          # stack runs over plain HTTP, where Secure auth cookies (production
+          # mode) would never be sent — opt back into development for tests.
+          sed -i 's/^ENVIRONMENT=.*/ENVIRONMENT=development/' .env
 
+      # NOTE: s3mock override replaces quay.io MinIO (anonymous pulls
+      # rejected) with a Docker Hub S3 mock under the same service name.
       - name: Validate Compose configuration
-        run: docker compose -f infra/docker/docker-compose.yml --profile test config --quiet
+        run: docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.s3mock.yml --profile test config --quiet
 
       - name: Start Compose test stack
         working-directory: infra/docker
-        run: docker compose --profile test up -d --build
+        run: |
+          # reports/ is bind-mounted into test containers running as uid 999;
+          # pre-create world-writable so JUnit XML writes don't get EACCES
+          # (docker would otherwise create it root-owned on first mount).
+          mkdir -p ../../reports && chmod 777 ../../reports
+          docker compose -f docker-compose.yml -f docker-compose.s3mock.yml --profile test up -d --build
 
       - name: Wait for test containers
         working-directory: infra/docker
         run: |
           # Wait for test-db and test-migrate first
-          docker compose --profile test wait test-db test-migrate
+          docker compose -f docker-compose.yml -f docker-compose.s3mock.yml --profile test wait test-db test-migrate
           # Then wait for test services
-          docker compose --profile test wait test-api test-worker test-llm-router
+          docker compose -f docker-compose.yml -f docker-compose.s3mock.yml --profile test wait test-api test-worker test-llm-router
 
       - name: Verify test container exit codes
         working-directory: infra/docker
         run: |
+          FLAGS="-f docker-compose.yml -f docker-compose.s3mock.yml"
           for service in test-api test-worker test-llm-router; do
-            container_id=$(docker compose ps -aq "$service")
+            container_id=$(docker compose $FLAGS ps -aq "$service")
             test -n "$container_id"
             exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
             test "$exit_code" = "0" || exit "$exit_code"
@@ -79,7 +91,9 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps/web
-        run: npm ci
+        # --legacy-peer-deps matches apps/web/Dockerfile (eslint-config-next
+        # peer range vs pinned eslint 8).
+        run: npm ci --legacy-peer-deps
 
       - name: Install Playwright browser
         working-directory: apps/web
@@ -105,11 +119,11 @@ jobs:
       - name: Upload service logs
         if: always()
         working-directory: infra/docker
-        run: docker compose --profile test logs --no-color > ../../compose-integration.log
+        run: docker compose -f docker-compose.yml -f docker-compose.s3mock.yml --profile test logs --no-color > ../../compose-integration.log
 
       - name: Upload integration logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compose-integration-logs
           path: compose-integration.log
@@ -117,4 +131,4 @@ jobs:
       - name: Cleanup
         if: always()
         working-directory: infra/docker
-        run: docker compose --profile test down -v --remove-orphans
+        run: docker compose -f docker-compose.yml -f docker-compose.s3mock.yml --profile test down -v --remove-orphans

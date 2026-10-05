@@ -17,7 +17,14 @@ namespace Cymatic
         [SerializeField] private string _backendUrl = "http://localhost:8000";
         [SerializeField] private string _renderServerId = "render-server-01";
         [SerializeField] private float _heartbeatInterval = 5f;
-        
+
+        // Single-user MVP: there is no separate render-server identity/auth
+        // system on the backend (no /v1/render/register endpoint exists). The
+        // render server authenticates as the same user account the Android
+        // headset belongs to, using a long-lived access token configured here.
+        [Header("Auth (single-user MVP)")]
+        [SerializeField] private string _userAccessToken = "";
+
         // State
         private bool _isRegistered = false;
         private string _authToken;
@@ -26,54 +33,63 @@ namespace Cymatic
         public string AuthToken => _authToken;
         public string GetAuthToken() => _authToken;
         public string RenderServerId => _renderServerId;
-        
+
         public event Action<string, string, string> OnCommandReceived; // sessionId, command, payload
-        
+
         public void Configure(string backendUrl, string renderServerId)
         {
             _backendUrl = backendUrl;
             _renderServerId = renderServerId;
         }
-        
-        public async UniTask RegisterRenderServer()
+
+        /// <summary>
+        /// There is no backend render-server registration endpoint (MVP is
+        /// single-user, so no separate identity is needed). This just adopts
+        /// the configured user access token and starts the heartbeat.
+        /// </summary>
+        public UniTask RegisterRenderServer()
         {
-            var request = new RegisterRequest
+            if (string.IsNullOrEmpty(_userAccessToken))
             {
-                server_id = _renderServerId,
-                capabilities = new ServerCapabilities
-                {
-                    max_sessions = 1,
-                    supports_hand_tracking = false,
-                    supports_voice = true,
-                    max_resolution = "1920x1080",
-                    supported_codecs = new[] { "H264" },
-                    gpu_info = SystemInfo.graphicsDeviceName
-                }
-            };
-            
-            var response = await PostAsync<RegisterResponse>("/v1/render/register", request);
-            
-            if (response != null)
-            {
-                _authToken = response.auth_token;
-                _isRegistered = true;
-                Debug.Log($"[EventBridge] Registered as {_renderServerId}");
-                
-                // Start heartbeat
-                HeartbeatLoop().Forget();
+                Debug.LogError(
+                    "[EventBridge] No user access token configured; render server " +
+                    "cannot authenticate to the backend. Set it in the Inspector."
+                );
+                _isRegistered = false;
+                return UniTask.CompletedTask;
             }
+
+            _authToken = _userAccessToken;
+            _isRegistered = true;
+            Debug.Log($"[EventBridge] Using configured user access token as {_renderServerId}");
+
+            // Note: no /v1/render/heartbeat endpoint exists on the backend yet
+            // (there is no render-server fleet to health-check in single-user MVP),
+            // so the heartbeat loop is intentionally not started here.
+            return UniTask.CompletedTask;
         }
-        
+
         public async UniTask<SessionInfo> GetSessionInfo(string sessionId)
         {
             var response = await GetAsync<SessionInfo>($"/v1/stream/sessions/{sessionId}");
             return response;
         }
-        
+
+        /// <summary>
+        /// Polls for the caller's current pending/connecting/active session so the
+        /// render server can discover which session to join (there is no push
+        /// from the API — see docs/25 and RenderServer.SessionDiscoveryLoop).
+        /// Returns null if none exists (404) or the request otherwise fails.
+        /// </summary>
+        public async UniTask<SessionInfo> GetActiveSession()
+        {
+            return await GetAsync<SessionInfo>("/v1/stream/sessions/active");
+        }
+
         public async UniTask SendEvent(string sessionId, string eventType, object payload)
         {
             if (string.IsNullOrEmpty(sessionId)) return;
-            
+
             var evt = new RuntimeEvent
             {
                 session_id = sessionId,
@@ -82,22 +98,22 @@ namespace Cymatic
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 server_id = _renderServerId
             };
-            
+
             await PostAsync<object>("/v1/stream/events", evt);
         }
-        
+
         public async UniTask SendInput(string sessionId, InputManager.InputPacket input)
         {
             if (string.IsNullOrEmpty(sessionId)) return;
-            
+
             await PostAsync<object>($"/v1/stream/sessions/{sessionId}/input", input);
         }
-        
+
         public async UniTask SendIceCandidate(string sessionId, Unity.WebRTC.RTCIceCandidate candidate)
         {
             if (string.IsNullOrEmpty(sessionId)) return;
             if (candidate == null) return;
-            
+
             // P0 FIX: real Unity.WebRTC 3.0.0-pre.8 uses capital Candidate/SdpMid/SdpMLineIndex (nullable)
             var ice = new IceCandidateMessage
             {
@@ -106,22 +122,22 @@ namespace Cymatic
                 sdp_mid = candidate.SdpMid,
                 sdp_mline_index = candidate.SdpMLineIndex ?? 0
             };
-            
+
             await PostAsync<object>($"/v1/stream/sessions/{sessionId}/candidate", ice);
         }
-        
+
         private async UniTaskVoid HeartbeatLoop()
         {
             while (_isRegistered)
             {
                 await UniTask.Delay(TimeSpan.FromSeconds(_heartbeatInterval));
-                
+
                 if (!_isRegistered) break;
-                
+
                 await SendHeartbeat();
             }
         }
-        
+
         private async UniTask SendHeartbeat()
         {
             var heartbeat = new HeartbeatMessage
@@ -131,10 +147,10 @@ namespace Cymatic
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 metrics = PerformanceManager.Instance?.GetMetrics()
             };
-            
+
             await PostAsync<object>("/v1/render/heartbeat", heartbeat);
         }
-        
+
         // HTTP Helpers
         private async UniTask<T> GetAsync<T>(string path)
         {
@@ -142,35 +158,38 @@ namespace Cymatic
             {
                 request.SetRequestHeader("Authorization", $"Bearer {_authToken}");
                 request.SetRequestHeader("Content-Type", "application/json");
-                
+
                 await request.SendWebRequest();
-                
+
                 if (request.result == UnityWebRequest.Result.Success)
                 {
                     return JsonConvert.DeserializeObject<T>(request.downloadHandler.text);
                 }
                 else
                 {
-                    Debug.LogWarning($"[EventBridge] GET {path} failed: {request.error}");
+                    // 404 is an expected, quiet result for polling endpoints like
+                    // GetActiveSession (no session waiting yet) - don't spam warnings.
+                    if (request.responseCode != 404)
+                        Debug.LogWarning($"[EventBridge] GET {path} failed: {request.error}");
                     return default;
                 }
             }
         }
-        
+
         private async UniTask<T> PostAsync<T>(string path, object data)
         {
             var json = JsonConvert.SerializeObject(data);
             var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-            
+
             using (var request = new UnityWebRequest(_backendUrl + path, "POST"))
             {
                 request.uploadHandler = new UploadHandlerRaw(bytes);
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Authorization", $"Bearer {_authToken}");
                 request.SetRequestHeader("Content-Type", "application/json");
-                
+
                 await request.SendWebRequest();
-                
+
                 if (request.result == UnityWebRequest.Result.Success)
                 {
                     if (request.downloadHandler.text.Length > 0)
@@ -185,32 +204,7 @@ namespace Cymatic
             }
         }
     }
-    
-    [System.Serializable]
-    public class RegisterRequest
-    {
-        public string server_id;
-        public ServerCapabilities capabilities;
-    }
-    
-    [System.Serializable]
-    public class ServerCapabilities
-    {
-        public int max_sessions;
-        public bool supports_hand_tracking;
-        public bool supports_voice;
-        public string max_resolution;
-        public string[] supported_codecs;
-        public string gpu_info;
-    }
-    
-    [System.Serializable]
-    public class RegisterResponse
-    {
-        public string auth_token;
-        public string server_id;
-    }
-    
+
     [System.Serializable]
     public class SessionInfo
     {
@@ -220,8 +214,10 @@ namespace Cymatic
         public string device_info;
         public string status;
         public string scene_package_url;
+
+        public string scenePackageUrl => scene_package_url;
     }
-    
+
     [System.Serializable]
     public class RuntimeEvent
     {
@@ -231,7 +227,7 @@ namespace Cymatic
         public long timestamp;
         public string server_id;
     }
-    
+
     [System.Serializable]
     public class IceCandidateMessage
     {
@@ -240,7 +236,7 @@ namespace Cymatic
         public string sdp_mid;
         public int sdp_mline_index;
     }
-    
+
     [System.Serializable]
     public class HeartbeatMessage
     {

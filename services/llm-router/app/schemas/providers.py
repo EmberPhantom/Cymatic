@@ -1,4 +1,5 @@
 """Provider Configuration Models"""
+
 from enum import Enum
 from typing import Any, Literal
 
@@ -130,7 +131,11 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
             "openai/gpt-oss-120b": ModelProfile(
                 model_id="openai/gpt-oss-120b",
                 provider=ProviderName.GROQ,
-                task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION, TaskType.DOMAIN_EXPERT],
+                task_types=[
+                    TaskType.SPEC_GENERATION,
+                    TaskType.VALIDATION,
+                    TaskType.DOMAIN_EXPERT,
+                ],
                 cost_class="free",
                 latency_class="medium",
                 max_tokens=8192,
@@ -159,7 +164,11 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
             "anthropic/claude-3.5-sonnet": ModelProfile(
                 model_id="anthropic/claude-3.5-sonnet",
                 provider=ProviderName.OPENROUTER,
-                task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION, TaskType.DOMAIN_EXPERT],
+                task_types=[
+                    TaskType.SPEC_GENERATION,
+                    TaskType.VALIDATION,
+                    TaskType.DOMAIN_EXPERT,
+                ],
                 cost_class="medium",
                 latency_class="medium",
                 max_tokens=8192,
@@ -169,7 +178,11 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
             "google/gemini-pro-1.5": ModelProfile(
                 model_id="google/gemini-pro-1.5",
                 provider=ProviderName.OPENROUTER,
-                task_types=[TaskType.RESEARCH, TaskType.ASSET_SELECTION, TaskType.COMPOSITION],
+                task_types=[
+                    TaskType.RESEARCH,
+                    TaskType.ASSET_SELECTION,
+                    TaskType.COMPOSITION,
+                ],
                 cost_class="low",
                 latency_class="medium",
                 max_tokens=8192,
@@ -213,7 +226,11 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
             "nvidia/nemotron-3-ultra": ModelProfile(
                 model_id="nvidia/nemotron-3-ultra",
                 provider=ProviderName.NVIDIA_NIM,
-                task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION, TaskType.COPILOT_CHAT],
+                task_types=[
+                    TaskType.SPEC_GENERATION,
+                    TaskType.VALIDATION,
+                    TaskType.COPILOT_CHAT,
+                ],
                 cost_class="low",
                 latency_class="medium",
                 max_tokens=4096,
@@ -244,7 +261,11 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
             "gpt-4o-mini": ModelProfile(
                 model_id="gpt-4o-mini",
                 provider=ProviderName.OPENAI,
-                task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION, TaskType.COPILOT_CHAT],
+                task_types=[
+                    TaskType.SPEC_GENERATION,
+                    TaskType.VALIDATION,
+                    TaskType.COPILOT_CHAT,
+                ],
                 cost_class="low",
                 latency_class="fast",
                 max_tokens=16384,
@@ -254,7 +275,11 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
             "gpt-4o": ModelProfile(
                 model_id="gpt-4o",
                 provider=ProviderName.OPENAI,
-                task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION, TaskType.DOMAIN_EXPERT],
+                task_types=[
+                    TaskType.SPEC_GENERATION,
+                    TaskType.VALIDATION,
+                    TaskType.DOMAIN_EXPERT,
+                ],
                 cost_class="high",
                 latency_class="medium",
                 max_tokens=16384,
@@ -297,7 +322,12 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
             "phi-3-mini-3.8b-q4": ModelProfile(
                 model_id="phi-3-mini-3.8b-q4",
                 provider=ProviderName.LOCAL,
-                task_types=[TaskType.SPEC_GENERATION, TaskType.VALIDATION, TaskType.INTENT_EXTRACTION, TaskType.CLARIFICATION],
+                task_types=[
+                    TaskType.SPEC_GENERATION,
+                    TaskType.VALIDATION,
+                    TaskType.INTENT_EXTRACTION,
+                    TaskType.CLARIFICATION,
+                ],
                 cost_class="free",
                 latency_class="slow",
                 max_tokens=2048,
@@ -336,7 +366,19 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
                 max_tokens=0,
                 context_window=0,
                 metadata={
-                    "languages": ["en", "hi", "ta", "te", "kn", "ml", "bn", "gu", "mr", "pa", "or"]
+                    "languages": [
+                        "en",
+                        "hi",
+                        "ta",
+                        "te",
+                        "kn",
+                        "ml",
+                        "bn",
+                        "gu",
+                        "mr",
+                        "pa",
+                        "or",
+                    ]
                 },
             ),
             "bulbul:v1": ModelProfile(
@@ -348,7 +390,19 @@ DEFAULT_PROVIDERS: dict[ProviderName, ProviderConfig] = {
                 max_tokens=0,
                 context_window=0,
                 metadata={
-                    "languages": ["en", "hi", "ta", "te", "kn", "ml", "bn", "gu", "mr", "pa", "or"],
+                    "languages": [
+                        "en",
+                        "hi",
+                        "ta",
+                        "te",
+                        "kn",
+                        "ml",
+                        "bn",
+                        "gu",
+                        "mr",
+                        "pa",
+                        "or",
+                    ],
                     "speakers": ["anushka", "manisha", "vidya", "arjun", "rahul"],
                 },
             ),

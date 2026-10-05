@@ -16,18 +16,18 @@ class AudioManager(private val context: Context) {
     private var audioTrack: AudioTrack? = null
     private var audioDecoder: MediaCodec? = null
     @Volatile private var isPlaying = false
-    
+
     private val sampleRate = 48000
     private val channelConfig = AudioFormat.CHANNEL_OUT_STEREO
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-    
+
     // Reduced buffer: *2 vs *4 halves latency and memory for low-end (≈30ms vs 60ms)
     private val bufferSize = AudioTrack.getMinBufferSize(
         sampleRate,
         channelConfig,
         audioFormat
     ).coerceAtLeast(4096) * 2
-    
+
     // Audio focus
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val focusRequest = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -46,28 +46,28 @@ class AudioManager(private val context: Context) {
             }
         }
         .build()
-    
+
     // Jitter buffer — small bounded (10) to cap latency; adaptive sleep reduces wakeups
     private val jitterBuffer = Channel<ByteArray>(10)
     private val playbackExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     @Volatile private var playbackStarted = false
-    
+
     fun start() {
         if (isPlaying) return
-        
+
         requestAudioFocus()
         createAudioTrack()
         isPlaying = true
         startPlayback()
     }
-    
+
     private fun requestAudioFocus() {
         val result = audioManager.requestAudioFocus(focusRequest)
         if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             Log.w("AudioManager", "Audio focus not granted")
         }
     }
-    
+
     private fun createAudioTrack() {
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -89,10 +89,10 @@ class AudioManager(private val context: Context) {
                 }
             }
             .build()
-        
+
         audioTrack?.play()
     }
-    
+
     private fun startPlayback() {
         if (playbackStarted) return
         playbackStarted = true
@@ -118,7 +118,7 @@ class AudioManager(private val context: Context) {
             playbackStarted = false
         }
     }
-    
+
     fun enqueueAudioData(data: ByteArray) {
         if (!isPlaying) return
         // Bounded drop-oldest to keep latency low on low-end (never grow to 50)
@@ -129,15 +129,15 @@ class AudioManager(private val context: Context) {
             jitterBuffer.trySend(data.copyOf())
         }
     }
-    
+
     fun pause() {
         try { audioTrack?.pause() } catch (_: Exception) {}
     }
-    
+
     fun resume() {
         try { audioTrack?.play() } catch (_: Exception) {}
     }
-    
+
     fun stop() {
         isPlaying = false
         try { audioTrack?.stop() } catch (_: Exception) {}
@@ -149,11 +149,11 @@ class AudioManager(private val context: Context) {
         try { audioManager.abandonAudioFocusRequest(focusRequest) } catch (_: Exception) {}
         // Do not close channel here — keep reusable; close only in dispose()
     }
-    
+
     fun setVolume(volume: Float) {
         audioTrack?.setVolume(volume.coerceIn(0f, 1f))
     }
-    
+
     private fun setupOpusDecoder() {
         try {
             val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, sampleRate, 2)
@@ -164,7 +164,7 @@ class AudioManager(private val context: Context) {
             Log.e("AudioManager", "Failed to create Opus decoder", e)
         }
     }
-    
+
     fun dispose() {
         isPlaying = false
         try { stop() } catch (_: Exception) {}

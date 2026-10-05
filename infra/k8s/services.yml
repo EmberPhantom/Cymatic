@@ -1,0 +1,307 @@
+# PRE-PROD: api must stay a single replica — signaling connections live in an
+# in-memory dict (see SignalingManager) and the MVP allows one stream.
+# Do NOT scale past 1 until signaling moves to Redis PubSub.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: cymatic
+  labels: { app: api }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: api } }
+  template:
+    metadata: { labels: { app: api } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      # Ordering vs the migrate Job: plain manifests have no helm hooks or
+      # Argo sync-waves, and polling Job status via kubectl needs RBAC the
+      # pods don't have. Instead each api replica runs `alembic upgrade head`
+      # (idempotent) in an initContainer with the SAME image tag before the
+      # app starts — safe to double-run with the migrate Job and guarantees
+      # the schema is current even if the Deployment wins the race.
+      initContainers:
+        - name: migrate
+          image: cymatic/api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+      containers:
+        - name: api
+          # Pinned release tag (never :latest in k8s): bump per release,
+          # e.g. cymatic/api:0.2.0. Matches APP_VERSION in bake/compose.
+          image: cymatic/api:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          # Parity with compose: api mem_limit 512m / cpus 2.0. 512Mi fits the
+          # Dockerfile default of 2 uvicorn workers at ~128-150Mi/worker;
+          # raising API_WORKERS needs a matching limit bump.
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1000m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: cymatic
+spec:
+  selector: { app: api }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: cymatic
+  labels: { app: worker }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: worker } }
+  template:
+    metadata: { labels: { app: worker } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      # Same migrate-gating as api (see comment there): idempotent
+      # `alembic upgrade head` with the SAME image tag before startup.
+      initContainers:
+        - name: migrate
+          image: cymatic/worker:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+      containers:
+        - name: worker
+          image: cymatic/worker:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8002 }]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          # Parity with compose: worker mem_limit 512m / cpus 2.0. Each uvicorn
+          # worker runs a full worker_loop, so the Dockerfile default of 2
+          # bounds duplicate queue polling to ~256-300Mi; keep in sync there.
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1000m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8002 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: 8002 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  namespace: cymatic
+spec:
+  selector: { app: worker }
+  ports: [{ port: 8002, targetPort: 8002 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-router
+  namespace: cymatic
+  labels: { app: llm-router }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: llm-router } }
+  template:
+    metadata: { labels: { app: llm-router } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999 }
+      containers:
+        - name: llm-router
+          image: cymatic/llm-router:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8001 }]
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          # Parity with compose: llm-router mem_limit 512m / cpus 1.0. Single
+          # uvicorn worker (see Dockerfile LLM_ROUTER_WORKERS default 1);
+          # scale via replicas, not workers, under this limit.
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1000m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8001 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health, port: 8001 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-router
+  namespace: cymatic
+spec:
+  selector: { app: llm-router }
+  ports: [{ port: 8001, targetPort: 8001 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cymatic
+  labels: { app: web }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata: { labels: { app: web } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1001, fsGroup: 1001 }
+      containers:
+        - name: web
+          image: cymatic/web:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 3000 }]
+          # Same envFrom as api/worker/llm-router: runtime config (LOG_LEVEL,
+          # API_INTERNAL_URL, etc.) comes from cymatic-config/cymatic-secrets.
+          # NOTE: NEXT_PUBLIC_* URLs are baked at docker build time via build
+          # args (see compose web.build.args), not read at runtime.
+          envFrom:
+            - configMapRef: { name: cymatic-config }
+            - secretRef: { name: cymatic-secrets }
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          livenessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: cymatic
+spec:
+  selector: { app: web }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+# Static walkthrough viewer (no SSR, safe to scale; stateless).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: viewer
+  namespace: cymatic
+  labels: { app: viewer }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: viewer } }
+  template:
+    metadata: { labels: { app: viewer } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1001, fsGroup: 1001 }
+      containers:
+        - name: viewer
+          image: cymatic/viewer:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8090 }]
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "250m", memory: "128Mi" }
+          livenessProbe:
+            httpGet: { path: /, port: 8090 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 8090 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: viewer
+  namespace: cymatic
+spec:
+  selector: { app: viewer }
+  ports: [{ port: 8090, targetPort: 8090 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cymatic
+  namespace: cymatic
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    # viewer host shares this secret: the serving cert must cover BOTH hosts.
+    - hosts: ["cymatic.example.com", "viewer.cymatic.example.com"]
+      secretName: cymatic-tls
+  rules:
+    - host: cymatic.example.com
+      http:
+        paths:
+          # nginx sorts by path length, so these longest-prefix entries win
+          # over `/v1` below. NOTE: api and llm-router BOTH serve under /v1
+          # (api: /v1/auth|projects|stream|..., llm-router: /v1/chat|
+          # embeddings|audio|router); keep these sub-paths in sync with the
+          # services' route tables if either side adds a /v1/* route.
+          - path: /health
+            pathType: Prefix
+            backend: { service: { name: api, port: { number: 8000 } } }
+          - path: /v1/chat
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
+          - path: /v1/embeddings
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
+          - path: /v1/audio
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
+          - path: /v1/router
+            pathType: Prefix
+            backend: { service: { name: llm-router, port: { number: 8001 } } }
+          - path: /v1
+            pathType: Prefix
+            backend: { service: { name: api, port: { number: 8000 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: web, port: { number: 3000 } } }
+    # Viewer is a root-served static SPA (assets at /), so it gets its own
+    # host instead of a /viewer sub-path (which would need rewrites).
+    - host: viewer.cymatic.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: viewer, port: { number: 8090 } } }

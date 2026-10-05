@@ -1,9 +1,16 @@
 """LLM Router Client - shared across API and Worker services"""
+
 import httpx
 import json
 from typing import Dict, List, Any, Optional
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 
 logger = structlog.get_logger()
 
@@ -18,25 +25,59 @@ def _get_settings():
     if _settings is None:
         try:
             from cymatic_shared.config import get_settings
+
             _settings = get_settings()
         except ImportError:
             try:
                 from app.core.config import get_settings
+
                 _settings = get_settings()
             except ImportError:
+
                 class _FallbackSettings:
                     LLM_ROUTER_URL = "http://localhost:8001"
+
                 _settings = _FallbackSettings()
     return _settings
 
 
+def _reset_settings() -> None:
+    """Clear the cached settings (test hook; next access re-resolves)."""
+    global _settings
+    _settings = None
+
+
+# Fallback when no settings object provides LLM_TIMEOUT (e.g. standalone
+# shared-package use without a service config on the path).
+_DEFAULT_LLM_TIMEOUT = 60.0
+
+
+def _default_llm_timeout() -> float:
+    """Default router timeout, sourced from settings (LLM_TIMEOUT).
+
+    Per-agent overrides take precedence over this default and are passed
+    per-request: intake ~120s, clarification ~180s, local SLM
+    LOCAL_LLM_TIMEOUT ~300s (CPU inference). The cloud architect path uses
+    this default (no per-request override).
+    """
+    try:
+        return float(getattr(_get_settings(), "LLM_TIMEOUT", _DEFAULT_LLM_TIMEOUT))
+    except (TypeError, ValueError):
+        return _DEFAULT_LLM_TIMEOUT
+
+
 class LLMRouterClient:
-    """Client for calling LLM Router from any service."""
+    """Client for calling LLM Router from any service.
+
+    `timeout` defaults to settings LLM_TIMEOUT (fallback 60.0s); pass an
+    explicit value — or the per-request `timeout` on chat_completion — for
+    slow paths (intake 120s, clarification 180s, local SLM 300s).
+    """
 
     def __init__(
         self,
         base_url: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         api_key: str | None = None,
     ):
         settings = _get_settings()
@@ -45,8 +86,11 @@ class LLMRouterClient:
         # call gets 401 whenever the router key is configured.
         # None means "use configured default"; explicit "" forces no header
         # (e.g. probing an open router). `or` would wrongly fall back to env.
-        self.api_key = getattr(settings, "ADMIN_API_KEY", "") or "" if api_key is None else api_key
-        self.client = httpx.AsyncClient(timeout=timeout)
+        self.api_key = (
+            getattr(settings, "ADMIN_API_KEY", "") or "" if api_key is None else api_key
+        )
+        resolved_timeout = timeout if timeout is not None else _default_llm_timeout()
+        self.client = httpx.AsyncClient(timeout=resolved_timeout)
 
     async def close(self):
         await self.client.aclose()
@@ -216,6 +260,7 @@ async def call_llm_json(
     model: Optional[str] = None,
     timeout: Optional[float] = None,
     use_cache: bool = True,
+    required_non_empty_keys: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Call LLM and parse JSON response.
 
@@ -223,6 +268,12 @@ async def call_llm_json(
     `timeout` optionally overrides the client default per request.
     `use_cache` false bypasses the router cache — REQUIRED for retries after
     truncated/error outputs, otherwise the retry replays cached garbage.
+    `required_non_empty_keys` names keys that must be present and non-empty
+    in a salvaged object — i.e. one recovered via {...}-extraction or
+    truncation repair (e.g. ["entities"] for architect results); a salvaged
+    parse that misses this completeness bar returns {} so the caller's
+    documented failure/fallback path triggers instead of a false success.
+    Clean first-try parses are unaffected (callers validate those).
 
     Robust to common LLM output faults: markdown fences (```json),
     leading prose, trailing commas, mid-object truncation (3B SLMs emit EOS
@@ -261,12 +312,24 @@ async def call_llm_json(
     if extracted is not None:
         try:
             parsed = json.loads(extracted)
-            logger.warning(
-                "llm_json_recovered_via_extraction",
-                task_type=task_type,
-                preview=content[:200],
-            )
-            return parsed if isinstance(parsed, dict) else {}
+            if isinstance(parsed, dict):
+                if required_non_empty_keys and not _meets_completeness_bar(
+                    parsed, required_non_empty_keys
+                ):
+                    logger.warning(
+                        "llm_json_extraction_incomplete",
+                        task_type=task_type,
+                        required=required_non_empty_keys,
+                        preview=content[:200],
+                    )
+                    return {}
+                logger.warning(
+                    "llm_json_recovered_via_extraction",
+                    task_type=task_type,
+                    preview=content[:200],
+                )
+                return parsed
+            return {}
         except json.JSONDecodeError:
             pass
 
@@ -276,18 +339,28 @@ async def call_llm_json(
     if repaired is not None:
         try:
             parsed = json.loads(repaired)
-            logger.warning(
-                "llm_json_recovered_via_repair",
-                task_type=task_type,
-                preview=content[:200],
-            )
-            return parsed if isinstance(parsed, dict) else {}
+            if isinstance(parsed, dict):
+                if required_non_empty_keys and not _meets_completeness_bar(
+                    parsed, required_non_empty_keys
+                ):
+                    logger.warning(
+                        "llm_json_repair_incomplete",
+                        task_type=task_type,
+                        required=required_non_empty_keys,
+                        preview=content[:200],
+                    )
+                    return {}
+                logger.warning(
+                    "llm_json_recovered_via_repair",
+                    task_type=task_type,
+                    preview=content[:200],
+                )
+                return parsed
+            return {}
         except json.JSONDecodeError:
             pass
 
-    logger.warning(
-        "llm_json_parse_failed", task_type=task_type, content=content[:500]
-    )
+    logger.warning("llm_json_parse_failed", task_type=task_type, content=content[:500])
     return {}
 
 
@@ -301,7 +374,6 @@ def _repair_truncated_json(content: str) -> Optional[str]:
     text = content.strip()
     # Find the last index where bracket depth returns to a closable state by
     # scanning while tracking strings.
-    best: Optional[str] = None
     depth = 0
     in_str = False
     esc = False
@@ -367,6 +439,22 @@ def _repair_truncated_json(content: str) -> Optional[str]:
     return None
 
 
+def _meets_completeness_bar(parsed: Dict[str, Any], required_keys: List[str]) -> bool:
+    """Check a repaired object meets the minimum completeness bar.
+
+    Every key in `required_keys` must be present and non-empty (non-empty
+    list/dict/str, non-None scalar). Prevents truncation repair from
+    reporting success on a structurally valid but content-free object.
+    """
+    for key in required_keys:
+        value = parsed.get(key)
+        if value is None:
+            return False
+        if isinstance(value, (list, dict, str)) and len(value) == 0:
+            return False
+    return True
+
+
 def _strip_code_fences(content: str) -> str:
     """Remove markdown code fences like ```json ... ``` or ``` ... ```."""
     text = content.strip()
@@ -428,7 +516,7 @@ async def call_llm_structured(
     """Call LLM with structured output schema."""
     system_msg = {
         "role": "system",
-        "content": f"Respond with valid JSON matching this schema: {json.dumps(schema)}"
+        "content": f"Respond with valid JSON matching this schema: {json.dumps(schema)}",
     }
     messages = [system_msg] + messages
 
