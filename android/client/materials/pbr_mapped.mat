@@ -1,0 +1,59 @@
+// CYMATIC pbr_mapped — lit PBR material for mapped geometry (Phase 1).
+// Companion to ubershader.mat (flat primitives): this variant requires uv0
+// and supports albedo/normal/emissive maps plus scalar metallic/roughness,
+// each map gated by a has* flag so unmapped meshes degrade to the scalar
+// path without a second material. glTF-loaded models use gltfio's own
+// UbershaderProvider instead — this material is for OUR procedural baked
+// geometry (Phase 2 lightmap UV2 arrives separately).
+//
+// Build (needs `matc` from the Filament release matching
+// filament-android in app/build.gradle.kts):
+//   matc -p mobile -a opengl -o app/src/main/res/raw/pbr_mapped.filamat \
+//       android/client/materials/pbr_mapped.mat
+// The .filamat is git-ignored (binary, regenerable); the builder falls back
+// to ubershader when it is absent (see FilamentSceneBuilder material select).
+material {
+    name : pbr_mapped,
+    parameters : [
+        { type : float3, name : baseColor },
+        { type : float,  name : roughness },
+        { type : float,  name : metallic },
+        { type : float3, name : emissive },
+        { type : float,  name : emissiveIntensity },
+        { type : bool,   name : hasAlbedoMap },
+        { type : bool,   name : hasNormalMap },
+        { type : bool,   name : hasEmissiveMap },
+        { type : sampler2d, name : albedoMap },
+        { type : sampler2d, name : normalMap },
+        { type : sampler2d, name : emissiveMap }
+    ],
+    requires : [
+        position,
+        uv0
+    ],
+    shadingModel : lit,
+    blending : opaque,
+    culling : back,
+    doubleSided : false
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec3 albedo = materialParams.baseColor;
+        if (materialParams.hasAlbedoMap) {
+            albedo *= texture(materialParams.albedoMap, getUV0()).rgb;
+        }
+        material.baseColor.rgb = albedo;
+        material.roughness = materialParams.roughness;
+        material.metallic = materialParams.metallic;
+        vec3 emissive = materialParams.emissive * materialParams.emissiveIntensity;
+        if (materialParams.hasEmissiveMap) {
+            emissive *= texture(materialParams.emissiveMap, getUV0()).rgb;
+        }
+        material.emissive.rgb = emissive;
+        if (materialParams.hasNormalMap) {
+            material.normal = texture(materialParams.normalMap, getUV0()).xyz;
+        }
+    }
+}

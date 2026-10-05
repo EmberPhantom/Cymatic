@@ -343,6 +343,56 @@ async def get_download_url(
     return {"download_url": url, "expires_hours": expires_hours}
 
 
+@router.get(
+    "/resolve/url",
+    dependencies=[Depends(rate_limit(settings.RATE_LIMIT_API))],
+)
+async def resolve_asset_url(
+    uri: str = Query(min_length=1, max_length=512),
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+    project_id: Optional[int] = Query(default=None, ge=1),
+    expires_hours: int = Query(1, ge=1, le=24),
+):
+    """Resolve a scene-manifest asset URI to downloadable bytes.
+
+    Manifest URIs are catalog strings (e.g. ``assets/models/room.glb``),
+    not storage keys. Resolution order:
+    1. caller's org (and project, if given) READY asset whose filename
+       matches the URI basename -> presigned download URL;
+    2. ``assets/`` template-catalog prefix -> 404 ``template_not_baked``
+       (client renders its procedural fallback until the bake stage lands);
+    3. anything else -> 404 ``asset_not_found``.
+    """
+    if ".." in uri or uri.startswith(("http://", "https://", "/")):
+        raise HTTPException(status_code=400, detail="Invalid asset URI")
+    basename = os.path.basename(uri)
+    query = select(Asset).where(
+        Asset.filename == basename,
+        Asset.organization_id == current_user.organization_id,
+        Asset.status == AssetStatus.READY,
+    )
+    if project_id is not None:
+        query = query.where(Asset.project_id == project_id)
+    result = await db.execute(query.order_by(Asset.id.desc()).limit(1))
+    asset = result.scalar_one_or_none()
+    if asset is not None:
+        url = get_asset_presigned_download_url(asset.storage_key, expires_hours)
+        return {
+            "uri": uri,
+            "status": "ready",
+            "asset_id": asset.id,
+            "download_url": url,
+            "expires_hours": expires_hours,
+        }
+    if uri.startswith("assets/"):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "template_not_baked", "fallback": "procedural"},
+        )
+    raise HTTPException(status_code=404, detail="Asset not found")
+
+
 @router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_asset(
     asset_id: int,

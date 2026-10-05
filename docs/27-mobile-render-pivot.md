@@ -49,6 +49,22 @@ online-first · Unity frozen-then-removed.
   roughness, position-only); build with matc into `res/raw/ubershader.filamat`
   (git-ignored, command in the .mat header).
 
+## Render Core Phase 1 status (committed, device proof pending)
+
+Own-native-renderer direction locked: Filament-based core (own scene
+graph/materials/pipeline/governor on Filament's PBR core — not a
+from-scratch Vulkan engine), Android-first, 60fps mid-range with
+scale-down, hybrid assets (baked template library + per-scene deltas).
+
+- Backend: `GET /v1/assets/resolve/url` resolves manifest catalog URIs
+  to presigned bytes (READY org assets) or 404 `template_not_baked`
+  (client procedural fallback) — suite-covered.
+- Android: Filament `1.57.1 → 1.77.1` (Maven-verified), `pbr_mapped.mat`
+  source (albedo/normal/emissive + scalars, builder wiring + `matc`
+  build need SDK machine), `AssetStream` planner + JVM tests.
+- Next: gltfio model loading (P3b), baked-GI pipeline, quality
+  governor, stereo presentation (see execution plan).
+
 ## Not yet done (needs Android SDK machine / device)
 
 - `./gradlew :app:testDebugUnitTest` + `assembleDebug` (no JDK/SDK on this host).

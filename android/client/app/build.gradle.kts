@@ -115,8 +115,8 @@ dependencies {
     // WebRTC (legacy Unity streaming path, frozen)
     implementation("org.webrtc:google-webrtc:1.0.32006")
     // Native on-device 3D renderer (Unity-free path)
-    implementation("com.google.android.filament:filament-android:1.57.1")
-    implementation("com.google.android.filament:gltfio-android:1.57.1")
+    implementation("com.google.android.filament:filament-android:1.77.1")
+    implementation("com.google.android.filament:gltfio-android:1.77.1")
     // Networking
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
