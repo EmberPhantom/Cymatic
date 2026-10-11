@@ -4,25 +4,25 @@
 # When adding a dependency, put it in the right split file AND here.
 # Local editable install of shared package (Docker uses COPY --from=shared instead).
 -e ../../packages/cymatic-shared
-fastapi==0.141.1
-uvicorn[standard]==0.52.4
-pydantic==2.13.5
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.0
 pydantic-settings==2.15.0
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
-bcrypt==4.3.0
+bcrypt==5.0.0
 python-multipart==0.0.32
-sqlalchemy==2.0.52
-alembic==1.19.1
-asyncpg==0.31.0
+sqlalchemy==2.1.4
+alembic==1.20.0
+asyncpg==0.32.0
 redis==8.1.0
 minio==7.2.20
 httpx==0.28.1
 pydantic-extra-types==2.11.1
 email-validator==2.3.0
-python-dotenv==1.2.3
+python-dotenv==1.2.4
 structlog==26.1.0
-tenacity==9.1.4
+tenacity==9.2.1
 prometheus-client==0.26.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
