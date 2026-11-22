@@ -47,16 +47,16 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: apps/web/node_modules
           key: ${{ runner.os }}-web-node-${{ hashFiles('apps/web/package-lock.json') }}
@@ -71,7 +71,7 @@ jobs:
       - run: npm run test -- --coverage --reporter=default --reporter=junit --outputFile=frontend-test-results.xml
       - run: npm run build
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-test-results
           path: |
@@ -181,16 +181,16 @@ jobs:
       run:
         working-directory: ${{ matrix.working_dir }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: ${{ matrix.working_dir }}/requirements.txt
       - name: Cache Python venv
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ matrix.working_dir }}/.venv
           key: ${{ runner.os }}-${{ matrix.service }}-venv-${{ hashFiles(format('{0}/requirements.txt', matrix.working_dir)) }}
@@ -244,7 +244,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=70
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.service }}-test-results
           path: |
@@ -255,10 +255,10 @@ jobs:
     name: Shared Schema Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: |
@@ -266,7 +266,7 @@ jobs:
           python -m pip install -e packages/cymatic-shared
           python -m py_compile schemas/simulation_spec.py
           python -m pytest packages/cymatic-shared/tests/ -q
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - run: npx --yes -p typescript@5.7.2 tsc schemas/simulation_spec.ts --noEmit --strict
@@ -314,16 +314,16 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: apps/web/node_modules
           key: ${{ runner.os }}-web-node-${{ hashFiles('apps/web/package-lock.json') }}
@@ -347,7 +347,7 @@ jobs:
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
         run: npm run test:e2e
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-e2e-results
           path: |
@@ -359,11 +359,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       - name: Build all images via bake (shared context parity with compose)
         run: docker buildx bake -f docker-bake.hcl --load
       - name: Lint Dockerfiles
@@ -389,8 +389,8 @@ jobs:
     name: Pre-commit Hooks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install pre-commit && pre-commit run --all-files --show-diff-on-failure || (echo "::warning::pre-commit failed, run 'pre-commit run --all-files' locally"; exit 1)
@@ -403,27 +403,27 @@ jobs:
     if: always()
     steps:
       - name: Download API test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: api-test-results
           path: test-results/api
       - name: Download Worker test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: worker-test-results
           path: test-results/worker
       - name: Download Router test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: router-test-results
           path: test-results/router
       - name: Download Frontend test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-test-results
           path: test-results/frontend
       - name: Download E2E test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         if: always()
         with:
           name: frontend-e2e-results
@@ -461,7 +461,7 @@ jobs:
             fi
           done
       - name: Upload unified test report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unified-test-report
           path: test-results/
